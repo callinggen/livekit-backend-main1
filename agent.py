@@ -20,25 +20,29 @@ class VoiceAgent(Agent):
             instructions="""
             You are a helpful AI voice assistant.
 
-            Keep responses short.
+            Keep responses concise.
             Speak naturally.
-            Answer conversationally.
+            Be conversational and friendly.
             """
         )
 
 
 async def entrypoint(ctx: JobContext):
-    print("Connecting to room...")
+
+    print("===== JOB RECEIVED =====")
 
     await ctx.connect()
 
     print(f"Connected to room: {ctx.room.name}")
 
+    print("SARVAM:", bool(os.getenv("SARVAM_API_KEY")))
+    print("DEEPSEEK:", bool(os.getenv("DEEPSEEK_API_KEY")))
+
     session = AgentSession(
         stt=sarvam.STT(),
 
         llm=openai.LLM(
-            model="deepseek-chat",
+            model="deepseek-reasoner",  # DeepSeek R1
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com/v1",
         ),
@@ -46,14 +50,20 @@ async def entrypoint(ctx: JobContext):
         tts=sarvam.TTS(),
     )
 
+    print("Starting session")
+
     await session.start(
         room=ctx.room,
         agent=VoiceAgent(),
     )
 
+    print("Session started")
+
     await session.generate_reply(
-        instructions="Introduce yourself briefly."
+        instructions="Introduce yourself and ask how you can help."
     )
+
+    print("Greeting sent")
 
 
 if __name__ == "__main__":
