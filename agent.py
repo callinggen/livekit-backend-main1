@@ -9,8 +9,7 @@ from livekit.agents import (
     cli,
 )
 
-from livekit.plugins import openai
-from livekit.plugins import sarvam
+from livekit.plugins import sarvam, openai
 
 load_dotenv()
 
@@ -21,21 +20,29 @@ class VoiceAgent(Agent):
             instructions="""
             You are a helpful AI voice assistant.
 
-            Keep answers short.
+            Keep responses short.
             Speak naturally.
+            Answer conversationally.
             """
         )
 
 
 async def entrypoint(ctx: JobContext):
+    print("Connecting to room...")
 
     await ctx.connect()
 
+    print(f"Connected to room: {ctx.room.name}")
+
     session = AgentSession(
         stt=sarvam.STT(),
+
         llm=openai.LLM(
-            model="gpt-4o-mini"
+            model="deepseek-chat",
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com/v1",
         ),
+
         tts=sarvam.TTS(),
     )
 
@@ -45,7 +52,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.generate_reply(
-        instructions="Introduce yourself."
+        instructions="Introduce yourself briefly."
     )
 
 
