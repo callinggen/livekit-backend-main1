@@ -15,7 +15,7 @@ async def main():
 
     req = CreateSIPParticipantRequest(
         sip_trunk_id=TRUNK_ID,
-        sip_call_to="+917780788136",
+        sip_call_to="+917075671166",
         room_name=room_name,
         participant_identity="customer",
         participant_name="Customer",
