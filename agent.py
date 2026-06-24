@@ -73,11 +73,6 @@ async def entrypoint(ctx: JobContext):
             model="deepseek-chat",
             api_key=os.getenv("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com/v1",
-
-            extra_kwargs={
-                "temperature": 0.75,
-                "max_tokens": 220,
-            },
         ),
 
         tts=sarvam.TTS(),
@@ -107,6 +102,5 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="appointment-agent",
         )
     )
