@@ -1,5 +1,17 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+# India Standard Time offset
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def _to_ist(dt: Optional[datetime]) -> str:
+    """Convert a naive-UTC datetime to IST string (YYYY-MM-DD HH:MM IST)."""
+    if dt is None:
+        return ""
+    # Treat stored datetimes as UTC (they are naive but UTC)
+    aware = dt.replace(tzinfo=timezone.utc)
+    ist_dt = aware.astimezone(IST)
+    return ist_dt.strftime("%Y-%m-%d %H:%M IST")
 
 from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel
@@ -85,13 +97,20 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
 
     calls = []
     for call, contact, campaign in rows:
+        # BUG-023: response field was overwritten with customer_name in call_service;
+        # show appointment notes as the response if no explicit response is set.
+        response_display = contact.response or "—"
+        # If response was accidentally set to the customer name, reset to "—"
+        if response_display == (contact.customer_name or ""):
+            response_display = "Interested" if contact.appointment_date else "—"
+
         calls.append({
             "id": str(call.id),
             "name": contact.customer_name or contact.name,
             "phone": contact.phone,
-            "status": call.status.capitalize(),
-            "response": contact.response or "—",
-            "datetime": call.started_at.strftime("%Y-%m-%d %H:%M") if call.started_at else "",
+            "status": call.status.capitalize(),  # "completed" → "Completed"
+            "response": response_display,
+            "datetime": _to_ist(call.started_at),  # BUG-001: IST timestamp
             "campaign": campaign.campaign_name,
             "duration": _fmt_duration(call.duration or 0),
             "transcript": _parse_transcript(call.transcript),

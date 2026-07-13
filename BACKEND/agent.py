@@ -17,52 +17,134 @@ from livekit.agents import (
 
 from livekit.plugins import sarvam, openai
 
+# Database access to read campaign + contact at runtime
+from sqlalchemy import select
+from app.database import AsyncSessionLocal
+from app.models.call import Call
+from app.models.contact import Contact
+from app.models.campaign import Campaign
+
 load_dotenv()
 
+# ── Agent type → base system prompt ───────────────────────────────────────────
+AGENT_BASE_PROMPTS: dict[str, str] = {
+    "Voice-A (Sales)": (
+        "You are a professional sales representative making outbound calls. "
+        "Your goal is to pitch the product/service, handle objections politely, "
+        "and move the prospect toward a purchase or demo booking."
+    ),
+    "Voice-B (Support)": (
+        "You are a friendly customer support agent making outbound calls. "
+        "Your goal is to resolve the customer's issue, answer questions accurately, "
+        "and ensure the customer feels heard and satisfied."
+    ),
+    "Voice-C (Followup)": (
+        "You are a follow-up agent making outbound calls to warm leads or past customers. "
+        "Your goal is to re-engage the contact, check on their needs, "
+        "and guide them toward the next step."
+    ),
+    "Voice-D (Survey)": (
+        "You are a survey agent conducting a satisfaction or market research call. "
+        "Ask each question clearly, wait for the customer's answer, record it accurately, "
+        "and keep the conversation brief and focused."
+    ),
+}
 
-class AppointmentBookingAgent(Agent):
-    def __init__(self):
-        super().__init__(
-            instructions="""
-You are a professional appointment booking assistant making outbound calls.
+# ── Date/time validation rules injected into every agent ──────────────────────
+DATE_TIME_VALIDATION_RULES = """
+DATE & TIME VALIDATION RULES (MANDATORY — never skip these):
+- If the customer mentions a date that is in the past, say: "I'm sorry, that date has already passed. Could you please provide a future date?"
+- If the customer gives a date without a year (e.g. "July 15th"), always ask: "Could you confirm — which year did you mean?"
+- If the customer mentions only a time without AM or PM (e.g. "3 o'clock" or "10:30"), always ask: "Is that AM or PM?"
+- Never book or confirm an appointment with an ambiguous or past date/time.
+- Always confirm the full date (including year) and time (including AM/PM) before calling the finish_call tool.
+"""
+
+
+def build_agent_instructions(
+    agent_type: str,
+    custom_script: str,
+    customer_name: str,
+) -> str:
+    """
+    Compose the full system prompt for the agent from:
+    - base persona (derived from agent_type)
+    - the campaign-specific custom script
+    - the pre-known customer name
+    - mandatory date/time validation rules
+    """
+    base = AGENT_BASE_PROMPTS.get(agent_type, AGENT_BASE_PROMPTS["Voice-A (Sales)"])
+    name_clause = (
+        f"\nIMPORTANT: You already know the customer's name is '{customer_name}'. "
+        "Do NOT ask them for their name — address them by name when appropriate."
+        if customer_name.strip()
+        else ""
+    )
+
+    return f"""{base}
+{name_clause}
 
 RULES:
 - Keep every response under 2 sentences.
 - Be polite and professional.
 - Do not hallucinate or invent details.
 - Do not discuss unrelated topics.
+- Follow the custom script below faithfully.
 
-CONVERSATION STEPS — follow in exact order:
+CAMPAIGN-SPECIFIC SCRIPT:
+{custom_script}
 
-Step 1: Greet the customer.
-  Say: "Hello, I'm calling from the appointment booking service."
-
-Step 2: Ask for the customer's name.
-  Wait for their response and remember the name they give you.
-
-Step 3: Ask for the appointment date.
-  Wait for their response.
-
-Step 4: Ask for the appointment time.
-  Wait for their response.
-
-Step 5: Confirm the details.
-  Read back: name, date, and time.
-  Ask: "Is that correct?"
-  If the customer says NO or wants to change anything, ask which detail to correct and go back to the relevant step.
-  If the customer says YES, immediately call the finish_call tool.
+{DATE_TIME_VALIDATION_RULES}
 
 When calling finish_call, pass:
-  - customer_name: the name from Step 2
-  - appointment_date: the date from Step 3
-  - appointment_time: the time from Step 4
+  - customer_name: the customer's name
+  - appointment_date: the confirmed future date (with year)
+  - appointment_time: the confirmed time (with AM/PM)
 
 Do NOT say anything else after the customer confirms — just call the tool.
 The tool will handle the goodbye message automatically.
-""",
+"""
+
+
+class DynamicAgent(Agent):
+    """Agent whose behaviour is fully driven by the campaign configuration."""
+
+    def __init__(self, agent_type: str, custom_script: str, customer_name: str):
+        instructions = build_agent_instructions(agent_type, custom_script, customer_name)
+        super().__init__(
+            instructions=instructions,
             tools=[finish_call],
         )
 
+
+async def _get_campaign_info(call_id: int) -> dict:
+    """
+    Look up the campaign and contact for a given call_id so the agent
+    can use the correct script, agent type, and customer name.
+    Returns a dict with keys: agent_type, script, customer_name.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            call = await db.get(Call, call_id)
+            if call is None:
+                print(f"[agent] Warning: call {call_id} not found in DB")
+                return {"agent_type": "Voice-A (Sales)", "script": "", "customer_name": ""}
+
+            contact = await db.get(Contact, call.contact_id)
+
+            # Trace up to campaign via job
+            from app.models.job import Job
+            job = await db.get(Job, call.job_id)
+            campaign = await db.get(Campaign, job.campaign_id) if job else None
+
+            return {
+                "agent_type": campaign.agent if campaign else "Voice-A (Sales)",
+                "script": campaign.script if campaign else "",
+                "customer_name": contact.name if contact else "",
+            }
+    except Exception as e:
+        print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
+        return {"agent_type": "Voice-A (Sales)", "script": "", "customer_name": ""}
 
 
 async def entrypoint(ctx: JobContext):
@@ -76,6 +158,23 @@ async def entrypoint(ctx: JobContext):
     print(f"Connected to room: {ctx.room.name}")
 
     room_name = ctx.room.name
+
+    # ── Extract call_id from room name (format: "call-{call_id}") ────────────
+    try:
+        call_id = int(room_name.rsplit("-", 1)[-1])
+    except (ValueError, IndexError):
+        call_id = -1
+        print(f"[agent] Warning: could not parse call_id from room name: {room_name}")
+
+    # ── Fetch campaign info to drive the agent's behaviour ───────────────────
+    campaign_info = await _get_campaign_info(call_id)
+    agent_type    = campaign_info["agent_type"]
+    custom_script = campaign_info["script"]
+    customer_name = campaign_info["customer_name"]
+
+    print(f"[agent] Agent type   : {agent_type}")
+    print(f"[agent] Customer name: {customer_name}")
+    print(f"[agent] Script length: {len(custom_script)} chars")
 
     # This event is set when the room disconnects (i.e. when finish_call
     # deletes the room), which lets the entrypoint exit cleanly.
@@ -133,7 +232,11 @@ async def entrypoint(ctx: JobContext):
 
         await session.start(
             room=ctx.room,
-            agent=AppointmentBookingAgent(),
+            agent=DynamicAgent(
+                agent_type=agent_type,
+                custom_script=custom_script,
+                customer_name=customer_name,
+            ),
         )
 
         print("Session started")
@@ -174,12 +277,16 @@ async def entrypoint(ctx: JobContext):
             # Small buffer to let audio pipeline stabilize
             await asyncio.sleep(0.5)
 
-            await session.generate_reply(
-                instructions="""
-Introduce yourself as "Hello, I'm calling from the appointment booking service."
-Welcome the customer and ask for their name.
-"""
+            # Build a personalised greeting using customer name if available
+            greeting_instructions = (
+                f"Greet the customer by name ('{customer_name}') and introduce yourself. "
+                "Then follow the campaign script to begin the conversation."
+                if customer_name.strip()
+                else
+                "Introduce yourself and begin the conversation following the campaign script."
             )
+
+            await session.generate_reply(instructions=greeting_instructions)
 
             print("Greeting sent")
 

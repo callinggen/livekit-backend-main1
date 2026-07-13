@@ -11,7 +11,7 @@ from app.models.campaign import Campaign
 
 # If a call stays in dialing/in_progress longer than this, treat it as
 # failed (agent crashed, room was deleted, SIP trunk timed out, etc.)
-CALL_TIMEOUT_MINUTES = 2
+CALL_TIMEOUT_MINUTES = 10  # BUG-023/029: was 2, too short for real calls
 
 
 class QueueService:

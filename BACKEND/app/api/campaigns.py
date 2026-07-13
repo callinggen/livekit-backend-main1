@@ -173,6 +173,58 @@ async def get_campaign_contacts(campaign_id: int, db: AsyncSession = Depends(get
     ]
 
 
+# ── GET /api/campaigns/{campaign_id}/live ─────────────────────────────────────
+# BUG-007: Real-time per-contact status counts for the Live Journey panel.
+
+@router.get("/campaigns/{campaign_id}/live")
+async def get_campaign_live(campaign_id: int, db: AsyncSession = Depends(get_db)):
+    """Return per-contact status counts so the frontend can update the live tracking panel."""
+    result = await db.execute(
+        select(Contact).where(Contact.campaign_id == campaign_id)
+    )
+    contacts = result.scalars().all()
+
+    campaign = await db.get(Campaign, campaign_id)
+    job_result = await db.execute(
+        select(Job).where(Job.campaign_id == campaign_id).order_by(Job.id.desc()).limit(1)
+    )
+    job = job_result.scalars().first()
+
+    return {
+        "registry": len(contacts),
+        "standby":  sum(1 for c in contacts if c.status == "pending"),
+        "dialer":   sum(1 for c in contacts if c.status == "calling"),
+        "analysis": sum(1 for c in contacts if c.status in ("completed", "failed")),
+        "completed": sum(1 for c in contacts if c.status == "completed"),
+        "failed":    sum(1 for c in contacts if c.status == "failed"),
+        "campaign_status": _map_status(campaign.status) if campaign else "Unknown",
+        "total_contacts": job.total_contacts if job else len(contacts),
+    }
+
+
+# ── GET /api/campaigns/{campaign_id}/status ───────────────────────────────────
+# BUG-024: Lightweight status endpoint for fast polling without fetching all data.
+
+@router.get("/campaigns/{campaign_id}/status")
+async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_db)):
+    """Lightweight endpoint to poll campaign + job status."""
+    campaign = await db.get(Campaign, campaign_id)
+    if campaign is None:
+        return {"error": "Not found"}
+
+    job_result = await db.execute(
+        select(Job).where(Job.campaign_id == campaign_id).order_by(Job.id.desc()).limit(1)
+    )
+    job = job_result.scalars().first()
+
+    return {
+        "status": _map_status(campaign.status),
+        "completed": job.completed_contacts if job else 0,
+        "failed": job.failed_contacts if job else 0,
+        "total": job.total_contacts if job else 0,
+    }
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _map_status(status: str) -> str:

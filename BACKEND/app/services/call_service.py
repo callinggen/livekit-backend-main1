@@ -49,9 +49,13 @@ class CallService:
                 contact.transcript = transcript
             if customer_name:
                 contact.customer_name = customer_name
-                contact.response = customer_name   # also fill legacy response field
+                # BUG-023: Do NOT overwrite response with customer_name.
+                # Set a meaningful response label instead.
+                if not contact.response:
+                    contact.response = "Answered"
             if appointment_date:
                 contact.appointment_date = appointment_date
+                contact.response = "Appointment booked"
             if appointment_time:
                 contact.appointment_time = appointment_time
 
