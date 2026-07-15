@@ -33,6 +33,7 @@ class CallCompleteRequest(BaseModel):
     customer_name: Optional[str] = None
     appointment_date: Optional[str] = None
     appointment_time: Optional[str] = None
+    recording_url: Optional[str] = None
 
 
 def _fmt_duration(seconds: int) -> str:
@@ -71,6 +72,7 @@ async def complete_call(
         customer_name=body.customer_name if body else None,
         appointment_date=body.appointment_date if body else None,
         appointment_time=body.appointment_time if body else None,
+        recording_url=body.recording_url if body else None,
     )
 
     if call is None:
@@ -119,5 +121,6 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
             "appointment_date": contact.appointment_date or "",
             "appointment_time": contact.appointment_time or "",
             "customer_name": contact.customer_name or contact.name,
+            "recording_url": call.recording_url or "",
         })
     return calls

@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import asyncio
 import os
+import wave
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
@@ -106,6 +107,31 @@ The tool will handle the goodbye message automatically.
 """
 
 
+async def record_track(track: rtc.RemoteAudioTrack, call_id: int):
+    """Record a remote audio track (the customer) into a local WAV file."""
+    os.makedirs("recordings", exist_ok=True)
+    filename = f"recordings/call_{call_id}.wav"
+    
+    print(f"[recorder] Started recording customer track for call {call_id} -> {filename}")
+    audio_stream = rtc.AudioStream(track)
+    wav_file = None
+    try:
+        async for frame_event in audio_stream:
+            frame = frame_event.frame
+            if wav_file is None:
+                wav_file = wave.open(filename, 'wb')
+                wav_file.setnchannels(frame.num_channels)
+                wav_file.setsampwidth(2)  # 16-bit PCM is 2 bytes
+                wav_file.setframerate(frame.sample_rate)
+            wav_file.writeframes(frame.data)
+    except Exception as e:
+        print(f"[recorder] Error recording call {call_id}: {e}")
+    finally:
+        if wav_file:
+            wav_file.close()
+        print(f"[recorder] Finished recording customer track for call {call_id}")
+
+
 class DynamicAgent(Agent):
     """Agent whose behaviour is fully driven by the campaign configuration."""
 
@@ -184,6 +210,11 @@ async def entrypoint(ctx: JobContext):
         def on_room_disconnected(*args):
             shutdown_event.set()
 
+        @ctx.room.on("track_subscribed")
+        def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+            if track.kind == rtc.TrackKind.KIND_AUDIO and participant.identity == "customer":
+                asyncio.create_task(record_track(track, call_id))
+
         async def _handle_unexpected_disconnect(reason: str):
             # If finish_call already ran, ACTIVE_CALLS entry is already gone.
             state = ACTIVE_CALLS.pop(room_name, None)
@@ -206,6 +237,7 @@ async def entrypoint(ctx: JobContext):
                     "customer_name": None,
                     "appointment_date": None,
                     "appointment_time": None,
+                    "recording_url": f"/recordings/call_{call_id}.wav",
                 },
             )
 

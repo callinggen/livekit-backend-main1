@@ -121,11 +121,17 @@ async def finish_call(
         print(f"Warning – session.aclose() error (non-fatal): {e}")
 
     # ── Step 4: Notify backend with full payload ──────────────────────
+    try:
+        call_id = int(room_name.rsplit("-", 1)[-1])
+    except (ValueError, IndexError):
+        call_id = -1
+
     payload = {
         "transcript": transcript or None,
         "customer_name": customer_name or None,
         "appointment_date": appointment_date or None,
         "appointment_time": appointment_time or None,
+        "recording_url": f"/recordings/call_{call_id}.wav" if call_id != -1 else None,
     }
     try:
         print("Notifying backend that the call is complete...")

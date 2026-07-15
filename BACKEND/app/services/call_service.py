@@ -19,6 +19,7 @@ class CallService:
         customer_name: Optional[str] = None,
         appointment_date: Optional[str] = None,
         appointment_time: Optional[str] = None,
+        recording_url: Optional[str] = None,
     ):
         call = await db.get(Call, call_id)
 
@@ -31,6 +32,8 @@ class CallService:
 
         # ── Timestamps & duration ──────────────────────────────
         call.status = "completed"
+        if recording_url:
+            call.recording_url = recording_url
         now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
         call.ended_at = now
         if call.started_at:
