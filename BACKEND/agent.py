@@ -188,9 +188,29 @@ async def entrypoint(ctx: JobContext):
         call_id = -1
         print(f"[agent] Warning: could not parse call_id from room name: {room_name}")
 
+    # Register event listeners BEFORE connecting to ensure we don't miss early events
+    shutdown_event = asyncio.Event()
+
+    @ctx.room.on("disconnected")
+    def on_room_disconnected(*args):
+        shutdown_event.set()
+
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+        if track.kind == rtc.TrackKind.KIND_AUDIO and participant.identity == "customer":
+            asyncio.create_task(record_track(track, call_id))
+
     try:
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
+
+        # Scan for already subscribed audio tracks from pre-existing customer participant
+        for participant in ctx.room.remote_participants.values():
+            if participant.identity == "customer":
+                for publication in participant.track_publications.values():
+                    if publication.subscribed and publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
+                        print(f"[recorder] Found pre-existing subscribed customer audio track: {publication.track.sid}")
+                        asyncio.create_task(record_track(publication.track, call_id))
 
         # ── Fetch campaign info to drive the agent's behaviour ───────────────────
         campaign_info = await _get_campaign_info(call_id)
@@ -201,19 +221,6 @@ async def entrypoint(ctx: JobContext):
         print(f"[agent] Agent type   : {agent_type}")
         print(f"[agent] Customer name: {customer_name}")
         print(f"[agent] Script length: {len(custom_script)} chars")
-
-        # This event is set when the room disconnects (i.e. when finish_call
-        # deletes the room), which lets the entrypoint exit cleanly.
-        shutdown_event = asyncio.Event()
-
-        @ctx.room.on("disconnected")
-        def on_room_disconnected(*args):
-            shutdown_event.set()
-
-        @ctx.room.on("track_subscribed")
-        def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-            if track.kind == rtc.TrackKind.KIND_AUDIO and participant.identity == "customer":
-                asyncio.create_task(record_track(track, call_id))
 
         async def _handle_unexpected_disconnect(reason: str):
             # If finish_call already ran, ACTIVE_CALLS entry is already gone.
