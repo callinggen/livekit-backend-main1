@@ -29,7 +29,7 @@ async def notify_call_complete(
         print(f"[backend_client] Could not parse call_id from room name: {room_name}")
         return False
 
-    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
     url = f"{backend_url}/api/calls/{call_id}/complete"
 
     try:
