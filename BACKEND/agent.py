@@ -107,7 +107,7 @@ The tool will handle the goodbye message automatically.
 """
 
 
-async def record_track(track: rtc.RemoteAudioTrack, call_id: int):
+async def record_track(track: rtc.Track, call_id: int):
     """Record a remote audio track (the customer) into a local WAV file."""
     os.makedirs("recordings", exist_ok=True)
     filename = f"recordings/call_{call_id}.wav"
