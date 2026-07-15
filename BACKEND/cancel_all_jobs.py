@@ -15,6 +15,7 @@ from app.database import AsyncSessionLocal
 from app.models.call import Call
 from app.models.job import Job
 from app.models.contact import Contact
+from app.models.campaign import Campaign
 
 
 async def cancel_all():
