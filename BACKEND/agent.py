@@ -153,10 +153,6 @@ async def entrypoint(ctx: JobContext):
     print("JOB RECEIVED")
     print("=" * 60)
 
-    await ctx.connect()
-
-    print(f"Connected to room: {ctx.room.name}")
-
     room_name = ctx.room.name
 
     # ── Extract call_id from room name (format: "call-{call_id}") ────────────
@@ -166,93 +162,95 @@ async def entrypoint(ctx: JobContext):
         call_id = -1
         print(f"[agent] Warning: could not parse call_id from room name: {room_name}")
 
-    # ── Fetch campaign info to drive the agent's behaviour ───────────────────
-    campaign_info = await _get_campaign_info(call_id)
-    agent_type    = campaign_info["agent_type"]
-    custom_script = campaign_info["script"]
-    customer_name = campaign_info["customer_name"]
+    try:
+        await ctx.connect()
+        print(f"Connected to room: {ctx.room.name}")
 
-    print(f"[agent] Agent type   : {agent_type}")
-    print(f"[agent] Customer name: {customer_name}")
-    print(f"[agent] Script length: {len(custom_script)} chars")
+        # ── Fetch campaign info to drive the agent's behaviour ───────────────────
+        campaign_info = await _get_campaign_info(call_id)
+        agent_type    = campaign_info["agent_type"]
+        custom_script = campaign_info["script"]
+        customer_name = campaign_info["customer_name"]
 
-    # This event is set when the room disconnects (i.e. when finish_call
-    # deletes the room), which lets the entrypoint exit cleanly.
-    shutdown_event = asyncio.Event()
+        print(f"[agent] Agent type   : {agent_type}")
+        print(f"[agent] Customer name: {customer_name}")
+        print(f"[agent] Script length: {len(custom_script)} chars")
 
-    @ctx.room.on("disconnected")
-    def on_room_disconnected(*args):
-        shutdown_event.set()
+        # This event is set when the room disconnects (i.e. when finish_call
+        # deletes the room), which lets the entrypoint exit cleanly.
+        shutdown_event = asyncio.Event()
 
-    async def _handle_unexpected_disconnect(reason: str):
-        # If finish_call already ran, ACTIVE_CALLS entry is already gone.
-        state = ACTIVE_CALLS.pop(room_name, None)
-        if state is None:
-            return
+        @ctx.room.on("disconnected")
+        def on_room_disconnected(*args):
+            shutdown_event.set()
 
-        print(
-            f"Customer disconnected before finish_call ran ({reason}). "
-            f"Notifying backend so the campaign can continue."
-        )
+        async def _handle_unexpected_disconnect(reason: str):
+            # If finish_call already ran, ACTIVE_CALLS entry is already gone.
+            state = ACTIVE_CALLS.pop(room_name, None)
+            if state is None:
+                return
 
-        # Try to save a partial transcript even for unexpected disconnects.
-        session = state.get("session")
-        transcript = _build_transcript(session) if session else ""
-
-        await notify_call_complete(
-            room_name,
-            payload={
-                "transcript": transcript or None,
-                "customer_name": None,
-                "appointment_date": None,
-                "appointment_time": None,
-            },
-        )
-
-        # Close the agent session cleanly
-        if session:
-            try:
-                print("Closing AgentSession...")
-                await asyncio.wait_for(session.aclose(), timeout=5.0)
-                print("AgentSession closed.")
-            except Exception as e:
-                print(f"Warning – session.aclose() error: {e}")
-
-        # Delete the LiveKit room to hang up the SIP call
-        try:
-            print("Deleting LiveKit room (this hangs up the SIP call)...")
-            lkapi = api.LiveKitAPI()
-            try:
-                await lkapi.room.delete_room(
-                    api.DeleteRoomRequest(room=room_name)
-                )
-                print("Room deleted successfully.")
-            finally:
-                await lkapi.aclose()
-        except Exception as e:
-            print(f"Warning – room deletion error: {e}")
-
-
-    @ctx.room.on("participant_disconnected")
-    def on_participant_disconnected(participant: rtc.RemoteParticipant):
-        if participant.identity == "customer":
-            asyncio.create_task(
-                _handle_unexpected_disconnect("customer hung up")
+            print(
+                f"Customer disconnected before finish_call ran ({reason}). "
+                f"Notifying backend so the campaign can continue."
             )
 
-    session = AgentSession(
-        stt=sarvam.STT(),
+            # Try to save a partial transcript even for unexpected disconnects.
+            session = state.get("session")
+            transcript = _build_transcript(session) if session else ""
 
-        llm=openai.LLM(
-            model="deepseek-chat",
-            api_key=os.getenv("DEEPSEEK_API_KEY") or "",
-            base_url="https://api.deepseek.com/v1",
-        ),
+            await notify_call_complete(
+                room_name,
+                payload={
+                    "transcript": transcript or None,
+                    "customer_name": None,
+                    "appointment_date": None,
+                    "appointment_time": None,
+                },
+            )
 
-        tts=sarvam.TTS(),
-    )
+            # Close the agent session cleanly
+            if session:
+                try:
+                    print("Closing AgentSession...")
+                    await asyncio.wait_for(session.aclose(), timeout=5.0)
+                    print("AgentSession closed.")
+                except Exception as e:
+                    print(f"Warning – session.aclose() error: {e}")
 
-    try:
+            # Delete the LiveKit room to hang up the SIP call
+            try:
+                print("Deleting LiveKit room (this hangs up the SIP call)...")
+                lkapi = api.LiveKitAPI()
+                try:
+                    await lkapi.room.delete_room(
+                        api.DeleteRoomRequest(room=room_name)
+                    )
+                    print("Room deleted successfully.")
+                finally:
+                    await lkapi.aclose()
+            except Exception as e:
+                print(f"Warning – room deletion error: {e}")
+
+
+        @ctx.room.on("participant_disconnected")
+        def on_participant_disconnected(participant: rtc.RemoteParticipant):
+            if participant.identity == "customer":
+                asyncio.create_task(
+                    _handle_unexpected_disconnect("customer hung up")
+                )
+
+        session = AgentSession(
+            stt=sarvam.STT(),
+
+            llm=openai.LLM(
+                model="deepseek-chat",
+                api_key=os.getenv("DEEPSEEK_API_KEY") or "",
+                base_url="https://api.deepseek.com/v1",
+            ),
+
+            tts=sarvam.TTS(),
+        )
 
         await session.start(
             room=ctx.room,
@@ -320,6 +318,18 @@ async def entrypoint(ctx: JobContext):
         await shutdown_event.wait()
 
         print("Entrypoint shutting down.")
+
+    except Exception as e:
+        print(f"[agent] Fatal error in entrypoint: {e}")
+        if call_id != -1:
+            try:
+                from app.services.call_service import CallService
+                async with AsyncSessionLocal() as db:
+                    await CallService.fail_call(db=db, call_id=call_id)
+                    print(f"[agent] Call {call_id} marked as failed in DB due to crash.")
+            except Exception as db_err:
+                print(f"[agent] Failed to mark call {call_id} as failed in DB: {db_err}")
+        raise e
 
     finally:
         # Safety cleanup in case finish_call never ran (e.g. connection error).
