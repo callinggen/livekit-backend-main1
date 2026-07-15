@@ -52,6 +52,11 @@ async def cancel_all():
             job.status = "cancelled"
             job.finished_at = now
 
+            campaign = await db.get(Campaign, job.campaign_id)
+            if campaign:
+                campaign.status = "failed"
+                print(f"  -> Campaign {campaign.id} ('{campaign.campaign_name}') status set to failed")
+
         await db.commit()
         print(f"\nDone — failed {len(stale_calls)} call(s), cancelled {len(active_jobs)} job(s).")
         print("Worker will now idle until a new job is queued.")
