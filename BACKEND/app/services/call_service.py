@@ -64,7 +64,9 @@ class CallService:
         if job:
             job.completed_contacts += 1
 
-            if job.completed_contacts >= job.total_contacts:
+            # If all contacts are accounted for, close the job
+            accounted = job.completed_contacts + job.failed_contacts
+            if accounted >= job.total_contacts:
                 job.status = "completed"
                 job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
 

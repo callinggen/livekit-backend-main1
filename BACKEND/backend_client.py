@@ -2,11 +2,10 @@ import os
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
 
-# Base URL of the FastAPI backend, reachable from wherever the LiveKit
-# agent worker process runs (same host in dev, internal service URL / ALB
-# DNS name once deployed).
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+# Load env variables at module import time
+load_dotenv()
 
 
 async def notify_call_complete(
@@ -30,7 +29,8 @@ async def notify_call_complete(
         print(f"[backend_client] Could not parse call_id from room name: {room_name}")
         return False
 
-    url = f"{BACKEND_URL}/api/calls/{call_id}/complete"
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
+    url = f"{backend_url}/api/calls/{call_id}/complete"
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -41,3 +41,4 @@ async def notify_call_complete(
     except Exception as e:
         print(f"[backend_client] Failed to notify backend for call {call_id}: {e}")
         return False
+

@@ -6,7 +6,7 @@ from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
 from finish_call import finish_call, _build_transcript
 
-from livekit import rtc
+from livekit import api, rtc
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -208,6 +208,30 @@ async def entrypoint(ctx: JobContext):
                 "appointment_time": None,
             },
         )
+
+        # Close the agent session cleanly
+        if session:
+            try:
+                print("Closing AgentSession...")
+                await asyncio.wait_for(session.aclose(), timeout=5.0)
+                print("AgentSession closed.")
+            except Exception as e:
+                print(f"Warning – session.aclose() error: {e}")
+
+        # Delete the LiveKit room to hang up the SIP call
+        try:
+            print("Deleting LiveKit room (this hangs up the SIP call)...")
+            lkapi = api.LiveKitAPI()
+            try:
+                await lkapi.room.delete_room(
+                    api.DeleteRoomRequest(room=room_name)
+                )
+                print("Room deleted successfully.")
+            finally:
+                await lkapi.aclose()
+        except Exception as e:
+            print(f"Warning – room deletion error: {e}")
+
 
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant: rtc.RemoteParticipant):
