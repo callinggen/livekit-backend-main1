@@ -109,7 +109,7 @@ sudo docker compose up -d
 
 echo "=== 5. Cloning Backend Repository ==="
 rm -rf ~/app
-git clone https://github.com/callinggen/livekit-test.git ~/app
+git clone https://github.com/callinggen/livekit-backend-main1.git ~/app
 
 echo "=== 6. Setting Up Python Environment ==="
 cd ~/app/BACKEND
@@ -119,13 +119,17 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "=== 7. Creating Environment File ==="
+echo "NOTE: Fill in your real API keys below before running this script."
 cat << 'EOF' > ~/app/BACKEND/app/.env
 LIVEKIT_URL=ws://13.232.26.174:7880
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=devsecret123456789012345678901234567890
 
-DEEPSEEK_API_KEY=sk-83f043e9f53f4adb9d99fc2031c4c3e5
-SARVAM_API_KEY=sk_jzwpy6ag_FTWNc33V8BpMGnemCpCGawkE
+SIP_TRUNK_ID=ST_mmfofL7PdLRq
+SIP_CALL_FROM=+917971442271
+
+DEEPSEEK_API_KEY=YOUR_DEEPSEEK_API_KEY_HERE
+SARVAM_API_KEY=YOUR_SARVAM_API_KEY_HERE
 BACKEND_URL=http://127.0.0.1:8000
 EOF
 

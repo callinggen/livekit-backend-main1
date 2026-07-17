@@ -9,7 +9,7 @@ fi
 
 echo "=== 2. Cloning Frontend Repository ==="
 rm -rf ~/frontend
-git clone https://github.com/callinggen/livekit-frontend.git ~/frontend
+git clone https://github.com/callinggen/livekit-forntend-main1.git ~/frontend
 
 echo "=== 3. Installing Frontend Dependencies ==="
 cd ~/frontend
