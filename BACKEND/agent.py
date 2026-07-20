@@ -49,6 +49,11 @@ AGENT_BASE_PROMPTS: dict[str, str] = {
         "Ask each question clearly, wait for the customer's answer, record it accurately, "
         "and keep the conversation brief and focused."
     ),
+    "Voice-E (Tax Agent)": (
+        "You are a professional and knowledgeable tax advisor making outbound calls. "
+        "Your goal is to assist customers with their tax filing requirements, answer questions about "
+        "deductions, and schedule appointments with tax professionals if needed."
+    ),
 }
 
 # ── Date/time validation rules injected into every agent ──────────────────────
