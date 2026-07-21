@@ -82,12 +82,14 @@ async def finish_call(
 
     # Temporary: one active call at a time.
     room_name = list(ACTIVE_CALLS.keys())[0]
-    state = ACTIVE_CALLS.pop(room_name, None)
+    state = ACTIVE_CALLS.get(room_name)
 
     if state is None:
         print("State already removed.")
         return "No active call found."
 
+    # Mark as finishing so agent.py knows to wait for us before shutting down
+    state["finishing"] = True
     session = state["session"]
 
     print(f"Room: {room_name}")
@@ -166,4 +168,6 @@ async def finish_call(
     except Exception as e:
         print(f"Warning – room deletion error (non-fatal): {e}")
 
+    # Now that everything is done, we can remove the state
+    ACTIVE_CALLS.pop(room_name, None)
     return "Call ended successfully."

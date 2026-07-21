@@ -29,26 +29,26 @@ load_dotenv()
 
 # ── Agent type → base system prompt ───────────────────────────────────────────
 AGENT_BASE_PROMPTS: dict[str, str] = {
-    "Voice-A (Sales)": (
-        "You are a professional sales representative making outbound calls. "
-        "Your goal is to pitch the product/service, handle objections politely, "
-        "and move the prospect toward a purchase or demo booking."
-    ),
-    "Voice-B (Support)": (
-        "You are a friendly customer support agent making outbound calls. "
-        "Your goal is to resolve the customer's issue, answer questions accurately, "
-        "and ensure the customer feels heard and satisfied."
-    ),
-    "Voice-C (Followup)": (
-        "You are a follow-up agent making outbound calls to warm leads or past customers. "
-        "Your goal is to re-engage the contact, check on their needs, "
-        "and guide them toward the next step."
-    ),
-    "Voice-D (Survey)": (
-        "You are a survey agent conducting a satisfaction or market research call. "
-        "Ask each question clearly, wait for the customer's answer, record it accurately, "
-        "and keep the conversation brief and focused."
-    ),
+    # "Voice-A (Sales)": (
+    #     "You are a professional sales representative making outbound calls. "
+    #     "Your goal is to pitch the product/service, handle objections politely, "
+    #     "and move the prospect toward a purchase or demo booking."
+    # ),
+    # "Voice-B (Support)": (
+    #     "You are a friendly customer support agent making outbound calls. "
+    #     "Your goal is to resolve the customer's issue, answer questions accurately, "
+    #     "and ensure the customer feels heard and satisfied."
+    # ),
+    # "Voice-C (Followup)": (
+    #     "You are a follow-up agent making outbound calls to warm leads or past customers. "
+    #     "Your goal is to re-engage the contact, check on their needs, "
+    #     "and guide them toward the next step."
+    # ),
+    # "Voice-D (Survey)": (
+    #     "You are a survey agent conducting a satisfaction or market research call. "
+    #     "Ask each question clearly, wait for the customer's answer, record it accurately, "
+    #     "and keep the conversation brief and focused."
+    # ),
     "Voice-E (Tax Agent)": (
         "You are a professional and knowledgeable tax advisor making outbound calls. "
         "Your goal is to assist customers with their tax filing requirements, answer questions about "
@@ -79,7 +79,7 @@ def build_agent_instructions(
     - the pre-known customer name
     - mandatory date/time validation rules
     """
-    base = AGENT_BASE_PROMPTS.get(agent_type, AGENT_BASE_PROMPTS["Voice-A (Sales)"])
+    base = AGENT_BASE_PROMPTS.get(agent_type, AGENT_BASE_PROMPTS["Voice-E (Tax Agent)"])
     name_clause = (
         f"\nIMPORTANT: You already know the customer's name is '{customer_name}'. "
         "Do NOT ask them for their name — address them by name when appropriate."
@@ -230,13 +230,13 @@ async def _get_campaign_info(call_id: int) -> dict:
             campaign = await db.get(Campaign, job.campaign_id) if job else None
 
             return {
-                "agent_type": campaign.agent if campaign else "Voice-A (Sales)",
+                "agent_type": campaign.agent if campaign else "Voice-E (Tax Agent)",
                 "script": campaign.script if campaign else "",
                 "customer_name": contact.name if contact else "",
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-A (Sales)", "script": "", "customer_name": ""}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": ""}
 
 
 async def entrypoint(ctx: JobContext):
@@ -464,7 +464,21 @@ async def entrypoint(ctx: JobContext):
         raise e
 
     finally:
-        # Safety cleanup in case finish_call never ran (e.g. connection error).
+        state = ACTIVE_CALLS.get(ctx.room.name)
+        if state and state.get("finishing"):
+            print(f"[{ctx.room.name}] Agent shutting down, but finish_call is running. Waiting up to 10s...")
+            for _ in range(10):
+                if ctx.room.name not in ACTIVE_CALLS:
+                    print(f"[{ctx.room.name}] finish_call completed successfully.")
+                    break
+                await asyncio.sleep(1)
+            else:
+                print(f"[{ctx.room.name}] Timeout waiting for finish_call. Force shutting down.")
+        else:
+            # Give any pending disconnect callbacks time to finish saving transcripts
+            await asyncio.sleep(2)
+
+        # Safety cleanup in case finish_call never ran or timed out.
         ACTIVE_CALLS.pop(ctx.room.name, None)
         print(f"Removed active call: {ctx.room.name}")
 
