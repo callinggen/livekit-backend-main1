@@ -69,6 +69,11 @@ class Call(Base):
         nullable=True,
     )
 
+    human_response: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
     recording_url: Mapped[str | None] = mapped_column(
         String,
         nullable=True,

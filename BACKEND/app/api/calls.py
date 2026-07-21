@@ -36,6 +36,29 @@ class CallCompleteRequest(BaseModel):
     recording_url: Optional[str] = None
 
 
+class HumanResponseRequest(BaseModel):
+    human_response: Optional[str] = None
+
+
+@router.patch("/calls/{call_id}/human-response")
+async def update_human_response(
+    call_id: int,
+    req: HumanResponseRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    call = await db.get(Call, call_id)
+    if not call:
+        return {"error": "Call not found"}
+    
+    val = req.human_response.strip() if req.human_response else None
+    if val == "":
+        val = None
+        
+    call.human_response = val
+    await db.commit()
+    return {"success": True, "human_response": call.human_response}
+
+
 def _fmt_duration(seconds: int) -> str:
     """Convert integer seconds → 'MM:SS' string."""
     m, s = divmod(max(0, seconds), 60)
@@ -117,6 +140,7 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
             "duration": _fmt_duration(call.duration or 0),
             "transcript": _parse_transcript(call.transcript),
             "summary": call.summary or "",
+            "human_response": call.human_response,
             "notes": f"Appointment: {contact.appointment_date or '—'} at {contact.appointment_time or '—'}",
             "appointment_date": contact.appointment_date or "",
             "appointment_time": contact.appointment_time or "",
