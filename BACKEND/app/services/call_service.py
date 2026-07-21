@@ -39,53 +39,6 @@ class CallService:
         if call.started_at:
             call.duration = int((now - call.started_at).total_seconds())
 
-        # ── Transcript ────────────────────────────────────────────────
-        if transcript:
-            call.transcript = transcript
-            
-            # Generate AI Classification
-            try:
-                import os
-                from openai import AsyncOpenAI
-                
-                deepseek_key = os.getenv("DEEPSEEK_API_KEY")
-                if deepseek_key and len(transcript) > 20:
-                    client = AsyncOpenAI(
-                        api_key=deepseek_key,
-                        base_url="https://api.deepseek.com/v1"
-                    )
-                    prompt = (
-                        "Analyze the following call transcript and identify the main tax-related topic/intent.\n"
-                        "Output ONLY a 2-4 word classification (e.g., 'ITR Filing Query', 'Tax Notice Assistance', 'Tax Planning').\n"
-                        "DO NOT use words like: Interested, Not Interested, Busy, Callback, Reachable, Disconnected, Answered.\n"
-                        "DO NOT output full sentences. Return pure text, no markdown, no quotes, no periods at the end.\n\n"
-                        f"Transcript:\n{transcript}"
-                    )
-                    
-                    response = await client.chat.completions.create(
-                        model="deepseek-chat",
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=10,
-                        temperature=0.3
-                    )
-                    
-                    raw_summary = response.choices[0].message.content or ""
-                    # Strict cleaning: remove quotes, trailing periods, and newlines
-                    clean_summary = raw_summary.strip().strip("'\".").replace("\n", " ")
-                    
-                    # Validate: if AI goes rogue and outputs a full sentence, fallback
-                    if len(clean_summary.split()) > 6 or not clean_summary:
-                        call.summary = "Classification Pending"
-                    else:
-                        call.summary = clean_summary
-                else:
-                    call.summary = "General Tax Inquiry"
-            except Exception as e:
-                print(f"Failed to generate AI classification: {e}")
-                call.summary = "Classification Unavailable"
-        else:
-            call.summary = "General Tax Inquiry"
-
         # ── Contact ───────────────────────────────────────────────────
         contact = await db.get(Contact, call.contact_id)
         if contact:
@@ -104,6 +57,90 @@ class CallService:
                 contact.response = "Appointment booked"
             if appointment_time:
                 contact.appointment_time = appointment_time
+
+        business_outcome = contact.response if contact else "None"
+
+        # ── Transcript & AI ────────────────────────────────────────────
+        if transcript:
+            call.transcript = transcript
+            
+            # Generate AI Classification & Category in parallel
+            try:
+                import os
+                import asyncio
+                from openai import AsyncOpenAI
+                
+                deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+                if deepseek_key and len(transcript) > 20:
+                    client = AsyncOpenAI(
+                        api_key=deepseek_key,
+                        base_url="https://api.deepseek.com/v1"
+                    )
+                    
+                    # Request 1: Topic Classification
+                    prompt_class = (
+                        "Analyze the following call transcript and identify the main tax-related topic/intent.\n"
+                        "Output ONLY a 2-4 word classification (e.g., 'ITR Filing Query', 'Tax Notice Assistance', 'Tax Planning').\n"
+                        "DO NOT use words like: Interested, Not Interested, Busy, Callback, Reachable, Disconnected, Answered.\n"
+                        "DO NOT output full sentences. Return pure text, no markdown, no quotes, no periods at the end.\n\n"
+                        f"Transcript:\n{transcript}"
+                    )
+                    
+                    # Request 2: Sales Pipeline Category
+                    prompt_cat = (
+                        "Analyze the following call transcript and the Business Outcome to determine the Sales Pipeline Category.\n"
+                        "The category MUST be exactly one of the following words: HOT, WARM, or COLD.\n"
+                        "- HOT = High-priority lead with strong/immediate intent, appointment or consultation booked, or clearly ready to proceed.\n"
+                        "- WARM = Medium-priority lead showing interest but requiring more information, consideration, or follow-up.\n"
+                        "- COLD = Low-priority lead with little/no interest, not currently needing the service, or low conversion potential.\n"
+                        "Output ONLY the single word (HOT, WARM, or COLD). No markdown, no punctuation.\n\n"
+                        f"Business Outcome: {business_outcome}\n"
+                        f"Transcript:\n{transcript}"
+                    )
+                    
+                    task_class = client.chat.completions.create(
+                        model="deepseek-chat",
+                        messages=[{"role": "user", "content": prompt_class}],
+                        max_tokens=10,
+                        temperature=0.3
+                    )
+                    
+                    task_cat = client.chat.completions.create(
+                        model="deepseek-chat",
+                        messages=[{"role": "user", "content": prompt_cat}],
+                        max_tokens=10,
+                        temperature=0.3
+                    )
+                    
+                    # Run in parallel
+                    res_class, res_cat = await asyncio.gather(task_class, task_cat)
+                    
+                    # Process Classification
+                    raw_summary = res_class.choices[0].message.content or ""
+                    clean_summary = raw_summary.strip().strip("'\".").replace("\n", " ")
+                    if len(clean_summary.split()) > 6 or not clean_summary:
+                        call.summary = "Classification Pending"
+                    else:
+                        call.summary = clean_summary
+                        
+                    # Process Category
+                    raw_cat = res_cat.choices[0].message.content or ""
+                    clean_cat = raw_cat.strip().strip("'\".").upper()
+                    if clean_cat in ["HOT", "WARM", "COLD"]:
+                        call.category = clean_cat
+                    else:
+                        call.category = "UNCATEGORIZED"
+                        
+                else:
+                    call.summary = "General Tax Inquiry"
+                    call.category = "UNCATEGORIZED"
+            except Exception as e:
+                print(f"Failed to generate AI data: {e}")
+                call.summary = "Classification Unavailable"
+                call.category = "UNCATEGORIZED"
+        else:
+            call.summary = "General Tax Inquiry"
+            call.category = "UNCATEGORIZED"
 
         # ── Job / Campaign ────────────────────────────────────────────
         job = await db.get(Job, call.job_id)

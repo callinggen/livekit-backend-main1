@@ -140,6 +140,7 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
             "duration": _fmt_duration(call.duration or 0),
             "transcript": _parse_transcript(call.transcript),
             "summary": call.summary or "",
+            "category": call.category or "UNCATEGORIZED",
             "human_response": call.human_response,
             "notes": f"Appointment: {contact.appointment_date or '—'} at {contact.appointment_time or '—'}",
             "appointment_date": contact.appointment_date or "",
