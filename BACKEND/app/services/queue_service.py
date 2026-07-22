@@ -69,9 +69,14 @@ class QueueService:
         contact = result.scalars().first()
 
         if contact is None:
-            print("No pending contacts")
+            print("No pending contacts and no active calls.")
             job.status = "completed"
-
+            job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            
+            campaign = await db.get(Campaign, job.campaign_id)
+            if campaign:
+                campaign.status = "completed"
+                
             await db.commit()
 
             return False

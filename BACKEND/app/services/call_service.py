@@ -30,8 +30,10 @@ class CallService:
         if call.status == "completed":
             return call
 
-        # ── Timestamps & duration ──────────────────────────────
-        call.status = "completed"
+        # ── Determine if it's a success or failure ────────────────────
+        is_success = transcript is not None and len(transcript.strip()) > 0
+        call.status = "completed" if is_success else "failed"
+        
         if recording_url:
             call.recording_url = recording_url
         now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
@@ -46,7 +48,7 @@ class CallService:
         # ── Contact ───────────────────────────────────────────────────
         contact = await db.get(Contact, call.contact_id)
         if contact:
-            contact.status = "completed"
+            contact.status = "completed" if is_success else "failed"
             contact.duration = str(call.duration)
             if transcript:
                 contact.transcript = transcript
@@ -61,21 +63,17 @@ class CallService:
                 contact.response = "Appointment booked"
             if appointment_time:
                 contact.appointment_time = appointment_time
+            
+            if not is_success and not contact.response:
+                contact.response = "No Answer / Cut"
 
         # ── Job / Campaign ────────────────────────────────────────────
         job = await db.get(Job, call.job_id)
         if job:
-            job.completed_contacts += 1
-
-            # If all contacts are accounted for, close the job
-            accounted = job.completed_contacts + job.failed_contacts
-            if accounted >= job.total_contacts:
-                job.status = "completed"
-                job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-                campaign = await db.get(Campaign, job.campaign_id)
-                if campaign:
-                    campaign.status = "completed"
+            if is_success:
+                job.completed_contacts += 1
+            else:
+                job.failed_contacts += 1
 
         await db.commit()
 
@@ -107,16 +105,6 @@ class CallService:
         job = await db.get(Job, call.job_id)
         if job:
             job.failed_contacts += 1
-
-            # If all contacts are accounted for, close the job
-            accounted = job.completed_contacts + job.failed_contacts
-            if accounted >= job.total_contacts:
-                job.status = "completed"
-                job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-                campaign = await db.get(Campaign, job.campaign_id)
-                if campaign:
-                    campaign.status = "completed"
 
         await db.commit()
         return call

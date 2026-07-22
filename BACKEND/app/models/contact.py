@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Integer, String, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -60,6 +60,11 @@ class Contact(Base):
 
     appointment_time: Mapped[str | None] = mapped_column(
         String,
+        nullable=True,
+    )
+
+    metadata_fields: Mapped[dict | None] = mapped_column(
+        JSON,
         nullable=True,
     )
 

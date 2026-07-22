@@ -38,14 +38,22 @@ async def launch_campaign(
     campaign_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    job = await CampaignService.launch_campaign(
+    job, total_contacts = await CampaignService.launch_campaign(
         db=db,
         campaign_id=campaign_id,
     )
+    
+    if job is None:
+        return {
+            "message": "Campaign scheduled successfully",
+            "job_id": -1,
+            "total_contacts": total_contacts,
+        }
+
     return {
         "message": "Campaign launched successfully",
         "job_id": job.id,
-        "total_contacts": job.total_contacts,
+        "total_contacts": total_contacts,
     }
 
 
@@ -146,6 +154,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
                 "appointment_time": ct.appointment_time,
                 "transcript": ct.transcript,
                 "duration": ct.duration,
+                "metadata_fields": ct.metadata_fields,
             }
             for ct in contacts
         ],
@@ -168,6 +177,7 @@ async def get_campaign_contacts(campaign_id: int, db: AsyncSession = Depends(get
             "status": ct.status,
             "response": ct.response or "—",
             "datetime": "",
+            "metadata_fields": ct.metadata_fields,
         }
         for ct in contacts
     ]
@@ -193,12 +203,24 @@ async def get_campaign_live(campaign_id: int, db: AsyncSession = Depends(get_db)
     return {
         "registry": len(contacts),
         "standby":  sum(1 for c in contacts if c.status == "pending"),
-        "dialer":   sum(1 for c in contacts if c.status == "calling"),
-        "analysis": sum(1 for c in contacts if c.status in ("completed", "failed")),
+        "dialer":   sum(1 for c in contacts if c.status in ("calling", "in_progress", "dialing")),
+        "analysis": sum(1 for c in contacts if c.status in ("completed", "failed", "busy", "no_answer")),
         "completed": sum(1 for c in contacts if c.status == "completed"),
-        "failed":    sum(1 for c in contacts if c.status == "failed"),
+        "failed":    sum(1 for c in contacts if c.status in ("failed", "busy", "no_answer")),
         "campaign_status": _map_status(campaign.status) if campaign else "Unknown",
+        "schedule_date": campaign.schedule_date if campaign else "",
+        "schedule_time": campaign.schedule_time if campaign else "",
         "total_contacts": job.total_contacts if job else len(contacts),
+        "contacts": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "phone": c.phone,
+                "status": c.status,
+                "response": c.response or "—",
+            }
+            for c in contacts
+        ]
     }
 
 

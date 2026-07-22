@@ -11,6 +11,36 @@ from app.schemas.campaign import CampaignCreate
 class CampaignService:
 
     @staticmethod
+    async def queue_campaign_job(
+        db: AsyncSession,
+        campaign: Campaign,
+        total_contacts: int,
+    ) -> Job:
+        """Helper to create a Job only if one doesn't exist."""
+        result = await db.execute(
+            select(Job).where(
+                Job.campaign_id == campaign.id,
+                Job.status.in_(["queued", "processing"])
+            )
+        )
+        existing_job = result.scalars().first()
+        if existing_job:
+            return existing_job
+
+        job = Job(
+            campaign_id=campaign.id,
+            status="queued",
+            total_contacts=total_contacts,
+            completed_contacts=0,
+            failed_contacts=0,
+        )
+        db.add(job)
+        campaign.status = "running"
+        await db.commit()
+        await db.refresh(job)
+        return job
+
+    @staticmethod
     async def launch_campaign(
         db: AsyncSession,
         campaign_id: int,
@@ -41,18 +71,37 @@ class CampaignService:
                 status_code=400,
                 detail="Campaign has no contacts",
             )
-        job = Job(
-            campaign_id=campaign.id,
-            status="queued",
-            total_contacts=len(contacts),
-            completed_contacts=0,
-            failed_contacts=0,
+            
+        existing_job_result = await db.execute(
+            select(Job).where(
+                Job.campaign_id == campaign.id,
+                Job.status.in_(["queued", "processing"])
+            )
         )
-        db.add(job)
-        campaign.status = "running"
-        await db.commit()
-        await db.refresh(job)
-        return job
+        existing_job = existing_job_result.scalars().first()
+        if existing_job:
+            return existing_job, len(contacts)
+
+        from datetime import datetime, timezone, timedelta
+        
+        # Check if it's scheduled for the future
+        schedule_dt = None
+        try:
+            # Parse ISO 8601 UTC string e.g. "2023-11-20T14:30:00Z"
+            iso_str = campaign.schedule_date.replace("Z", "+00:00")
+            schedule_dt = datetime.fromisoformat(iso_str)
+        except Exception:
+            pass
+            
+        now = datetime.now(timezone.utc)
+        # Allow 5 min grace period for "immediate" launches
+        if schedule_dt and schedule_dt > now + timedelta(minutes=5):
+            campaign.status = "scheduled"
+            await db.commit()
+            return None, len(contacts)
+
+        job = await CampaignService.queue_campaign_job(db, campaign, len(contacts))
+        return job, len(contacts)
 
     @staticmethod
     async def create_campaign(
@@ -82,6 +131,7 @@ class CampaignService:
                 name=item.name,
                 phone=item.phone,
                 status="pending",
+                metadata_fields=item.metadata_fields,
             )
 
             contacts.append(contact)

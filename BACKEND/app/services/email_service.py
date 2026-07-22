@@ -20,7 +20,7 @@ class EmailService:
     def _send_email(self, to_email: str, subject: str, body: str):
         if not self.is_configured():
             print("\n" + "="*50)
-            print("🚨 SMTP NOT CONFIGURED IN .env 🚨")
+            print("SMTP NOT CONFIGURED IN .env")
             print(f"Would have sent email to {to_email}")
             print(f"Subject: {subject}")
             print("="*50 + "\n")
@@ -39,15 +39,15 @@ class EmailService:
             server.login(self.smtp_user, self.smtp_password)
             server.send_message(msg)
             server.quit()
-            print(f"✅ Email sent successfully to {to_email}")
+            print(f"Email sent successfully to {to_email}")
         except smtplib.SMTPException as e:
-            print(f"❌ SMTP Error sending email to {to_email}: {e}")
+            print(f"SMTP Error sending email to {to_email}: {e}")
             raise Exception(f"Failed to send email. SMTP Error.")
         except TimeoutError:
-            print(f"❌ Timeout sending email to {to_email}")
+            print(f"Timeout sending email to {to_email}")
             raise Exception("Failed to send email. The connection timed out.")
         except Exception as e:
-            print(f"❌ Unexpected Error sending email to {to_email}: {e}")
+            print(f"Unexpected Error sending email to {to_email}: {e}")
             raise Exception("An unexpected error occurred while sending the email.")
 
     def send_password_reset_email(self, to_email: str, reset_code: str):

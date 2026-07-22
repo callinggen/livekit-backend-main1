@@ -16,13 +16,14 @@ async def make_livekit_call(
 ):
 
     lkapi = api.LiveKitAPI()
-
     
+    # Sanitize the phone number to remove spaces, dashes, parentheses
+    clean_phone = "".join(c for c in phone if c.isdigit() or c == "+")
 
     sip_call_from = os.getenv("SIP_CALL_FROM", "+917971442271")
     req = CreateSIPParticipantRequest(
         sip_trunk_id=TRUNK_ID,
-        sip_call_to=phone,
+        sip_call_to=clean_phone,
         sip_number=sip_call_from,
         room_name=room_name,
         participant_identity="customer",
