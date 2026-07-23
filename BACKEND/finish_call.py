@@ -105,78 +105,86 @@ async def finish_call(
     else:
         goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
 
-    # ── Step 1: Speak the goodbye phrase via TTS, then wait for it ────
     try:
-        print(f"Speaking goodbye: '{goodbye_phrase}'")
-        speech = session.say(goodbye_phrase, allow_interruptions=False)
-        # SpeechHandle is awaitable — wait until audio playback is done
-        await speech
-        print("Goodbye spoken successfully.")
-    except Exception as e:
-        print(f"Warning – could not speak goodbye (non-fatal): {e}")
-        # Still give a moment for any in-progress speech to drain
-        await asyncio.sleep(2)
-
-    # ── Step 2: Build transcript (after goodbye is in history) ────────
-    transcript = _build_transcript(session)
-    print(f"Transcript lines: {len(transcript.splitlines())}")
-
-    # ── Step 3: Close the agent session ──────────────────────────────
-    try:
-        print("Closing AgentSession...")
-        await asyncio.wait_for(session.aclose(), timeout=5.0)
-        print("AgentSession closed.")
-    except asyncio.TimeoutError:
-        print("Warning – session.aclose() timed out (non-fatal, continuing...)")
-    except Exception as e:
-        print(f"Warning – session.aclose() error (non-fatal): {e}")
-
-    # ── Step 4: Notify backend with full payload ──────────────────────
-    try:
-        call_id = int(room_name.rsplit("-", 1)[-1])
-    except (ValueError, IndexError):
-        call_id = -1
-
-    payload = {
-        "transcript": transcript or None,
-        "customer_name": customer_name or None,
-        "appointment_date": appointment_date or None,
-        "appointment_time": appointment_time or None,
-        "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
-    }
-
-    # Mix WAV tracks
-    if call_id != -1:
+        # ── Step 1: Speak the goodbye phrase via TTS ──────────────────────
         try:
-            from agent import mix_wav_files
-            mix_wav_files(
-                f"recordings/call_{call_id}_customer.wav",
-                f"recordings/call_{call_id}_agent.wav",
-                f"recordings/call_{call_id}.wav"
-            )
-        except Exception as mix_err:
-            print(f"Warning – mixing audio failed: {mix_err}")
+            print(f"Speaking goodbye: '{goodbye_phrase}'")
+            speech = session.say(goodbye_phrase)
+            if speech:
+                await asyncio.wait_for(speech, timeout=4.0)
+            print("Goodbye spoken successfully.")
+        except Exception as e:
+            print(f"Warning – could not speak goodbye (non-fatal): {e}")
 
-    try:
-        print("Notifying backend that the call is complete...")
-        await notify_call_complete(room_name, payload=payload)
-    except Exception as e:
-        print(f"Warning – backend notify error (non-fatal): {e}")
+        # ── Step 2: Build transcript (after goodbye is in history) ────────
+        transcript = _build_transcript(session)
+        print(f"Transcript lines: {len(transcript.splitlines())}")
 
-    # ── Step 5: Delete the LiveKit room to hang up the SIP call ──────
-    try:
-        print("Deleting LiveKit room (this hangs up the SIP call)...")
-        lkapi = api.LiveKitAPI()
+        # ── Step 3: Close the agent session ──────────────────────────────
         try:
-            await lkapi.room.delete_room(
-                api.DeleteRoomRequest(room=room_name)
-            )
-            print("Room deleted successfully.")
-        finally:
-            await lkapi.aclose()
-    except Exception as e:
-        print(f"Warning – room deletion error (non-fatal): {e}")
+            print("Closing AgentSession...")
+            await asyncio.wait_for(session.aclose(), timeout=5.0)
+            print("AgentSession closed.")
+        except Exception as e:
+            print(f"Warning – session.aclose() error (non-fatal): {e}")
 
-    # Now that everything is done, we can remove the state
-    ACTIVE_CALLS.pop(room_name, None)
+        # ── Step 4: Notify backend with full payload ──────────────────────
+        try:
+            call_id = int(room_name.rsplit("-", 1)[-1])
+        except (ValueError, IndexError):
+            call_id = -1
+
+        payload = {
+            "transcript": transcript or None,
+            "customer_name": customer_name or None,
+            "appointment_date": appointment_date or None,
+            "appointment_time": appointment_time or None,
+            "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+        }
+
+        # Mix WAV tracks
+        if call_id != -1:
+            try:
+                from agent import mix_wav_files
+                mix_wav_files(
+                    f"recordings/call_{call_id}_customer.wav",
+                    f"recordings/call_{call_id}_agent.wav",
+                    f"recordings/call_{call_id}.wav"
+                )
+            except Exception as mix_err:
+                print(f"Warning – mixing audio failed: {mix_err}")
+
+        try:
+            print("Notifying backend that the call is complete...")
+            await notify_call_complete(room_name, payload=payload)
+        except Exception as e:
+            print(f"Warning – backend notify error (non-fatal): {e}")
+
+    finally:
+        # ── Step 5: ALWAYS delete the LiveKit room to hang up the call ──
+        try:
+            print("Deleting LiveKit room (hanging up SIP call)...")
+            import os
+            lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+            lk_key = os.getenv("LIVEKIT_API_KEY")
+            lk_secret = os.getenv("LIVEKIT_API_SECRET")
+            
+            if lk_url:
+                lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
+            else:
+                lkapi = api.LiveKitAPI()
+
+            try:
+                await lkapi.room.delete_room(
+                    api.DeleteRoomRequest(room=room_name)
+                )
+                print("Room deleted successfully — call hung up.")
+            finally:
+                await lkapi.aclose()
+        except Exception as e:
+            print(f"Warning – room deletion error: {e}")
+
+        # Remove active call state
+        ACTIVE_CALLS.pop(room_name, None)
+
     return "Call ended successfully."
