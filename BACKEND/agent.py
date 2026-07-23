@@ -379,7 +379,7 @@ async def entrypoint(ctx: JobContext):
 
         @ctx.room.on("participant_disconnected")
         def on_participant_disconnected(participant: rtc.RemoteParticipant):
-            if participant.identity == "customer":
+            if participant.identity == "customer" or participant.identity.startswith("sip") or len(ctx.room.remote_participants) == 0:
                 asyncio.create_task(
                     _handle_unexpected_disconnect("customer hung up")
                 )
@@ -436,7 +436,7 @@ async def entrypoint(ctx: JobContext):
         customer_joined = False
         for _ in range(60):  # wait up to 60 seconds
             participants = ctx.room.remote_participants
-            if any(p.identity == "customer" for p in participants.values()):
+            if len(participants) > 0:
                 customer_joined = True
                 print("Customer participant joined — starting greeting.")
                 break
@@ -468,9 +468,11 @@ async def entrypoint(ctx: JobContext):
                 "Introduce yourself and begin the conversation following the campaign script."
             )
 
-            await session.generate_reply(instructions=greeting_instructions)
-
-            print("Greeting sent")
+            try:
+                await session.generate_reply(instructions=greeting_instructions)
+                print("Greeting sent")
+            except Exception as reply_err:
+                print(f"[agent] Greeting generation note: {reply_err}")
 
         # Keep the entrypoint alive until the room is deleted.
         # finish_call deletes the LiveKit room → LiveKit fires the
