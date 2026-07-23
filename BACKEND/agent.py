@@ -52,17 +52,19 @@ AGENT_BASE_PROMPTS: dict[str, str] = {
     # ),
     "Voice-E (Tax Agent)": (
         "You are a professional and knowledgeable tax advisor making outbound calls. "
-        "Your goal is to assist customers with their tax filing requirements and guide them through their tax submission according to the campaign script."
+        "Your goal is to assist customers with their tax filing requirements, answer questions about "
+        "deductions, and schedule appointments with tax professionals if needed."
     ),
 }
 
 # ── Date/time validation rules injected into every agent ──────────────────────
 DATE_TIME_VALIDATION_RULES = """
-DATE & TIME VALIDATION RULES (Apply only if an appointment or schedule is requested):
+DATE & TIME VALIDATION RULES (MANDATORY — never skip these):
 - If the customer mentions a date that is in the past, say: "I'm sorry, that date has already passed. Could you please provide a future date?"
-- If the customer gives a date without a year (e.g. "July 15th"), ask: "Could you confirm — which year did you mean?"
-- If the customer mentions only a time without AM or PM (e.g. "3 o'clock" or "10:30"), ask: "Is that AM or PM?"
+- If the customer gives a date without a year (e.g. "July 15th"), always ask: "Could you confirm — which year did you mean?"
+- If the customer mentions only a time without AM or PM (e.g. "3 o'clock" or "10:30"), always ask: "Is that AM or PM?"
 - Never book or confirm an appointment with an ambiguous or past date/time.
+- Always confirm the full date (including year) and time (including AM/PM) before calling the finish_call tool.
 """
 
 
@@ -91,16 +93,15 @@ def build_agent_instructions(
 
 CRITICAL MANDATORY TOOL CALL RULE:
 You have access to a tool named `finish_call`.
-Whenever the customer says goodbye, declines, says not interested, concludes the topic, or indicates the conversation is over:
+Whenever the customer says goodbye, declines, says not interested, confirms an appointment, or indicates the conversation is over:
 You MUST call the `finish_call` tool immediately! Do NOT reply with text when concluding — invoke the `finish_call` tool instead.
 
-RULES FOR SCRIPT ADHERENCE:
-- Follow the CAMPAIGN-SPECIFIC SCRIPT below faithfully as your primary guide.
-- Do NOT bring up booking appointments unless the script or customer explicitly asks for one.
+RULES:
 - Keep every response under 2 sentences.
 - Be polite and professional.
 - Do not hallucinate or invent details.
 - Do not discuss unrelated topics.
+- Follow the custom script below faithfully.
 
 CAMPAIGN-SPECIFIC SCRIPT:
 {custom_script}
@@ -108,10 +109,10 @@ CAMPAIGN-SPECIFIC SCRIPT:
 {DATE_TIME_VALIDATION_RULES}
 
 REMINDER ON HANGUP:
-Whenever the conversation reaches its end, call `finish_call` immediately with:
+Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
   - customer_name: the customer's name
-  - appointment_date: the confirmed date (if an appointment was requested/booked, otherwise null/empty)
-  - appointment_time: the confirmed time (if an appointment was requested/booked, otherwise null/empty)
+  - appointment_date: the confirmed future date (with year, if booked)
+  - appointment_time: the confirmed time (with AM/PM, if booked)
 """
 
 
@@ -378,7 +379,7 @@ async def entrypoint(ctx: JobContext):
 
         @ctx.room.on("participant_disconnected")
         def on_participant_disconnected(participant: rtc.RemoteParticipant):
-            if participant.identity == "customer" or participant.identity.startswith("sip") or len(ctx.room.remote_participants) == 0:
+            if participant.identity == "customer":
                 asyncio.create_task(
                     _handle_unexpected_disconnect("customer hung up")
                 )
@@ -435,7 +436,7 @@ async def entrypoint(ctx: JobContext):
         customer_joined = False
         for _ in range(60):  # wait up to 60 seconds
             participants = ctx.room.remote_participants
-            if len(participants) > 0:
+            if any(p.identity == "customer" for p in participants.values()):
                 customer_joined = True
                 print("Customer participant joined — starting greeting.")
                 break
@@ -467,11 +468,9 @@ async def entrypoint(ctx: JobContext):
                 "Introduce yourself and begin the conversation following the campaign script."
             )
 
-            try:
-                await session.generate_reply(instructions=greeting_instructions)
-                print("Greeting sent")
-            except Exception as reply_err:
-                print(f"[agent] Greeting generation note: {reply_err}")
+            await session.generate_reply(instructions=greeting_instructions)
+
+            print("Greeting sent")
 
         # Keep the entrypoint alive until the room is deleted.
         # finish_call deletes the LiveKit room → LiveKit fires the
