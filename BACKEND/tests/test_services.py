@@ -39,10 +39,12 @@ async def test_campaign_service_create_and_launch(db_session: AsyncSession):
     assert contacts[0].name == "Alice"
     
     # Test Launch
-    job = await CampaignService.launch_campaign(db_session, campaign.id)
+    job, contacts_count = await CampaignService.launch_campaign(db_session, campaign.id)
+    assert job is not None
     assert job.id is not None
     assert job.status == "queued"
     assert job.total_contacts == 1
+    assert contacts_count == 1
     assert campaign.status == "running"
 
 @pytest.mark.asyncio

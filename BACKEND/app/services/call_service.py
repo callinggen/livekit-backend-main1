@@ -154,6 +154,13 @@ class CallService:
                 job.completed_contacts += 1
             else:
                 job.failed_contacts += 1
+            # Mark job & campaign complete when all contacts are processed
+            if (job.completed_contacts + job.failed_contacts) >= job.total_contacts:
+                job.status = "completed"
+                job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                campaign = await db.get(Campaign, job.campaign_id)
+                if campaign:
+                    campaign.status = "completed"
 
         await db.commit()
 
@@ -185,6 +192,13 @@ class CallService:
         job = await db.get(Job, call.job_id)
         if job:
             job.failed_contacts += 1
+            # Mark job & campaign complete when all contacts are processed
+            if (job.completed_contacts + job.failed_contacts) >= job.total_contacts:
+                job.status = "completed"
+                job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                campaign = await db.get(Campaign, job.campaign_id)
+                if campaign:
+                    campaign.status = "completed"
 
         await db.commit()
         return call

@@ -55,13 +55,18 @@ def _build_transcript(session: Any) -> str:
 
 @function_tool(
     description="""
-Call this tool when the appointment has been fully confirmed by the customer.
-The tool will automatically say the goodbye message and end the call.
+Call this tool whenever the call/conversation is complete or needs to end.
+This includes:
+- When an appointment is booked or confirmed by the customer.
+- When the customer is not interested, busy, or declines.
+- When the customer says goodbye, thank you, or indicates they want to hang up.
 
-Pass the details you collected during the conversation:
+Calling this tool will automatically say goodbye and hang up the call.
+
+Pass any details collected during the conversation:
 - customer_name: the customer's full name
-- appointment_date: the date they gave (e.g. "15th July" or "2024-07-15")
-- appointment_time: the time they gave (e.g. "10 AM" or "14:00")
+- appointment_date: the date if an appointment was booked (e.g. "2026-07-15")
+- appointment_time: the time if an appointment was booked (e.g. "10:00 AM")
 """
 )
 async def finish_call(
@@ -94,12 +99,16 @@ async def finish_call(
 
     print(f"Room: {room_name}")
 
+    # Determine appropriate goodbye phrase
+    if appointment_date or appointment_time:
+        goodbye_phrase = "Thank you. Your appointment request has been recorded. Goodbye."
+    else:
+        goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
+
     # ── Step 1: Speak the goodbye phrase via TTS, then wait for it ────
-    # This guarantees the customer hears it regardless of whether the LLM
-    # generated it or not.
     try:
-        print(f"Speaking goodbye: '{GOODBYE_PHRASE}'")
-        speech = session.say(GOODBYE_PHRASE, allow_interruptions=False)
+        print(f"Speaking goodbye: '{goodbye_phrase}'")
+        speech = session.say(goodbye_phrase, allow_interruptions=False)
         # SpeechHandle is awaitable — wait until audio playback is done
         await speech
         print("Goodbye spoken successfully.")

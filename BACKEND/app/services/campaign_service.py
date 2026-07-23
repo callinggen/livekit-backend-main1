@@ -90,12 +90,15 @@ class CampaignService:
             # Parse ISO 8601 UTC string e.g. "2023-11-20T14:30:00Z"
             iso_str = campaign.schedule_date.replace("Z", "+00:00")
             schedule_dt = datetime.fromisoformat(iso_str)
+            # Ensure timezone-aware so comparison with UTC now works
+            if schedule_dt.tzinfo is None:
+                schedule_dt = schedule_dt.replace(tzinfo=timezone.utc)
         except Exception:
             pass
             
         now = datetime.now(timezone.utc)
-        # Allow 5 min grace period for "immediate" launches
-        if schedule_dt and schedule_dt > now + timedelta(minutes=5):
+        # If scheduled for the future (beyond a 10s network grace period), mark scheduled
+        if schedule_dt and schedule_dt > now + timedelta(seconds=10):
             campaign.status = "scheduled"
             await db.commit()
             return None, len(contacts)

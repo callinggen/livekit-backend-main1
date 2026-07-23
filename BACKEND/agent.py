@@ -91,6 +91,11 @@ def build_agent_instructions(
     return f"""{base}
 {name_clause}
 
+CRITICAL MANDATORY TOOL CALL RULE:
+You have access to a tool named `finish_call`.
+Whenever the customer says goodbye, declines, says not interested, confirms an appointment, or indicates the conversation is over:
+You MUST call the `finish_call` tool immediately! Do NOT reply with text when concluding — invoke the `finish_call` tool instead.
+
 RULES:
 - Keep every response under 2 sentences.
 - Be polite and professional.
@@ -103,34 +108,43 @@ CAMPAIGN-SPECIFIC SCRIPT:
 
 {DATE_TIME_VALIDATION_RULES}
 
-When calling finish_call, pass:
+REMINDER ON HANGUP:
+Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
   - customer_name: the customer's name
-  - appointment_date: the confirmed future date (with year)
-  - appointment_time: the confirmed time (with AM/PM)
-
-Do NOT say anything else after the customer confirms — just call the tool.
-The tool will handle the goodbye message automatically.
+  - appointment_date: the confirmed future date (with year, if booked)
+  - appointment_time: the confirmed time (with AM/PM, if booked)
 """
 
 
 import shutil
 import numpy as np
+import time
 
 
 def mix_wav_files(file1: str, file2: str, output_file: str):
     """Mix two WAV files of the same sample rate and format into a single WAV file."""
-    try:
-        w1 = wave.open(file1, 'rb')
-        w2 = wave.open(file2, 'rb')
-    except Exception as e:
-        print(f"[mixer] Error opening files to mix: {e}")
+    w1, w2 = None, None
+    for attempt in range(5):
+        try:
+            if os.path.exists(file1) and os.path.exists(file2):
+                w1 = wave.open(file1, 'rb')
+                w2 = wave.open(file2, 'rb')
+                break
+        except Exception as e:
+            if attempt < 4:
+                time.sleep(0.4)
+            else:
+                print(f"[mixer] Error opening files to mix after retries: {e}")
+
+    if w1 is None or w2 is None:
+        if w1: w1.close()
+        if w2: w2.close()
         # If one file fails to open, copy the other one as fallback
         for f in (file1, file2):
             try:
                 if os.path.exists(f):
                     shutil.copy(f, output_file)
                     print(f"[mixer] Copied single track {f} -> {output_file}")
-                    # Clean up the original
                     os.remove(f)
                     return
             except Exception as copy_err:
