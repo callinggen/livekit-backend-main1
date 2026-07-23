@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import asyncio
 import os
 import wave
+import re
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
@@ -233,6 +234,7 @@ async def _get_campaign_info(call_id: int) -> dict:
                 "agent_type": campaign.agent if campaign else "Voice-E (Tax Agent)",
                 "script": campaign.script if campaign else "",
                 "customer_name": contact.name if contact else "",
+                "metadata_fields": contact.metadata_fields if contact else {},
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
@@ -281,8 +283,20 @@ async def entrypoint(ctx: JobContext):
         # ── Fetch campaign info to drive the agent's behaviour ───────────────────
         campaign_info = await _get_campaign_info(call_id)
         agent_type    = campaign_info["agent_type"]
-        custom_script = campaign_info["script"]
+        base_script   = campaign_info["script"]
         customer_name = campaign_info["customer_name"]
+        metadata      = campaign_info["metadata_fields"] or {}
+        
+        # Include customer_name in metadata for uniform replacement
+        metadata_dict = {k.lower(): str(v) for k, v in metadata.items()}
+        metadata_dict["customer_name"] = customer_name
+        metadata_dict["customer name"] = customer_name
+
+        def _replace_placeholder(match):
+            key = match.group(1).strip().lower()
+            return metadata_dict.get(key, "")
+
+        custom_script = re.sub(r"\{\{(.*?)\}\}", _replace_placeholder, base_script)
 
         print(f"[agent] Agent type   : {agent_type}")
         print(f"[agent] Customer name: {customer_name}")

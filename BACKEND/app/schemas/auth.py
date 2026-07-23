@@ -1,0 +1,47 @@
+from pydantic import BaseModel, EmailStr
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    full_name: str | None = None
+    is_first_login: bool = False
+    is_admin: bool = False
+    refresh_token: str | None = None
+
+class TokenPayload(BaseModel):
+    sub: str | None = None
+    is_first_login: bool = False
+    is_admin: bool = False
+    iat: float | int | None = None
+
+class LoginRequest(BaseModel):
+    identifier: str
+    password: str | None = None
+
+class UserResponse(BaseModel):
+    id: int
+    email: str | None = None
+    phone_number: str | None = None
+
+    class Config:
+        from_attributes = True
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class VerifyResetCodeRequest(BaseModel):
+    email: str
+    reset_code: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    reset_code: str
+    new_password: str
+
+class ChangePasswordRequest(BaseModel):
+    new_password: str
+
+class UserCreateRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone_number: str | None = None

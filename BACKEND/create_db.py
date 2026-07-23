@@ -7,7 +7,8 @@ from app.models.campaign import Campaign
 from app.models.contact import Contact
 from app.models.job import Job
 from app.models.call import Call
-import app.models
+from app.models.user import User
+from app.models.password_reset import PasswordReset
 
 
 async def create_tables():

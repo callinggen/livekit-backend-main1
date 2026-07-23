@@ -1,0 +1,112 @@
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Union
+import jwt
+import bcrypt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from pydantic import ValidationError
+
+from app.database import get_db
+from app.models.user import User
+from app.schemas.auth import TokenPayload
+
+SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+def get_password_hash(password: str) -> str:
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+
+def create_access_token(
+    subject: Union[str, Any], 
+    is_first_login: bool = False,
+    is_admin: bool = False,
+    expires_delta: timedelta = None
+) -> str:
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    # We include iat (issued at) to compare with password_changed_at
+    iat = datetime.now(timezone.utc)
+    
+    to_encode = {
+        "exp": expire, 
+        "sub": str(subject), 
+        "is_first_login": is_first_login,
+        "is_admin": is_admin,
+        "iat": int(iat.timestamp())
+    }
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(
+    db: AsyncSession = Depends(get_db),
+    token: str = Depends(oauth2_scheme)
+) -> User:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        token_data = TokenPayload(**payload)
+        
+        if token_data.sub is None:
+            print("Auth failed: token_data.sub is None")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials")
+            
+    except (jwt.PyJWTError, ValidationError) as e:
+        print(f"Auth failed: {repr(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
+        
+    stmt = select(User).where(User.id == int(token_data.sub))
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        
+    # Check if password was changed after token was issued
+    if user.password_changed_at and token_data.iat:
+        # Convert iat to timezone-aware datetime
+        iat_datetime = datetime.fromtimestamp(token_data.iat, tz=timezone.utc)
+        # Ensure password_changed_at is timezone-aware for comparison (assume DB stores UTC)
+        pwd_changed = user.password_changed_at.replace(tzinfo=timezone.utc) if user.password_changed_at.tzinfo is None else user.password_changed_at
+        
+        if iat_datetime < pwd_changed:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token expired due to password change"
+            )
+            
+    return user
+
+async def get_current_active_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    if current_user.is_first_login:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required"
+        )
+    return current_user
+
+async def get_current_admin_user(
+    current_user: User = Depends(get_current_active_user)
+) -> User:
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough privileges"
+        )
+    return current_user
