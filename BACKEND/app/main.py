@@ -15,14 +15,37 @@ from datetime import datetime, timezone
 
 SCHEDULER_POLL_INTERVAL = int(os.getenv("SCHEDULER_POLL_INTERVAL", "15"))
 
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, Base, engine
 from sqlalchemy import select
 from app.models.campaign import Campaign
 from app.models.contact import Contact
+from app.models.job import Job
+from app.models.call import Call
+from app.models.user import User
+from app.models.password_reset import PasswordReset
+from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure all tables exist on startup
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # Ensure default admin user exists
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(select(User).where(User.email == "admin@example.com"))
+        if not res.scalars().first():
+            admin_user = User(
+                email="admin@example.com",
+                full_name="Admin User",
+                hashed_password=get_password_hash("password123!"),
+                is_admin=True,
+                is_first_login=False,
+            )
+            db.add(admin_user)
+            await db.commit()
+
     # Startup: Start lightweight scheduler
     task = asyncio.create_task(schedule_poller())
     yield
