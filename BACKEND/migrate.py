@@ -17,6 +17,7 @@ new_columns = [
     ("calls",    "notes",           "TEXT"),
     ("calls",    "summary",         "TEXT"),
     ("calls",    "category",        "TEXT"),
+    ("calls",    "human_response",  "TEXT"),
 ]
 
 for table, col, col_type in new_columns:
