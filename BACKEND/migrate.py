@@ -12,6 +12,11 @@ new_columns = [
     ("contacts", "customer_name",    "TEXT"),
     ("contacts", "appointment_date", "TEXT"),
     ("contacts", "appointment_time", "TEXT"),
+    ("contacts", "metadata_fields",  "TEXT"),
+    ("calls",    "recording_url",   "TEXT"),
+    ("calls",    "notes",           "TEXT"),
+    ("calls",    "summary",         "TEXT"),
+    ("calls",    "category",        "TEXT"),
 ]
 
 for table, col, col_type in new_columns:
