@@ -41,6 +41,20 @@ class CallService:
         if call.started_at:
             call.duration = int((now - call.started_at).total_seconds())
 
+        # Check if appointment_date is a real, valid date string
+        has_valid_appointment = (
+            appointment_date is not None 
+            and str(appointment_date).strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
+        )
+
+        # Check transcript for refusal / do not call signals
+        lower_tx = (transcript or "").lower()
+        is_opt_out = any(phrase in lower_tx for phrase in [
+            "do not call", "don't call", "stop calling", "remove my number",
+            "not interested", "no assistance", "don't need", "no thanks",
+            "refuse", "declined", "never call"
+        ])
+
         # ── Contact ───────────────────────────────────────────────────
         contact = await db.get(Contact, call.contact_id)
         if contact:
@@ -50,18 +64,16 @@ class CallService:
                 contact.transcript = transcript
             if customer_name:
                 contact.customer_name = customer_name
-                # BUG-023: Do NOT overwrite response with customer_name.
-                # Set a meaningful response label instead.
-                if not contact.response:
-                    contact.response = "Answered"
-            if appointment_date:
+
+            if is_opt_out:
+                contact.response = "Do Not Call / Refusal"
+            elif has_valid_appointment:
                 contact.appointment_date = appointment_date
-                contact.response = "Appointment booked"
-            if appointment_time:
-                contact.appointment_time = appointment_time
-            
-            if not is_success and not contact.response:
-                contact.response = "No Answer / Cut"
+                if appointment_time:
+                    contact.appointment_time = appointment_time
+                contact.response = "Appointment Booked"
+            else:
+                contact.response = "Answered" if is_success else "No Answer / Cut"
 
         business_outcome = contact.response if contact else "None"
 
@@ -84,9 +96,9 @@ class CallService:
                     
                     # Request 1: Topic Classification
                     prompt_class = (
-                        "Analyze the following call transcript and identify the main tax-related topic/intent.\n"
-                        "Output ONLY a 2-4 word classification (e.g., 'ITR Filing Query', 'Tax Notice Assistance', 'Tax Planning').\n"
-                        "DO NOT use words like: Interested, Not Interested, Busy, Callback, Reachable, Disconnected, Answered.\n"
+                        "Analyze the following call transcript and identify the main customer intent/topic.\n"
+                        "If the customer refuses, asks not to be called, or says not interested, output 'Do Not Call Request'.\n"
+                        "Otherwise output ONLY a 2-4 word classification (e.g., 'ITR Filing Query', 'Tax Notice Assistance', 'Tax Planning').\n"
                         "DO NOT output full sentences. Return pure text, no markdown, no quotes, no periods at the end.\n\n"
                         f"Transcript:\n{transcript}"
                     )
@@ -97,7 +109,7 @@ class CallService:
                         "The category MUST be exactly one of the following words: HOT, WARM, or COLD.\n"
                         "- HOT = High-priority lead with strong/immediate intent, appointment or consultation booked, or clearly ready to proceed.\n"
                         "- WARM = Medium-priority lead showing interest but requiring more information, consideration, or follow-up.\n"
-                        "- COLD = Low-priority lead with little/no interest, not currently needing the service, or low conversion potential.\n"
+                        "- COLD = Low-priority lead, refusal, opt-out, 'do not call', not needing service, or no conversion potential.\n"
                         "Output ONLY the single word (HOT, WARM, or COLD). No markdown, no punctuation.\n\n"
                         f"Business Outcome: {business_outcome}\n"
                         f"Transcript:\n{transcript}"
@@ -123,26 +135,31 @@ class CallService:
                     # Process Classification
                     raw_summary = res_class.choices[0].message.content or ""
                     clean_summary = raw_summary.strip().strip("'\".").replace("\n", " ")
-                    if len(clean_summary.split()) > 6 or not clean_summary:
+                    if is_opt_out:
+                        call.summary = "Do Not Call Request"
+                    elif len(clean_summary.split()) > 6 or not clean_summary:
                         call.summary = "Classification Pending"
                     else:
                         call.summary = clean_summary
                         
                     # Process Category
-                    raw_cat = res_cat.choices[0].message.content or ""
-                    clean_cat = raw_cat.strip().strip("'\".").upper()
-                    if clean_cat in ["HOT", "WARM", "COLD"]:
-                        call.category = clean_cat
+                    if is_opt_out:
+                        call.category = "COLD"
                     else:
-                        call.category = "UNCATEGORIZED"
+                        raw_cat = res_cat.choices[0].message.content or ""
+                        clean_cat = raw_cat.strip().strip("'\".").upper()
+                        if clean_cat in ["HOT", "WARM", "COLD"]:
+                            call.category = clean_cat
+                        else:
+                            call.category = "UNCATEGORIZED"
                         
                 else:
-                    call.summary = "General Tax Inquiry"
-                    call.category = "UNCATEGORIZED"
+                    call.summary = "Do Not Call Request" if is_opt_out else "General Tax Inquiry"
+                    call.category = "COLD" if is_opt_out else "UNCATEGORIZED"
             except Exception as e:
                 print(f"Failed to generate AI data: {e}")
-                call.summary = "Classification Unavailable"
-                call.category = "UNCATEGORIZED"
+                call.summary = "Do Not Call Request" if is_opt_out else "Classification Unavailable"
+                call.category = "COLD" if is_opt_out else "UNCATEGORIZED"
         else:
             call.summary = "General Tax Inquiry"
             call.category = "UNCATEGORIZED"
