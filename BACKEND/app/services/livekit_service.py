@@ -31,8 +31,23 @@ async def make_livekit_call(
     )
 
     try:
-
         participant = await lkapi.sip.create_sip_participant(req)
+
+        # ── EXPLICIT JOB DISPATCH (Fix for agent not joining) ───────────
+        try:
+            # Explicitly force the agent to join this room, bypassing Cloud dispatch rules
+            from livekit.protocol.agent import JobType
+            from livekit.api import CreateJobRequest
+            await lkapi.job.create_job(
+                CreateJobRequest(
+                    room=room_name,
+                    job_type=JobType.JT_ROOM
+                )
+            )
+            print(f"Agent job explicitly created for room: {room_name}")
+        except Exception as job_err:
+            print(f"Note: Explicit job dispatch skipped or failed: {job_err}")
+        # ────────────────────────────────────────────────────────────────
 
         return {
             "success": True,
