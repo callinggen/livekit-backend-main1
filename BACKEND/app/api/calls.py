@@ -122,12 +122,20 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
 
     calls = []
     for call, contact, campaign in rows:
-        # BUG-023: response field was overwritten with customer_name in call_service;
-        # show appointment notes as the response if no explicit response is set.
         response_display = contact.response or "—"
-        # If response was accidentally set to the customer name, reset to "—"
         if response_display == (contact.customer_name or ""):
             response_display = "Interested" if contact.appointment_date else "—"
+
+        cat_upper = (call.category or "").upper()
+        resp_lower = (contact.response or "").lower()
+        summary_lower = (call.summary or "").lower()
+        
+        if cat_upper == "COLD" or any(p in resp_lower or p in summary_lower for p in ["do not call", "refusal", "not interested", "no answer", "cut"]):
+            sentiment = "Negative"
+        elif cat_upper == "HOT" or any(p in resp_lower for p in ["appointment", "booked", "interested"]):
+            sentiment = "Positive"
+        else:
+            sentiment = "Neutral"
 
         calls.append({
             "id": str(call.id),
@@ -141,6 +149,7 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
             "transcript": _parse_transcript(call.transcript),
             "summary": call.summary or "",
             "category": call.category or "UNCATEGORIZED",
+            "sentiment": sentiment,
             "human_response": call.human_response,
             "notes": f"Appointment: {contact.appointment_date or '—'} at {contact.appointment_time or '—'}",
             "appointment_date": contact.appointment_date or "",
