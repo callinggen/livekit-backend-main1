@@ -7,7 +7,7 @@ from livekit import api
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
 
-GOODBYE_PHRASE = "Thank you. Your appointment request has been recorded. Goodbye."
+GOODBYE_PHRASE = "Thank you for your time. Have a great day! Goodbye."
 
 
 def _build_transcript(session: Any) -> str:
@@ -100,7 +100,7 @@ async def finish_call(
     print(f"Room: {room_name}")
 
     # Determine appropriate goodbye phrase
-    if appointment_date or appointment_time:
+    if (appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()):
         goodbye_phrase = "Thank you. Your appointment request has been recorded. Goodbye."
     else:
         goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
