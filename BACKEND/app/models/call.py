@@ -83,3 +83,8 @@ class Call(Base):
         String,
         nullable=True,
     )
+
+    credits_deducted: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+    )

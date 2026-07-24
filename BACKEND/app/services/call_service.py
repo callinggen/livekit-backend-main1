@@ -7,6 +7,18 @@ from app.models.call import Call
 from app.models.contact import Contact
 from app.models.job import Job
 from app.models.campaign import Campaign
+from app.models.user import User
+
+
+async def _get_credit_owner_for_call(db: AsyncSession, call: Call) -> Optional[User]:
+    """
+    Isolated helper to resolve the user owning this call for credit deduction.
+    Currently single-tenant: returns the first user.
+    Future: replace with call.campaign.user_id.
+    """
+    from sqlalchemy import select
+    result = await db.execute(select(User).limit(1))
+    return result.scalars().first()
 
 
 class CallService:
@@ -32,7 +44,17 @@ class CallService:
 
         # ── Determine if it's a success or failure ────────────────────
         is_success = transcript is not None and len(transcript.strip()) > 0
+        
+        # Determine if we should deduct a credit (transitioning to completed and no credit deducted yet)
+        should_deduct = is_success and call.credits_deducted == 0
+
         call.status = "completed" if is_success else "failed"
+        
+        if should_deduct:
+            owner = await _get_credit_owner_for_call(db, call)
+            if owner and owner.credits > 0:
+                owner.credits -= 1
+                call.credits_deducted = 1
         
         if recording_url:
             call.recording_url = recording_url
@@ -116,14 +138,14 @@ class CallService:
                     )
                     
                     task_class = client.chat.completions.create(
-                        model="deepseek-chat",
+                        model="deepseek-v4-flash",
                         messages=[{"role": "user", "content": prompt_class}],
                         max_tokens=10,
                         temperature=0.3
                     )
                     
                     task_cat = client.chat.completions.create(
-                        model="deepseek-chat",
+                        model="deepseek-v4-flash",
                         messages=[{"role": "user", "content": prompt_cat}],
                         max_tokens=10,
                         temperature=0.3

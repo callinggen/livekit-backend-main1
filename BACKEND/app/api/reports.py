@@ -69,7 +69,7 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
                 base_url="https://api.deepseek.com/v1"
             )
             response = await client.chat.completions.create(
-                model="deepseek-chat",
+                model="deepseek-v4-flash",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=800,
                 temperature=0.4

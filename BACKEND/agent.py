@@ -388,7 +388,7 @@ async def entrypoint(ctx: JobContext):
             stt=sarvam.STT(),
 
             llm=openai.LLM(
-                model="deepseek-chat",
+                model="deepseek-v4-flash",
                 api_key=os.getenv("DEEPSEEK_API_KEY") or "",
                 base_url="https://api.deepseek.com/v1",
             ),
