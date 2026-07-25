@@ -77,7 +77,8 @@ async def login(
         full_name=user.full_name,
         is_first_login=user.is_first_login,
         is_admin=user.is_admin,
-        refresh_token=None
+        refresh_token=None,
+        credits=user.credits
     )
 
 
@@ -120,7 +121,8 @@ async def change_password(
         "full_name": current_user.full_name,
         "is_first_login": False,
         "is_admin": current_user.is_admin,
-        "refresh_token": None
+        "refresh_token": None,
+        "credits": current_user.credits
     }
 
 @router.post("/forgot-password")
@@ -231,7 +233,14 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "full_name": current_user.full_name,
         "is_first_login": current_user.is_first_login,
-        "is_admin": current_user.is_admin
+        "is_admin": current_user.is_admin,
+        "credits": current_user.credits
+    }
+
+@router.get("/user/credits")
+async def get_user_credits(current_user: User = Depends(get_current_user)):
+    return {
+        "credits": current_user.credits
     }
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)

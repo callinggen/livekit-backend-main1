@@ -152,9 +152,9 @@ async def list_calls(db: AsyncSession = Depends(get_db)):
             "sentiment": sentiment,
             "human_response": call.human_response,
             "notes": f"Appointment: {contact.appointment_date or '—'} at {contact.appointment_time or '—'}",
-            "appointment_date": contact.appointment_date or "",
             "appointment_time": contact.appointment_time or "",
             "customer_name": contact.customer_name or contact.name,
             "recording_url": call.recording_url or "",
+            "creditsDeducted": call.credits_deducted,
         })
     return calls

@@ -59,3 +59,8 @@ class User(Base):
         DateTime,
         nullable=True,
     )
+
+    credits: Mapped[int] = mapped_column(
+        Integer,
+        default=2000,
+    )

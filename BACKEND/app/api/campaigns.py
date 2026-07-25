@@ -10,6 +10,7 @@ from app.services.campaign_service import CampaignService
 from app.models.campaign import Campaign
 from app.models.job import Job
 from app.models.contact import Contact
+from app.models.call import Call
 
 router = APIRouter()
 
@@ -88,6 +89,13 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
         completed = job.completed_contacts if job else 0
         failed = job.failed_contacts if job else 0
 
+        credits_result = await db.execute(
+            select(func.sum(Call.credits_deducted))
+            .join(Contact, Call.contact_id == Contact.id)
+            .where(Contact.campaign_id == c.id)
+        )
+        credits_used = credits_result.scalar() or 0
+
         out.append({
             "id": str(c.id),
             "name": c.campaign_name,
@@ -99,7 +107,7 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
             "failedCalls": failed,
             "interested": 0,
             "callbacks": 0,
-            "creditsUsed": 0,
+            "creditsUsed": credits_used,
             "agent": c.agent,
             "status": _map_status(c.status),
             "script": c.script,
@@ -127,6 +135,13 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
     )
     contacts = contacts_result.scalars().all()
 
+    credits_result = await db.execute(
+        select(func.sum(Call.credits_deducted))
+        .join(Contact, Call.contact_id == Contact.id)
+        .where(Contact.campaign_id == campaign_id)
+    )
+    credits_used = credits_result.scalar() or 0
+
     return {
         "id": str(campaign.id),
         "name": campaign.campaign_name,
@@ -136,6 +151,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "schedule_time": campaign.schedule_time,
         "status": campaign.status,
         "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
+        "creditsUsed": credits_used,
         "job": {
             "total_contacts": job.total_contacts if job else len(contacts),
             "completed_contacts": job.completed_contacts if job else 0,

@@ -7,6 +7,7 @@ class Token(BaseModel):
     is_first_login: bool = False
     is_admin: bool = False
     refresh_token: str | None = None
+    credits: int = 2000
 
 class TokenPayload(BaseModel):
     sub: str | None = None
@@ -22,6 +23,7 @@ class UserResponse(BaseModel):
     id: int
     email: str | None = None
     phone_number: str | None = None
+    credits: int = 2000
 
     class Config:
         from_attributes = True
