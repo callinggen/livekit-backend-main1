@@ -82,7 +82,7 @@ async def test_complete_and_list_calls(client: AsyncClient, db_session: AsyncSes
     assert contact.customer_name == "Dave Smith"
     assert contact.appointment_date == "2026-07-20"
     assert contact.appointment_time == "15:00"
-    assert contact.response == "Appointment booked"
+    assert contact.response == "Appointment Booked"
     
     assert job.status == "completed"
     assert job.completed_contacts == 1
@@ -99,6 +99,6 @@ async def test_complete_and_list_calls(client: AsyncClient, db_session: AsyncSes
     assert found[0]["name"] == "Dave Smith"
     assert found[0]["phone"] == "+1555000111"
     assert found[0]["status"] == "Completed"
-    assert found[0]["response"] == "Appointment booked"
+    assert found[0]["response"] == "Appointment Booked"
     assert len(found[0]["transcript"]) == 3
     assert found[0]["transcript"][0] == {"speaker": "assistant", "text": "Welcome"}
