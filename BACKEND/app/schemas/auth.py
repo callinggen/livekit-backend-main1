@@ -47,3 +47,9 @@ class UserCreateRequest(BaseModel):
     full_name: str
     email: EmailStr
     phone_number: str | None = None
+
+class RegisterRequest(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone_number: str | None = None
+    password: str

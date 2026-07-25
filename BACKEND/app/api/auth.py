@@ -12,7 +12,7 @@ import secrets
 from app.database import get_db
 from app.models.user import User
 from app.models.password_reset import PasswordReset
-from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest
+from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
 
@@ -243,3 +243,64 @@ async def get_user_credits(current_user: User = Depends(get_current_user)):
         "credits": current_user.credits
     }
 
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+async def register_user(
+    user_data: RegisterRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    # Validate email uniqueness
+    if user_data.email:
+        stmt = select(User).where(User.email == user_data.email)
+        result = await db.execute(stmt)
+        if result.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email is already registered"
+            )
+
+    # Validate phone uniqueness
+    if user_data.phone_number:
+        stmt = select(User).where(User.phone_number == user_data.phone_number)
+        result = await db.execute(stmt)
+        if result.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number is already registered"
+            )
+
+    if not user_data.email and not user_data.phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must provide either email or phone number"
+        )
+
+    try:
+        validate_password_policy(user_data.password)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+    # Create user
+    new_user = User(
+        full_name=user_data.full_name,
+        email=user_data.email,
+        phone_number=user_data.phone_number,
+        hashed_password=get_password_hash(user_data.password),
+        is_first_login=False,
+        is_admin=False
+    )
+    
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    
+    return {
+        "message": "User registered successfully",
+        "user": {
+            "id": new_user.id,
+            "email": new_user.email,
+            "full_name": new_user.full_name
+        }
+    }
