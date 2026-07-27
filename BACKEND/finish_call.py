@@ -109,9 +109,14 @@ async def finish_call(
         # ── Step 1: Speak the goodbye phrase via TTS ──────────────────────
         try:
             print(f"Speaking goodbye: '{goodbye_phrase}'")
-            speech = session.say(goodbye_phrase)
+            speech = session.say(goodbye_phrase, allow_interruptions=False)
             if speech:
-                await asyncio.wait_for(speech, timeout=4.0)
+                try:
+                    await asyncio.wait_for(speech, timeout=6.0)
+                except Exception:
+                    pass
+            # Give TTS audio 2 seconds to play out to SIP line before closing room
+            await asyncio.sleep(2.5)
             print("Goodbye spoken successfully.")
         except Exception as e:
             print(f"Warning – could not speak goodbye (non-fatal): {e}")
