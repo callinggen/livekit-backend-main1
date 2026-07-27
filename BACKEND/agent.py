@@ -402,7 +402,10 @@ async def entrypoint(ctx: JobContext):
                 base_url="https://api.deepseek.com/v1",
             ),
 
-            tts=sarvam.TTS(speaker="shreya"),
+            tts=sarvam.TTS(
+                speaker="shreya",
+                speech_sample_rate=16000,
+            ),
         )
 
         await session.start(
@@ -524,5 +527,6 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            agent_name="callinggen-agent",
         )
     )
