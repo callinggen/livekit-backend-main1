@@ -402,7 +402,7 @@ async def entrypoint(ctx: JobContext):
                 base_url="https://api.deepseek.com/v1",
             ),
 
-            tts=sarvam.TTS(),
+            tts=sarvam.TTS(speaker="meera"),
         )
 
         await session.start(
