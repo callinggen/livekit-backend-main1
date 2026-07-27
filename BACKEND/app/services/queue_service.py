@@ -65,7 +65,19 @@ class QueueService:
         contact = result.scalars().first()
 
         if contact is None:
-            print("No pending contacts and no active calls.")
+            # Check if there are any contacts currently being called
+            calling_res = await db.execute(
+                select(Contact).where(
+                    Contact.campaign_id == job.campaign_id,
+                    Contact.status == "calling",
+                )
+            )
+            calling_contact = calling_res.scalars().first()
+            if calling_contact is not None:
+                print(f"Contact {calling_contact.id} is still in 'calling' state, waiting...")
+                return True
+
+            print("No pending contacts, no active calling contacts, and no active calls.")
             job.status = "completed"
             job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
             
