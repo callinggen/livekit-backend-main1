@@ -10,8 +10,8 @@ from app.models.call import Call
 from app.models.campaign import Campaign
 
 # If a call stays in dialing/in_progress longer than this, treat it as
-# failed (agent crashed, room was deleted, SIP trunk timed out, etc.)
-CALL_TIMEOUT_MINUTES = 5  # BUG-023/029: was 2, too short for real calls
+# failed (agent crashed, room was deleted, SIP trunk timed out, user declined, etc.)
+CALL_TIMEOUT_MINUTES = 1  # 60 seconds watchdog timeout to prevent stuck calls/campaigns
 
 
 class QueueService:
@@ -31,9 +31,7 @@ class QueueService:
             print("Job not found")
             return False
 
-        # If a call from this job is still in flight, don't dial another
-        # contact yet — just tell the worker to come back later. This is
-        # what keeps calls sequential instead of firing them all at once.
+        # ── Watchdog: Check for any stuck calls in this job > 60s ────────────
         result = await db.execute(
             select(Call).where(
                 Call.job_id == job.id,
@@ -43,19 +41,17 @@ class QueueService:
         active_call = result.scalars().first()
 
         if active_call is not None:
-            # Check if the call has been stuck for too long (agent crash,
-            # room deleted, SIP timeout, etc.) and auto-fail it.
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             call_age = now - (active_call.started_at or now)
-            if call_age > timedelta(minutes=CALL_TIMEOUT_MINUTES):
+            if call_age > timedelta(seconds=60):
                 print(
                     f"Call {active_call.id} has been in '{active_call.status}' "
-                    f"for {int(call_age.total_seconds() // 60)} min — marking as failed (timeout)."
+                    f"for {int(call_age.total_seconds())}s — marking as failed (timeout)."
                 )
                 await CallService.fail_call(db=db, call_id=active_call.id)
-                # Fall through to pick the next contact on this same tick
+                # Fall through to pick the next contact or finish the job
             else:
-                print(f"Call {active_call.id} still in progress, waiting...")
+                print(f"Call {active_call.id} still in progress ({int(call_age.total_seconds())}s), waiting...")
                 return True
 
         print(f"Loaded Job {job.id}")

@@ -66,7 +66,7 @@ class CallService:
         # Check if appointment_date is a real, valid date string
         has_valid_appointment = (
             appointment_date is not None 
-            and str(appointment_date).strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
+            and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
         )
 
         # Check transcript for refusal / do not call signals
@@ -211,8 +211,8 @@ class CallService:
         call_id: int,
     ):
         """
-        Mark a call as failed and advance the campaign to the next contact.
-        Called when a SIP dial attempt fails (no answer, trunk error, etc.).
+        Mark a call as failed/no_answer and advance the campaign to the next contact.
+        Called when a SIP dial attempt fails, user declines, no answer, or timeout occurs.
         """
         call = await db.get(Call, call_id)
         if call is None:
@@ -222,11 +222,17 @@ class CallService:
             return call
 
         call.status = "failed"
-        call.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        call.ended_at = now
+        if call.started_at:
+            call.duration = int((now - call.started_at).total_seconds())
 
         contact = await db.get(Contact, call.contact_id)
         if contact:
+            # Differentiate between no-answer / unreached vs call cut
+            has_tx = call.transcript and len(call.transcript.strip()) > 0
             contact.status = "failed"
+            contact.response = "Call Cut / Disconnected" if has_tx else "No Answer / Declined"
 
         job = await db.get(Job, call.job_id)
         if job:
@@ -234,7 +240,7 @@ class CallService:
             # Mark job & campaign complete when all contacts are processed
             if (job.completed_contacts + job.failed_contacts) >= job.total_contacts:
                 job.status = "completed"
-                job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                job.finished_at = now
                 campaign = await db.get(Campaign, job.campaign_id)
                 if campaign:
                     campaign.status = "completed"
