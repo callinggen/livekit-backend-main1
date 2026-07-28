@@ -118,9 +118,9 @@ class CallService:
                     
                     # Request 1: Topic Classification
                     prompt_class = (
-                        "Analyze the following call transcript and identify the main customer intent/topic.\n"
-                        "If the customer refuses, asks not to be called, or says not interested, output 'Do Not Call Request'.\n"
-                        "Otherwise output ONLY a 2-4 word classification (e.g., 'ITR Filing Query', 'Tax Notice Assistance', 'Tax Planning').\n"
+                        "Analyze the following call transcript and provide a very short, 2 to 3 word summary "
+                        "that explains the entire conversation.\n"
+                        "There are no predefined categories. Just use your own words to best describe the conversation in 2-3 words.\n"
                         "DO NOT output full sentences. Return pure text, no markdown, no quotes, no periods at the end.\n\n"
                         f"Transcript:\n{transcript}"
                     )
@@ -138,14 +138,14 @@ class CallService:
                     )
                     
                     task_class = client.chat.completions.create(
-                        model="deepseek-v4-flash",
+                        model="deepseek-chat",
                         messages=[{"role": "user", "content": prompt_class}],
                         max_tokens=10,
                         temperature=0.3
                     )
                     
                     task_cat = client.chat.completions.create(
-                        model="deepseek-v4-flash",
+                        model="deepseek-chat",
                         messages=[{"role": "user", "content": prompt_cat}],
                         max_tokens=10,
                         temperature=0.3
