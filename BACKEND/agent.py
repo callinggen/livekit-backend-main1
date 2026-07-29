@@ -3,6 +3,8 @@ import asyncio
 import os
 import wave
 import re
+import socket
+import sys
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
@@ -29,34 +31,33 @@ from app.models.campaign import Campaign
 load_dotenv()
 
 # ── Agent type → base system prompt ───────────────────────────────────────────
+# ── Agent type → base system prompt ───────────────────────────────────────────
 AGENT_BASE_PROMPTS: dict[str, str] = {
-    # "Voice-A (Sales)": (
-    #     "You are a professional sales representative making outbound calls. "
-    #     "Your goal is to pitch the product/service, handle objections politely, "
-    #     "and move the prospect toward a purchase or demo booking."
-    # ),
-    # "Voice-B (Support)": (
-    #     "You are a friendly customer support agent making outbound calls. "
-    #     "Your goal is to resolve the customer's issue, answer questions accurately, "
-    #     "and ensure the customer feels heard and satisfied."
-    # ),
-    # "Voice-C (Followup)": (
-    #     "You are a follow-up agent making outbound calls to warm leads or past customers. "
-    #     "Your goal is to re-engage the contact, check on their needs, "
-    #     "and guide them toward the next step."
-    # ),
-    # "Voice-D (Survey)": (
-    #     "You are a survey agent conducting a satisfaction or market research call. "
-    #     "Ask each question clearly, wait for the customer's answer, record it accurately, "
-    #     "and keep the conversation brief and focused."
-    # ),
     "Voice-E (Tax Agent)": (
         "You are a professional and knowledgeable tax advisor making outbound calls. "
         "Your goal is to assist customers with their tax filing requirements, answer questions about "
         "deductions, and schedule appointments with tax professionals if needed."
     ),
+    "Meera (Morning Tax)": (
+        "You are Meera, a friendly and professional tax consultant calling on behalf of Morning Tax. "
+        "Your goal is to educate prospects about tax savings opportunities — including amended return reviews, "
+        "year-end tax planning, IRS notice resolution, and cross-border tax services — and to book a "
+        "fifteen-minute consultation with a Senior Tax Strategist. "
+        "Speak at a moderate pace, never interrupt the customer, keep responses under two to three sentences, "
+        "ask one question at a time, and always wait for the customer's response before continuing. "
+        "Never guarantee refunds, never promise tax savings, and never provide legal or tax advice."
+    ),
+    "Raj (Morning Tax)": (
+        "You are Raj, a friendly and professional tax consultant calling on behalf of Morning Tax. "
+        "Your goal is to educate prospects about tax savings opportunities — including amended return reviews, "
+        "year-end tax planning, IRS notice resolution, and cross-border tax services — and to book a "
+        "fifteen-minute consultation with a Senior Tax Strategist. "
+        "Speak at a moderate pace, never interrupt the customer, keep responses under two to three sentences, "
+        "ask one question at a time, and always wait for the customer's response before continuing. "
+        "Never guarantee refunds, never promise tax savings, and never provide legal or tax advice."
+    ),
     "John (Morning Tax)": (
-        "You are John, a friendly and professional tax consultant calling on behalf of Morning Tax. "
+        "You are Meera, a friendly and professional tax consultant calling on behalf of Morning Tax. "
         "Your goal is to educate prospects about tax savings opportunities — including amended return reviews, "
         "year-end tax planning, IRS notice resolution, and cross-border tax services — and to book a "
         "fifteen-minute consultation with a Senior Tax Strategist. "
@@ -68,12 +69,9 @@ AGENT_BASE_PROMPTS: dict[str, str] = {
 
 # ── Date/time validation rules injected into every agent ──────────────────────
 DATE_TIME_VALIDATION_RULES = """
-DATE & TIME VALIDATION RULES (MANDATORY — never skip these):
-- If the customer mentions a date that is in the past, say: "I'm sorry, that date has already passed. Could you please provide a future date?"
-- If the customer gives a date without a year (e.g. "July 15th"), always ask: "Could you confirm — which year did you mean?"
-- If the customer mentions only a time without AM or PM (e.g. "3 o'clock" or "10:30"), always ask: "Is that AM or PM?"
-- Never book or confirm an appointment with an ambiguous or past date/time.
-- Always confirm the full date (including year) and time (including AM/PM) before calling the finish_call tool.
+TIME & APPOINTMENT VALIDATION RULES:
+- If the customer mentions a time without AM or PM (e.g. "3 o'clock" or "10:30"), ask: "Is that AM or PM?"
+- When calling finish_call, pass appointment_date in YYYY-MM-DD format (e.g. "2026-07-29") and appointment_time with AM/PM (e.g. "02:00 PM").
 """
 
 
@@ -85,11 +83,39 @@ def build_agent_instructions(
     """
     Compose the full system prompt for the agent from:
     - base persona (derived from agent_type)
+    - dynamic real-time date/time context (IST)
     - the campaign-specific custom script
     - the pre-known customer name
     - mandatory date/time validation rules
     """
-    base = AGENT_BASE_PROMPTS.get(agent_type, AGENT_BASE_PROMPTS["Voice-E (Tax Agent)"])
+    from datetime import datetime, timezone, timedelta
+
+    # Dynamic real-time date resolution in IST (UTC+5:30)
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    today_date = ist_now.strftime("%Y-%m-%d")
+    today_readable = ist_now.strftime("%A, %B %d, %Y")
+    today_time = ist_now.strftime("%I:%M %p IST")
+    tomorrow_date = (ist_now + timedelta(days=1)).strftime("%Y-%m-%d (%A, %B %d)")
+    day_after_date = (ist_now + timedelta(days=2)).strftime("%Y-%m-%d (%A, %B %d)")
+
+    date_context = f"""
+CURRENT DATE & TIME INFORMATION (DYNAMIC REAL-TIME CONTEXT):
+- Today's Date: {today_readable} (ISO: {today_date})
+- Today's Time: {today_time}
+- Current Year: {ist_now.year}
+- Calculated Relative Dates for Reference:
+  * "tomorrow" = {tomorrow_date}
+  * "day after tomorrow" = {day_after_date}
+
+DATE RESOLUTION RULES:
+- You know today's exact date is {today_readable}.
+- When a customer mentions relative dates like "tomorrow", "day after tomorrow", "this Thursday", or "next Monday", automatically resolve the exact date without asking the customer for the year or date!
+- Assume the current year ({ist_now.year}) for any date mentioned by the customer. NEVER ask the customer "what year?" or "which year?".
+- If the customer specifies only a day and month (e.g., "August 5th"), assume {ist_now.year} automatically.
+- If the customer specifies a date in the past relative to Today ({today_date}), politely inform them: "I'm sorry, that date has already passed. Could you please provide a future date?"
+"""
+
+    base = AGENT_BASE_PROMPTS.get(agent_type, AGENT_BASE_PROMPTS["Meera (Morning Tax)"])
     name_clause = (
         f"\nIMPORTANT: You already know the customer's name is '{customer_name}'. "
         "Do NOT ask them for their name — address them by name when appropriate."
@@ -99,6 +125,8 @@ def build_agent_instructions(
 
     return f"""{base}
 {name_clause}
+
+{date_context}
 
 CRITICAL MANDATORY TOOL CALL RULE:
 You have access to a tool named `finish_call`.
@@ -120,7 +148,7 @@ CAMPAIGN-SPECIFIC SCRIPT:
 REMINDER ON HANGUP:
 Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
   - customer_name: the customer's name
-  - appointment_date: the confirmed future date (with year, if booked)
+  - appointment_date: the confirmed future date (formatted as YYYY-MM-DD, e.g. "{today_date}")
   - appointment_time: the confirmed time (with AM/PM, if booked)
 """
 
@@ -393,17 +421,21 @@ async def entrypoint(ctx: JobContext):
                     _handle_unexpected_disconnect("customer hung up")
                 )
 
+        # Dynamic voice selection based on agent_type
+        speaker_voice = "ashutosh" if "Raj" in agent_type else "shreya"
+        print(f"[agent] Selected TTS speaker: {speaker_voice} for agent: {agent_type}")
+
         session = AgentSession(
             stt=sarvam.STT(),
 
             llm=openai.LLM(
-                model="deepseek-v4-flash",
+                model="deepseek-chat",
                 api_key=os.getenv("DEEPSEEK_API_KEY") or "",
                 base_url="https://api.deepseek.com/v1",
             ),
 
             tts=sarvam.TTS(
-                speaker="shreya",
+                speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
         )
@@ -524,6 +556,15 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
+    # Prevent multiple agent processes from running simultaneously
+    try:
+        lock_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        lock_socket.bind(('127.0.0.1', 49152))
+    except socket.error:
+        print("Error: Another instance of the agent is already running.")
+        print("Please stop it before starting a new one to prevent multiple agents in a call.")
+        sys.exit(1)
+
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,

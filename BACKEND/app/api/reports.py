@@ -11,19 +11,39 @@ from openai import AsyncOpenAI
 from app.database import get_db
 from app.models.call import Call
 from app.models.contact import Contact
+from app.models.report import Report
+
+from sqlalchemy import select, func, and_, or_
+from app.models.campaign import Campaign
+from app.models.user import User
+from app.core.security import get_current_user
 
 router = APIRouter()
 
 @router.get("/reports/generate")
-async def generate_report(start_date: str, end_date: str, db: AsyncSession = Depends(get_db)):
+async def generate_report(
+    start_date: str,
+    end_date: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         # Parse dates (frontend sends YYYY-MM-DD)
         start_dt = datetime.strptime(f"{start_date} 00:00:00", "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(f"{end_date} 23:59:59", "%Y-%m-%d %H:%M:%S")
 
-        # Get calls within date range
+        # Get calls within date range for current user
         calls_result = await db.execute(
-            select(Call).where(and_(Call.started_at >= start_dt, Call.started_at <= end_dt))
+            select(Call)
+            .join(Contact, Call.contact_id == Contact.id)
+            .join(Campaign, Contact.campaign_id == Campaign.id)
+            .where(
+                and_(
+                    Call.started_at >= start_dt,
+                    Call.started_at <= end_dt,
+                    or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None))
+                )
+            )
         )
         calls = calls_result.scalars().all()
 
@@ -54,6 +74,10 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
             f"- Warm Leads: {warm_leads}\n"
             f"- Cold Leads/Opt-Outs: {cold_leads}\n"
             f"- Average Call Duration: {avg_duration_str}\n\n"
+            "CRITICAL RULES:\n"
+            "1. You MUST NOT hallucinate, invent, or assume ANY data, numbers, metrics, or trends that are not explicitly provided in the Data section above.\n"
+            "2. Your analysis MUST be strictly derived ONLY from the numbers provided.\n"
+            "3. If you make recommendations, they must be logical deductions based strictly on the provided data.\n\n"
             "Format the report using Markdown with exactly the following headers:\n"
             "### Executive Summary\n"
             "### Call Volume Analysis\n"
@@ -72,7 +96,7 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
                 model="deepseek-v4-flash",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=800,
-                temperature=0.4
+                temperature=0.1
             )
             report_text = response.choices[0].message.content or "Failed to generate report."
         else:
@@ -87,17 +111,83 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
                 "Configure DEEPSEEK_API_KEY for full AI insights."
             )
 
+        stats_data = {
+            "total": total_calls,
+            "completed": completed,
+            "failed": failed,
+            "hot": hot_leads,
+            "warm": warm_leads,
+            "cold": cold_leads
+        }
+
+        # Save the report to the database
+        db_report = Report(
+            user_id=current_user.id,
+            title=f"AI Performance Report ({start_date} to {end_date})",
+            start_date=start_date,
+            end_date=end_date,
+            content=report_content,
+            stats=stats_data,
+            generated_at=datetime.utcnow()
+        )
+        db.add(db_report)
+        await db.commit()
+        await db.refresh(db_report)
+
         return {
-            "report": report_text,
-            "stats": {
-                "total": total_calls,
-                "completed": completed,
-                "failed": failed,
-                "hot": hot_leads,
-                "warm": warm_leads,
-                "cold": cold_leads
-            }
+            "report": report_content,
+            "stats": stats_data,
+            "id": db_report.id
         }
     except Exception as e:
         print(f"Report generation error: {e}")
         return {"report": f"An error occurred while generating the report: {str(e)}", "stats": None}
+
+@router.get("/reports")
+async def get_reports(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        result = await db.execute(
+            select(Report)
+            .where(or_(Report.user_id == current_user.id, Report.user_id.is_(None)))
+            .order_by(Report.generated_at.desc())
+        )
+        reports = result.scalars().all()
+        return [
+            {
+                "id": r.id,
+                "title": r.title,
+                "start_date": r.start_date,
+                "end_date": r.end_date,
+                "generated_at": r.generated_at.isoformat(),
+            }
+            for r in reports
+        ]
+    except Exception as e:
+        print(f"Error fetching reports: {e}")
+        return []
+
+@router.get("/reports/{report_id}")
+async def get_report(report_id: int, db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Report).where(Report.id == report_id)
+        )
+        report = result.scalars().first()
+        if not report:
+            return {"error": "Report not found"}
+        
+        return {
+            "id": report.id,
+            "title": report.title,
+            "start_date": report.start_date,
+            "end_date": report.end_date,
+            "content": report.content,
+            "stats": report.stats,
+            "generated_at": report.generated_at.isoformat(),
+        }
+    except Exception as e:
+        print(f"Error fetching report {report_id}: {e}")
+        return {"error": str(e)}

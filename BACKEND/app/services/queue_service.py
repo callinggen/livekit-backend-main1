@@ -43,7 +43,13 @@ class QueueService:
         if active_call is not None:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             call_age = now - (active_call.started_at or now)
-            if call_age > timedelta(seconds=60):
+            timeout_triggered = False
+            if active_call.status == "dialing" and call_age > timedelta(seconds=60):
+                timeout_triggered = True
+            elif active_call.status == "in_progress" and call_age > timedelta(hours=1):
+                timeout_triggered = True
+
+            if timeout_triggered:
                 print(
                     f"Call {active_call.id} has been in '{active_call.status}' "
                     f"for {int(call_age.total_seconds())}s — marking as failed (timeout)."

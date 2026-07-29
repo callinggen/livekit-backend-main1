@@ -304,3 +304,16 @@ async def register_user(
             "full_name": new_user.full_name
         }
     }
+
+
+@router.get("/me")
+async def get_me(current_user: User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "phone_number": current_user.phone_number,
+        "full_name": current_user.full_name,
+        "credits": current_user.credits,
+        "is_first_login": current_user.is_first_login,
+        "is_admin": current_user.is_admin,
+    }
