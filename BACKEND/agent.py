@@ -422,7 +422,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
-                speaker="anushka",
+                speaker="shreya",
                 speech_sample_rate=16000,
             ),
         )
