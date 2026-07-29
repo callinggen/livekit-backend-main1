@@ -1,4 +1,6 @@
 import asyncio
+import socket
+import sys
 
 import app.models
 from sqlalchemy import select
@@ -62,4 +64,13 @@ async def worker():
 
 
 if __name__ == "__main__":
+    # Prevent multiple worker processes from running simultaneously
+    try:
+        lock_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        lock_socket.bind(('127.0.0.1', 49153))
+    except socket.error:
+        print("Error: Another instance of the worker is already running.")
+        print("Please stop it before starting a new one to prevent duplicate processing.")
+        sys.exit(1)
+
     asyncio.run(worker())

@@ -3,6 +3,8 @@ import asyncio
 import os
 import wave
 import re
+import socket
+import sys
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
@@ -541,6 +543,15 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
+    # Prevent multiple agent processes from running simultaneously
+    try:
+        lock_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        lock_socket.bind(('127.0.0.1', 49152))
+    except socket.error:
+        print("Error: Another instance of the agent is already running.")
+        print("Please stop it before starting a new one to prevent multiple agents in a call.")
+        sys.exit(1)
+
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
