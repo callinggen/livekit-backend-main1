@@ -414,13 +414,13 @@ async def entrypoint(ctx: JobContext):
             stt=sarvam.STT(),
 
             llm=openai.LLM(
-                model="deepseek-v4-flash",
+                model="deepseek-chat",
                 api_key=os.getenv("DEEPSEEK_API_KEY") or "",
                 base_url="https://api.deepseek.com/v1",
             ),
 
             tts=sarvam.TTS(
-                speaker="shreya",
+                speaker="anushka",
                 speech_sample_rate=16000,
             ),
         )
