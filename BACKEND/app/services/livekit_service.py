@@ -50,7 +50,7 @@ async def make_livekit_call(
             )
             print(f"Agent dispatch explicitly created for room: {room_name}")
         except Exception as job_err:
-            print(f"Note: Explicit job dispatch skipped or failed: {job_err}")
+            print(f"Note: Explicit agent dispatch skipped or failed: {job_err}")
         # ────────────────────────────────────────────────────────────────
 
         return {
