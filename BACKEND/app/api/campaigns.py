@@ -307,7 +307,7 @@ async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_d
         "status": _map_status(campaign.status),
         "completed": completed_count,
         "failed": failed_count,
-        "total": len(statuses),
+        "total": job.total_contacts if job else len(statuses),
     }
 
 

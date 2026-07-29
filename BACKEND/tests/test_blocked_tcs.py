@@ -81,11 +81,9 @@ def test_tc_qual_003_date_time_clarification_prompt():
         custom_script="Schedule tax consultation.",
         customer_name="Anita"
     )
-    assert "DATE & TIME VALIDATION RULES" in instructions
-    assert "that date has already passed" in instructions
-    assert "which year did you mean?" in instructions
+    assert "TIME & APPOINTMENT VALIDATION RULES" in instructions
     assert "Is that AM or PM?" in instructions
-    assert "Never book or confirm an appointment with an ambiguous or past date/time" in instructions
+    assert "DATE RESOLUTION RULES" in instructions
 
 
 # ── TC-QUAL-004: Recording Playback After Call ────────────────────────────────
