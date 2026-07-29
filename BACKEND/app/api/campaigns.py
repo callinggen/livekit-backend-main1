@@ -80,14 +80,30 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
         )
         job = job_result.scalars().first()
 
-        # Count contacts
-        contact_result = await db.execute(
-            select(func.count()).where(Contact.campaign_id == c.id)
+        # Count calls instead of just contacts to match call logs accurately
+        total_calls_result = await db.execute(
+            select(func.count())
+            .select_from(Call)
+            .join(Contact, Call.contact_id == Contact.id)
+            .where(Contact.campaign_id == c.id)
         )
-        total_contacts = contact_result.scalar() or 0
+        total_contacts = total_calls_result.scalar() or 0
 
-        completed = job.completed_contacts if job else 0
-        failed = job.failed_contacts if job else 0
+        completed_result = await db.execute(
+            select(func.count())
+            .select_from(Call)
+            .join(Contact, Call.contact_id == Contact.id)
+            .where(Contact.campaign_id == c.id, Call.status == "completed")
+        )
+        completed = completed_result.scalar() or 0
+
+        failed_result = await db.execute(
+            select(func.count())
+            .select_from(Call)
+            .join(Contact, Call.contact_id == Contact.id)
+            .where(Contact.campaign_id == c.id, Call.status == "failed")
+        )
+        failed = failed_result.scalar() or 0
 
         credits_result = await db.execute(
             select(func.sum(Call.credits_deducted))
@@ -142,6 +158,13 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
     )
     credits_used = credits_result.scalar() or 0
 
+    calls_result = await db.execute(
+        select(Call.status)
+        .join(Contact, Call.contact_id == Contact.id)
+        .where(Contact.campaign_id == campaign_id)
+    )
+    call_statuses = calls_result.scalars().all()
+
     return {
         "id": str(campaign.id),
         "name": campaign.campaign_name,
@@ -153,9 +176,9 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
         "creditsUsed": credits_used,
         "job": {
-            "total_contacts": job.total_contacts if job else len(contacts),
-            "completed_contacts": job.completed_contacts if job else 0,
-            "failed_contacts": job.failed_contacts if job else 0,
+            "total_contacts": len(call_statuses) if call_statuses else len(contacts),
+            "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
+            "failed_contacts": sum(1 for s in call_statuses if s == "failed"),
             "status": job.status if job else "queued",
         },
         "contacts": [
@@ -255,11 +278,21 @@ async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_d
     )
     job = job_result.scalars().first()
 
+    # Count dynamically for full accuracy based on Calls
+    calls_result = await db.execute(
+        select(Call.status)
+        .join(Contact, Call.contact_id == Contact.id)
+        .where(Contact.campaign_id == campaign_id)
+    )
+    statuses = calls_result.scalars().all()
+    completed_count = sum(1 for s in statuses if s == "completed")
+    failed_count = sum(1 for s in statuses if s == "failed")
+
     return {
         "status": _map_status(campaign.status),
-        "completed": job.completed_contacts if job else 0,
-        "failed": job.failed_contacts if job else 0,
-        "total": job.total_contacts if job else 0,
+        "completed": completed_count,
+        "failed": failed_count,
+        "total": len(statuses),
     }
 
 
