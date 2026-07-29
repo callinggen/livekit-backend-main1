@@ -56,12 +56,11 @@ class CallService:
                 owner.credits -= 1
                 call.credits_deducted = 1
         
-        if recording_url:
-            call.recording_url = recording_url
         now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
         call.ended_at = now
         if call.started_at:
-            call.duration = int((now - call.started_at).total_seconds())
+            started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
+            call.duration = int((now - started).total_seconds())
 
         # Check if appointment_date is a real, valid date string
         has_valid_appointment = (
