@@ -68,6 +68,7 @@ async def test_list_campaigns(client: AsyncClient, db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_launch_campaign_and_status(client: AsyncClient, db_session: AsyncSession):
     campaign = Campaign(
+        user_id=1,
         campaign_name="Launch Campaign",
         agent="Voice-C (Followup)",
         script="Followup script",
