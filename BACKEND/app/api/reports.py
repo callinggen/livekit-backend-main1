@@ -13,18 +13,37 @@ from app.models.call import Call
 from app.models.contact import Contact
 from app.models.report import Report
 
+from sqlalchemy import select, func, and_, or_
+from app.models.campaign import Campaign
+from app.models.user import User
+from app.core.security import get_current_user
+
 router = APIRouter()
 
 @router.get("/reports/generate")
-async def generate_report(start_date: str, end_date: str, db: AsyncSession = Depends(get_db)):
+async def generate_report(
+    start_date: str,
+    end_date: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         # Parse dates (frontend sends YYYY-MM-DD)
         start_dt = datetime.strptime(f"{start_date} 00:00:00", "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(f"{end_date} 23:59:59", "%Y-%m-%d %H:%M:%S")
 
-        # Get calls within date range
+        # Get calls within date range for current user
         calls_result = await db.execute(
-            select(Call).where(and_(Call.started_at >= start_dt, Call.started_at <= end_dt))
+            select(Call)
+            .join(Contact, Call.contact_id == Contact.id)
+            .join(Campaign, Contact.campaign_id == Campaign.id)
+            .where(
+                and_(
+                    Call.started_at >= start_dt,
+                    Call.started_at <= end_dt,
+                    or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None))
+                )
+            )
         )
         calls = calls_result.scalars().all()
 
@@ -102,12 +121,12 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
         }
 
         # Save the report to the database
-        title = f"CallingGen Report ({start_date} to {end_date})"
         db_report = Report(
-            title=title,
+            user_id=current_user.id,
+            title=f"AI Performance Report ({start_date} to {end_date})",
             start_date=start_date,
             end_date=end_date,
-            content=report_text,
+            content=report_content,
             stats=stats_data,
             generated_at=datetime.utcnow()
         )
@@ -116,7 +135,7 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
         await db.refresh(db_report)
 
         return {
-            "report": report_text,
+            "report": report_content,
             "stats": stats_data,
             "id": db_report.id
         }
@@ -125,10 +144,15 @@ async def generate_report(start_date: str, end_date: str, db: AsyncSession = Dep
         return {"report": f"An error occurred while generating the report: {str(e)}", "stats": None}
 
 @router.get("/reports")
-async def get_reports(db: AsyncSession = Depends(get_db)):
+async def get_reports(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         result = await db.execute(
-            select(Report).order_by(Report.generated_at.desc())
+            select(Report)
+            .where(or_(Report.user_id == current_user.id, Report.user_id.is_(None)))
+            .order_by(Report.generated_at.desc())
         )
         reports = result.scalars().all()
         return [

@@ -106,16 +106,24 @@ async def complete_call(
 
 # ── GET /api/calls ──────────────────────────────────────────────────────────
 
+from sqlalchemy import select, or_
+from app.models.user import User
+from app.core.security import get_current_user
+
 @router.get("/calls")
-async def list_calls(db: AsyncSession = Depends(get_db)):
+async def list_calls(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
-    Return all calls joined with their contact and campaign info.
+    Return all calls for current user joined with their contact and campaign info.
     Used by the Responses page.
     """
     result = await db.execute(
         select(Call, Contact, Campaign)
         .join(Contact, Call.contact_id == Contact.id)
         .join(Campaign, Contact.campaign_id == Campaign.id)
+        .where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
         .order_by(Call.id.desc())
     )
     rows = result.all()

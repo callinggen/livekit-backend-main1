@@ -1,8 +1,6 @@
-from typing import List
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from app.database import get_db
 from app.schemas.campaign import CampaignCreate
@@ -11,6 +9,8 @@ from app.models.campaign import Campaign
 from app.models.job import Job
 from app.models.contact import Contact
 from app.models.call import Call
+from app.models.user import User
+from app.core.security import get_current_user
 
 router = APIRouter()
 
@@ -21,10 +21,18 @@ router = APIRouter()
 async def create_campaign(
     campaign: CampaignCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    if current_user.credits <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your credits have exhausted. Please recharge in order to continue."
+        )
+
     created_campaign = await CampaignService.create_campaign(
         db=db,
         data=campaign,
+        user_id=current_user.id,
     )
     return {
         "message": "Campaign created successfully",
@@ -61,12 +69,19 @@ async def launch_campaign(
 # ── GET /api/campaigns ─────────────────────────────────────────────────────
 
 @router.get("/campaigns")
-async def list_campaigns(db: AsyncSession = Depends(get_db)):
+async def list_campaigns(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
-    Return all campaigns with aggregated stats pulled from their latest job.
+    Return all campaigns for the current user with aggregated stats pulled from their latest job.
     Used by the Campaigns page table.
     """
-    result = await db.execute(select(Campaign).order_by(Campaign.id.desc()))
+    result = await db.execute(
+        select(Campaign)
+        .where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
+        .order_by(Campaign.id.desc())
+    )
     campaigns = result.scalars().all()
 
     out = []

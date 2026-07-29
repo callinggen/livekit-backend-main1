@@ -110,9 +110,11 @@ class CampaignService:
     async def create_campaign(
         db: AsyncSession,
         data: CampaignCreate,
+        user_id: int | None = None,
     ) -> Campaign:
 
         campaign = Campaign(
+            user_id=user_id,
             campaign_name=data.campaign_name,
             agent=data.agent,
             script=data.script,

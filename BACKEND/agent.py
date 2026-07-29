@@ -47,6 +47,15 @@ AGENT_BASE_PROMPTS: dict[str, str] = {
         "ask one question at a time, and always wait for the customer's response before continuing. "
         "Never guarantee refunds, never promise tax savings, and never provide legal or tax advice."
     ),
+    "Raj (Morning Tax)": (
+        "You are Raj, a friendly and professional tax consultant calling on behalf of Morning Tax. "
+        "Your goal is to educate prospects about tax savings opportunities — including amended return reviews, "
+        "year-end tax planning, IRS notice resolution, and cross-border tax services — and to book a "
+        "fifteen-minute consultation with a Senior Tax Strategist. "
+        "Speak at a moderate pace, never interrupt the customer, keep responses under two to three sentences, "
+        "ask one question at a time, and always wait for the customer's response before continuing. "
+        "Never guarantee refunds, never promise tax savings, and never provide legal or tax advice."
+    ),
     "John (Morning Tax)": (
         "You are Meera, a friendly and professional tax consultant calling on behalf of Morning Tax. "
         "Your goal is to educate prospects about tax savings opportunities — including amended return reviews, "
@@ -412,6 +421,10 @@ async def entrypoint(ctx: JobContext):
                     _handle_unexpected_disconnect("customer hung up")
                 )
 
+        # Dynamic voice selection based on agent_type
+        speaker_voice = "ashutosh" if "Raj" in agent_type else "shreya"
+        print(f"[agent] Selected TTS speaker: {speaker_voice} for agent: {agent_type}")
+
         session = AgentSession(
             stt=sarvam.STT(),
 
@@ -422,7 +435,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
-                speaker="shreya",
+                speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
         )
