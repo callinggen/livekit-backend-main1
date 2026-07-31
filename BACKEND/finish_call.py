@@ -74,15 +74,18 @@ async def finish_call(
     appointment_date: str = "",
     appointment_time: str = "",
 ):
-    print("=" * 60)
-    print("FINISH CALL TOOL CALLED")
-    print(f"  customer_name   : {customer_name}")
-    print(f"  appointment_date: {appointment_date}")
-    print(f"  appointment_time: {appointment_time}")
-    print("=" * 60)
+    import os
+    print("-" * 50)
+    print("AGENT: finish_call TOOL INVOKED")
+    print(f"PID: {os.getpid()}")
+    print(f"customer_name   : '{customer_name}'")
+    print(f"appointment_date: '{appointment_date}'")
+    print(f"appointment_time: '{appointment_time}'")
+    print(f"ACTIVE_CALLS keys: {list(ACTIVE_CALLS.keys())}")
+    print("-" * 50)
 
     if not ACTIVE_CALLS:
-        print("No active calls.")
+        print("[finish_call] WARNING: No active calls in ACTIVE_CALLS dictionary.")
         return "No active call found."
 
     # Temporary: one active call at a time.
@@ -90,8 +93,15 @@ async def finish_call(
     state = ACTIVE_CALLS.get(room_name)
 
     if state is None:
-        print("State already removed.")
+        print(f"[finish_call] WARNING: State for room '{room_name}' already removed.")
         return "No active call found."
+
+    # ── Guard against duplicate invocations ─────────────────────────────────
+    # The LLM can call finish_call a second time while the first is still running
+    # (e.g. customer says goodbye again). Ignore the duplicate.
+    if state.get("finishing"):
+        print("finish_call already in progress — ignoring duplicate invocation.")
+        return "Call finish already in progress."
 
     # Mark as finishing so agent.py knows to wait for us before shutting down
     state["finishing"] = True
@@ -147,9 +157,10 @@ async def finish_call(
             "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
         }
 
-        # Mix WAV tracks
+        # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
         if call_id != -1:
             try:
+                await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
                 from agent import mix_wav_files
                 mix_wav_files(
                     f"recordings/call_{call_id}_customer.wav",
@@ -161,9 +172,11 @@ async def finish_call(
 
         try:
             print("Notifying backend that the call is complete...")
-            await notify_call_complete(room_name, payload=payload)
+            success = await notify_call_complete(room_name, payload=payload)
+            if not success:
+                print(f"[finish_call] FORENSIC ALERT: notify_call_complete returned FALSE for room '{room_name}'!")
         except Exception as e:
-            print(f"Warning – backend notify error (non-fatal): {e}")
+            print(f"[finish_call] ERROR notifying backend: {e}")
 
     finally:
         # ── Step 5: ALWAYS delete the LiveKit room to hang up the call ──

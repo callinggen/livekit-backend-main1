@@ -12,13 +12,95 @@ from app.models.user import User
 
 async def _get_credit_owner_for_call(db: AsyncSession, call: Call) -> Optional[User]:
     """
-    Isolated helper to resolve the user owning this call for credit deduction.
-    Currently single-tenant: returns the first user.
-    Future: replace with call.campaign.user_id.
+    Resolve the user owning this call for credit deduction.
+    Traces: call → job → campaign → user
     """
     from sqlalchemy import select
-    result = await db.execute(select(User).limit(1))
+    from app.models.job import Job
+    from app.models.campaign import Campaign
+    job = await db.get(Job, call.job_id)
+    if job is None:
+        return None
+    campaign = await db.get(Campaign, job.campaign_id)
+    if campaign is None or campaign.user_id is None:
+        return None
+    result = await db.execute(select(User).where(User.id == campaign.user_id))
     return result.scalars().first()
+
+
+async def _analyze_and_update_summary(call_id: int, transcript: str, business_outcome: str, is_opt_out: bool):
+    """Background task to run DeepSeek classification after DB commit."""
+    try:
+        from app.database import AsyncSessionLocal
+        import os
+        import asyncio
+        from openai import AsyncOpenAI
+
+        deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+        if not deepseek_key or len(transcript) <= 20:
+            return
+
+        client = AsyncOpenAI(
+            api_key=deepseek_key,
+            base_url="https://api.deepseek.com/v1"
+        )
+        
+        prompt_class = (
+            "Analyze the following call transcript and provide a very short, 2 to 3 word summary "
+            "that explains the entire conversation.\n"
+            "There are no predefined categories. Just use your own words to best describe the conversation in 2-3 words.\n"
+            "DO NOT output full sentences. Return pure text, no markdown, no quotes, no periods at the end.\n\n"
+            f"Transcript:\n{transcript}"
+        )
+        
+        prompt_cat = (
+            "Analyze the following call transcript and the Business Outcome to determine the Sales Pipeline Category.\n"
+            "The category MUST be exactly one of the following words: HOT, WARM, or COLD.\n"
+            "- HOT = High-priority lead with strong/immediate intent, appointment or consultation booked, or clearly ready to proceed.\n"
+            "- WARM = Medium-priority lead showing interest but requiring more information, consideration, or follow-up.\n"
+            "- COLD = Low-priority lead, refusal, opt-out, 'do not call', not needing service, or no conversion potential.\n"
+            "Output ONLY the single word (HOT, WARM, or COLD). No markdown, no punctuation.\n\n"
+            f"Business Outcome: {business_outcome}\n"
+            f"Transcript:\n{transcript}"
+        )
+        
+        task_class = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt_class}],
+            max_tokens=10,
+            temperature=0.3
+        )
+        
+        task_cat = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt_cat}],
+            max_tokens=10,
+            temperature=0.3
+        )
+        
+        res_class, res_cat = await asyncio.gather(task_class, task_cat)
+        
+        raw_summary = res_class.choices[0].message.content or ""
+        clean_summary = raw_summary.strip().strip("'\".").replace("\n", " ")
+        
+        raw_cat = res_cat.choices[0].message.content or ""
+        clean_cat = raw_cat.strip().strip("'\".").upper()
+        
+        async with AsyncSessionLocal() as bg_db:
+            bg_call = await bg_db.get(Call, call_id)
+            if bg_call:
+                if is_opt_out:
+                    bg_call.summary = "Do Not Call Request"
+                    bg_call.category = "COLD"
+                else:
+                    if clean_summary and len(clean_summary.split()) <= 6:
+                        bg_call.summary = clean_summary
+                    if clean_cat in ["HOT", "WARM", "COLD"]:
+                        bg_call.category = clean_cat
+                await bg_db.commit()
+                print(f"[CallService] Background AI classification updated for Call {call_id}: summary='{bg_call.summary}', category='{bg_call.category}'")
+    except Exception as e:
+        print(f"[CallService] Background DeepSeek analysis error (non-fatal): {e}")
 
 
 class CallService:
@@ -33,13 +115,23 @@ class CallService:
         appointment_time: Optional[str] = None,
         recording_url: Optional[str] = None,
     ):
+        import os
+        print("-" * 50)
+        print("BACKEND: CallService.complete_call START")
+        print(f"PID: {os.getpid()}")
+        print(f"Call ID: {call_id}")
+        print(f"Has Transcript: {bool(transcript and transcript.strip())}")
+        print("-" * 50)
+
         call = await db.get(Call, call_id)
 
         if call is None:
+            print(f"[CallService] Call {call_id} NOT FOUND in DB")
             return None
 
         # Prevent double completion
         if call.status == "completed":
+            print(f"[CallService] Call {call_id} is ALREADY completed")
             return call
 
         # ── Determine if it's a success or failure ────────────────────
@@ -78,6 +170,15 @@ class CallService:
             "refuse", "declined", "never call"
         ])
 
+        # Default fallbacks before async background LLM enrichment
+        if transcript:
+            call.transcript = transcript
+            call.summary = "Do Not Call Request" if is_opt_out else "General Inquiry"
+            call.category = "COLD" if is_opt_out else "UNCATEGORIZED"
+        else:
+            call.summary = "General Inquiry"
+            call.category = "UNCATEGORIZED"
+
         # ── Contact ───────────────────────────────────────────────────
         contact = await db.get(Contact, call.contact_id)
         if contact:
@@ -100,93 +201,6 @@ class CallService:
 
         business_outcome = contact.response if contact else "None"
 
-        # ── Transcript & AI ────────────────────────────────────────────
-        if transcript:
-            call.transcript = transcript
-            
-            # Generate AI Classification & Category in parallel
-            try:
-                import os
-                import asyncio
-                from openai import AsyncOpenAI
-                
-                deepseek_key = os.getenv("DEEPSEEK_API_KEY")
-                if deepseek_key and len(transcript) > 20:
-                    client = AsyncOpenAI(
-                        api_key=deepseek_key,
-                        base_url="https://api.deepseek.com/v1"
-                    )
-                    
-                    # Request 1: Topic Classification
-                    prompt_class = (
-                        "Analyze the following call transcript and provide a very short, 2 to 3 word summary "
-                        "that explains the entire conversation.\n"
-                        "There are no predefined categories. Just use your own words to best describe the conversation in 2-3 words.\n"
-                        "DO NOT output full sentences. Return pure text, no markdown, no quotes, no periods at the end.\n\n"
-                        f"Transcript:\n{transcript}"
-                    )
-                    
-                    # Request 2: Sales Pipeline Category
-                    prompt_cat = (
-                        "Analyze the following call transcript and the Business Outcome to determine the Sales Pipeline Category.\n"
-                        "The category MUST be exactly one of the following words: HOT, WARM, or COLD.\n"
-                        "- HOT = High-priority lead with strong/immediate intent, appointment or consultation booked, or clearly ready to proceed.\n"
-                        "- WARM = Medium-priority lead showing interest but requiring more information, consideration, or follow-up.\n"
-                        "- COLD = Low-priority lead, refusal, opt-out, 'do not call', not needing service, or no conversion potential.\n"
-                        "Output ONLY the single word (HOT, WARM, or COLD). No markdown, no punctuation.\n\n"
-                        f"Business Outcome: {business_outcome}\n"
-                        f"Transcript:\n{transcript}"
-                    )
-                    
-                    task_class = client.chat.completions.create(
-                        model="deepseek-chat",
-                        messages=[{"role": "user", "content": prompt_class}],
-                        max_tokens=10,
-                        temperature=0.3
-                    )
-                    
-                    task_cat = client.chat.completions.create(
-                        model="deepseek-chat",
-                        messages=[{"role": "user", "content": prompt_cat}],
-                        max_tokens=10,
-                        temperature=0.3
-                    )
-                    
-                    # Run in parallel
-                    res_class, res_cat = await asyncio.gather(task_class, task_cat)
-                    
-                    # Process Classification
-                    raw_summary = res_class.choices[0].message.content or ""
-                    clean_summary = raw_summary.strip().strip("'\".").replace("\n", " ")
-                    if is_opt_out:
-                        call.summary = "Do Not Call Request"
-                    elif len(clean_summary.split()) > 6 or not clean_summary:
-                        call.summary = "Classification Pending"
-                    else:
-                        call.summary = clean_summary
-                        
-                    # Process Category
-                    if is_opt_out:
-                        call.category = "COLD"
-                    else:
-                        raw_cat = res_cat.choices[0].message.content or ""
-                        clean_cat = raw_cat.strip().strip("'\".").upper()
-                        if clean_cat in ["HOT", "WARM", "COLD"]:
-                            call.category = clean_cat
-                        else:
-                            call.category = "UNCATEGORIZED"
-                        
-                else:
-                    call.summary = "Do Not Call Request" if is_opt_out else "General Tax Inquiry"
-                    call.category = "COLD" if is_opt_out else "UNCATEGORIZED"
-            except Exception as e:
-                print(f"Failed to generate AI data: {e}")
-                call.summary = "Do Not Call Request" if is_opt_out else "Classification Unavailable"
-                call.category = "COLD" if is_opt_out else "UNCATEGORIZED"
-        else:
-            call.summary = "General Tax Inquiry"
-            call.category = "UNCATEGORIZED"
-
         # ── Job / Campaign ────────────────────────────────────────────
         job = await db.get(Job, call.job_id)
         if job:
@@ -202,7 +216,22 @@ class CallService:
                 if campaign:
                     campaign.status = "completed"
 
+        # ── IMMEDIATE COMMIT ──────────────────────────────────────────
         await db.commit()
+
+        print("-" * 50)
+        print("BACKEND: CallService.complete_call COMMIT SUCCESSFUL")
+        print(f"Call ID {call.id} Status -> {call.status}")
+        print(f"Contact ID {call.contact_id} Status -> {contact.status if contact else 'N/A'}")
+        print(f"Job ID {call.job_id} Completed Contacts -> {job.completed_contacts if job else 0}")
+        print("-" * 50)
+
+        # ── Spawn DeepSeek Analysis in Background (Non-blocking) ──────
+        if transcript and len(transcript.strip()) > 20:
+            import asyncio
+            asyncio.create_task(
+                _analyze_and_update_summary(call.id, transcript, business_outcome, is_opt_out)
+            )
 
         return call
 

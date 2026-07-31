@@ -23,6 +23,8 @@ async def notify_call_complete(
     Optional ``payload`` is forwarded as the JSON request body and may
     contain: transcript, customer_name, appointment_date, appointment_time.
     """
+    import asyncio
+
     try:
         call_id = int(room_name.rsplit("-", 1)[-1])
     except (ValueError, IndexError):
@@ -32,13 +34,32 @@ async def notify_call_complete(
     backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
     url = f"{backend_url}/api/calls/{call_id}/complete"
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json=payload or {})
-            resp.raise_for_status()
-            print(f"[backend_client] Backend notified: call {call_id} marked complete.")
-            return True
-    except Exception as e:
-        print(f"[backend_client] Failed to notify backend for call {call_id}: {e}")
-        return False
+    print("-" * 50)
+    print("AGENT / BACKEND CLIENT: notify_call_complete START")
+    print(f"PID: {os.getpid()}")
+    print(f"DATABASE_URL: {os.getenv('DATABASE_URL')}")
+    print(f"Target URL: {url}")
+    print(f"Payload keys: {list((payload or {}).keys())}")
+    print("-" * 50)
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, json=payload or {})
+                print(f"[backend_client] Attempt {attempt}/{max_attempts} -> HTTP Status: {resp.status_code}")
+                if resp.is_success:
+                    print(f"[backend_client] Backend notified: call {call_id} marked complete successfully.")
+                    return True
+                else:
+                    print(f"[backend_client] Attempt {attempt}/{max_attempts} -> Non-2xx response: {resp.status_code} Body: {resp.text}")
+        except Exception as e:
+            print(f"[backend_client] Error on attempt {attempt}/{max_attempts} for call {call_id}: {e}")
+
+        if attempt < max_attempts:
+            print(f"[backend_client] Retrying in 1 second (attempt {attempt + 1}/{max_attempts})...")
+            await asyncio.sleep(1.0)
+
+    print(f"[backend_client] ALL {max_attempts} notification attempts FAILED for call {call_id}.")
+    return False
 

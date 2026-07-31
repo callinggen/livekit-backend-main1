@@ -88,6 +88,14 @@ async def complete_call(
     body: Optional[CallCompleteRequest] = Body(default=None),
     db: AsyncSession = Depends(get_db),
 ):
+    import os
+    print("-" * 50)
+    print("BACKEND API: POST /api/calls/{call_id}/complete RECEIVED")
+    print(f"PID: {os.getpid()}")
+    print(f"Call ID: {call_id}")
+    print(f"Body: {body.dict() if body else None}")
+    print("-" * 50)
+
     call = await CallService.complete_call(
         db=db,
         call_id=call_id,
@@ -99,8 +107,10 @@ async def complete_call(
     )
 
     if call is None:
+        print(f"[API complete_call] Returning failure: Call {call_id} not found")
         return {"success": False, "message": "Call not found"}
 
+    print(f"[API complete_call] Returning HTTP 200 success for Call {call_id}")
     return {"success": True, "call_id": call.id}
 
 
@@ -123,7 +133,7 @@ async def list_calls(
         select(Call, Contact, Campaign)
         .join(Contact, Call.contact_id == Contact.id)
         .join(Campaign, Contact.campaign_id == Campaign.id)
-        .where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
+        .where(Campaign.user_id == current_user.id)
         .order_by(Call.id.desc())
     )
     rows = result.all()
