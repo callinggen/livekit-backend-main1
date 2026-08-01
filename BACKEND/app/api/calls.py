@@ -34,6 +34,8 @@ class CallCompleteRequest(BaseModel):
     appointment_date: Optional[str] = None
     appointment_time: Optional[str] = None
     recording_url: Optional[str] = None
+    is_voicemail: bool = False
+    detection_metadata: Optional[dict] = None
 
 
 class HumanResponseRequest(BaseModel):
@@ -96,6 +98,8 @@ async def complete_call(
         appointment_date=body.appointment_date if body else None,
         appointment_time=body.appointment_time if body else None,
         recording_url=body.recording_url if body else None,
+        is_voicemail=body.is_voicemail if body else False,
+        detection_metadata=body.detection_metadata if body else None,
     )
 
     if call is None:

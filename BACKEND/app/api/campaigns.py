@@ -116,7 +116,7 @@ async def list_campaigns(
             select(func.count())
             .select_from(Call)
             .join(Contact, Call.contact_id == Contact.id)
-            .where(Contact.campaign_id == c.id, Call.status == "failed")
+            .where(Contact.campaign_id == c.id, Call.status.in_(["failed", "incomplete"]))
         )
         failed = failed_result.scalar() or 0
 
@@ -193,7 +193,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "job": {
             "total_contacts": len(call_statuses) if call_statuses else len(contacts),
             "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
-            "failed_contacts": sum(1 for s in call_statuses if s == "failed"),
+            "failed_contacts": sum(1 for s in call_statuses if s in ("failed", "incomplete")),
             "status": job.status if job else "queued",
         },
         "contacts": [
@@ -258,9 +258,9 @@ async def get_campaign_live(campaign_id: int, db: AsyncSession = Depends(get_db)
         "registry": len(contacts),
         "standby":  sum(1 for c in contacts if c.status == "pending"),
         "dialer":   sum(1 for c in contacts if c.status in ("calling", "in_progress", "dialing")),
-        "analysis": sum(1 for c in contacts if c.status in ("completed", "failed", "busy", "no_answer")),
+        "analysis": sum(1 for c in contacts if c.status in ("completed", "failed", "busy", "no_answer", "incomplete")),
         "completed": sum(1 for c in contacts if c.status == "completed"),
-        "failed":    sum(1 for c in contacts if c.status in ("failed", "busy", "no_answer")),
+        "failed":    sum(1 for c in contacts if c.status in ("failed", "busy", "no_answer", "incomplete")),
         "campaign_status": _map_status(campaign.status) if campaign else "Unknown",
         "schedule_date": campaign.schedule_date if campaign else "",
         "schedule_time": campaign.schedule_time if campaign else "",
@@ -301,7 +301,7 @@ async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_d
     )
     statuses = calls_result.scalars().all()
     completed_count = sum(1 for s in statuses if s == "completed")
-    failed_count = sum(1 for s in statuses if s == "failed")
+    failed_count = sum(1 for s in statuses if s in ("failed", "incomplete"))
 
     return {
         "status": _map_status(campaign.status),

@@ -32,6 +32,8 @@ class CallService:
         appointment_date: Optional[str] = None,
         appointment_time: Optional[str] = None,
         recording_url: Optional[str] = None,
+        is_voicemail: bool = False,
+        detection_metadata: Optional[dict] = None,
     ):
         call = await db.get(Call, call_id)
 
@@ -42,13 +44,49 @@ class CallService:
         if call.status == "completed":
             return call
 
+        # ── Fallback Voicemail Detection ───────────────────────────────
+        if not is_voicemail and transcript:
+            lower_tx_vm = transcript.lower()
+            voicemail_phrases = [
+                "please leave a message",
+                "leave your message",
+                "at the tone",
+                "person you're trying to reach",
+                "person you are trying to reach",
+                "call has been forwarded",
+                "record your message",
+                "is being screened",
+                "state your name",
+                "after the beep",
+                "voicemail",
+                "textmail subscriber",
+                "google subscriber",
+                "unavailable"
+            ]
+            if any(phrase in lower_tx_vm for phrase in voicemail_phrases):
+                if transcript.count('\n') < 6:
+                    is_voicemail = True
+                    if not detection_metadata:
+                        detection_metadata = {
+                            "type": "voicemail",
+                            "trigger": "backend_fallback",
+                            "confidence": 90.0,
+                            "credits_charged": False
+                        }
+
         # ── Determine if it's a success or failure ────────────────────
-        is_success = transcript is not None and len(transcript.strip()) > 0
+        is_success = transcript is not None and len(transcript.strip()) > 0 and not is_voicemail
         
         # Determine if we should deduct a credit (transitioning to completed and no credit deducted yet)
-        should_deduct = is_success and call.credits_deducted == 0
+        should_deduct = is_success and call.credits_deducted == 0 and not is_voicemail
 
-        call.status = "completed" if is_success else "failed"
+        if is_voicemail:
+            call.status = "incomplete"
+        else:
+            call.status = "completed" if is_success else "failed"
+            
+        if detection_metadata:
+            call.detection_metadata = detection_metadata
         
         if should_deduct:
             owner = await _get_credit_owner_for_call(db, call)
@@ -81,14 +119,19 @@ class CallService:
         # ── Contact ───────────────────────────────────────────────────
         contact = await db.get(Contact, call.contact_id)
         if contact:
-            contact.status = "completed" if is_success else "failed"
+            if is_voicemail:
+                contact.status = "incomplete"
+            else:
+                contact.status = "completed" if is_success else "failed"
             contact.duration = str(call.duration)
             if transcript:
                 contact.transcript = transcript
             if customer_name:
                 contact.customer_name = customer_name
 
-            if is_opt_out:
+            if is_voicemail:
+                contact.response = "No Answer"
+            elif is_opt_out:
                 contact.response = "Do Not Call / Refusal"
             elif has_valid_appointment:
                 contact.appointment_date = appointment_date
@@ -200,7 +243,10 @@ class CallService:
                 job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 campaign = await db.get(Campaign, job.campaign_id)
                 if campaign:
-                    campaign.status = "completed"
+                    if job.completed_contacts == 0 and job.failed_contacts > 0:
+                        campaign.status = "incomplete"
+                    else:
+                        campaign.status = "completed"
 
         await db.commit()
 
@@ -245,7 +291,10 @@ class CallService:
                 job.finished_at = now
                 campaign = await db.get(Campaign, job.campaign_id)
                 if campaign:
-                    campaign.status = "completed"
+                    if job.completed_contacts == 0 and job.failed_contacts > 0:
+                        campaign.status = "incomplete"
+                    else:
+                        campaign.status = "completed"
 
         await db.commit()
         return call

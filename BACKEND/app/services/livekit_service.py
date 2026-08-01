@@ -44,7 +44,7 @@ async def make_livekit_call(
             from livekit.api import CreateAgentDispatchRequest
             await lkapi.agent_dispatch.create_dispatch(
                 CreateAgentDispatchRequest(
-                    agent_name="callinggen-agent",
+                    agent_name="callinggen-agent-dev",
                     room=room_name,
                 )
             )

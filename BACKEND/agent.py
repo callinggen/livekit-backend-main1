@@ -250,6 +250,66 @@ async def record_track(track: rtc.Track, call_id: int, speaker: str = "customer"
         print(f"[recorder] Finished recording {speaker} track for call {call_id}")
 
 
+class VoicemailDetector:
+    def __init__(self, session: AgentSession, timeout_seconds: int = 45):
+        self.session = session
+        self.timeout = timeout_seconds
+        self.trigger_phrases = [
+            "please leave a message",
+            "leave your message after the tone",
+            "at the tone",
+            "the person you're trying to reach",
+            "your call has been forwarded",
+            "record your message",
+            "this call is being screened",
+            "state your name and why you're calling",
+            "leave a message",
+            "not available",
+            "cannot take your call",
+            "after the beep",
+            "voicemail",
+            "leave a brief message",
+            "unavailable",
+            "google subscriber",
+            "textmail subscriber",
+        ]
+
+    async def run(self):
+        """
+        Poll the current transcript. If a voicemail trigger phrase is detected,
+        return a detection metadata dict. 
+        If timeout is reached or human interaction confident, return None.
+        """
+        start_time = asyncio.get_event_loop().time()
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > self.timeout:
+                return None
+            
+            transcript = _build_transcript(self.session)
+            if not transcript:
+                await asyncio.sleep(1.0)
+                continue
+                
+            lower_transcript = transcript.lower()
+            
+            # Stop detecting if it looks like a real conversation (multiple turns)
+            if transcript.count('\n') >= 4:
+                return None
+                
+            for phrase in self.trigger_phrases:
+                if phrase in lower_transcript:
+                    return {
+                        "type": "voicemail",
+                        "trigger": phrase,
+                        "confidence": 99.0,
+                        "credits_charged": False
+                    }
+                    
+            await asyncio.sleep(1.0)
+
+
+
 class DynamicAgent(Agent):
     """Agent whose behaviour is fully driven by the campaign configuration."""
 
@@ -272,7 +332,7 @@ async def _get_campaign_info(call_id: int) -> dict:
             call = await db.get(Call, call_id)
             if call is None:
                 print(f"[agent] Warning: call {call_id} not found in DB")
-                return {"agent_type": "Voice-A (Sales)", "script": "", "customer_name": ""}
+                return {"agent_type": "Voice-A (Sales)", "script": "", "customer_name": "", "metadata_fields": {}}
 
             contact = await db.get(Contact, call.contact_id)
 
@@ -289,7 +349,7 @@ async def _get_campaign_info(call_id: int) -> dict:
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": ""}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}}
 
 
 async def entrypoint(ctx: JobContext):
@@ -352,6 +412,60 @@ async def entrypoint(ctx: JobContext):
         print(f"[agent] Agent type   : {agent_type}")
         print(f"[agent] Customer name: {customer_name}")
         print(f"[agent] Script length: {len(custom_script)} chars")
+        
+        async def _handle_voicemail_disconnect(metadata: dict):
+            state = ACTIVE_CALLS.pop(room_name, None)
+            if state is None:
+                return
+            print("Voicemail detected. Disconnecting immediately to avoid credits.")
+            
+            # 1. Notify backend immediately so it isn't cancelled by room deletion
+            session = state.get("session")
+            transcript = _build_transcript(session) if session else ""
+            
+            try:
+                await notify_call_complete(
+                    room_name,
+                    payload={
+                        "transcript": transcript or None,
+                        "customer_name": None,
+                        "appointment_date": None,
+                        "appointment_time": None,
+                        "recording_url": f"/api/recordings/call_{call_id}.wav",
+                        "is_voicemail": True,
+                        "detection_metadata": metadata,
+                    },
+                )
+            except Exception as notify_err:
+                print(f"Warning - notify failed: {notify_err}")
+
+            # 2. Delete room immediately to drop the SIP call instantly (zero latency)
+            try:
+                lkapi = api.LiveKitAPI()
+                try:
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                finally:
+                    await lkapi.aclose()
+            except Exception as e:
+                print(f"Warning - room deletion error: {e}")
+                
+            # 3. Close session
+            if session:
+                try:
+                    await asyncio.wait_for(session.aclose(), timeout=3.0)
+                except: pass
+                
+            # 4. Wait slightly for WAV handles to close before mixing
+            await asyncio.sleep(1.0)
+            
+            if call_id != -1:
+                try:
+                    mix_wav_files(
+                        f"recordings/call_{call_id}_customer.wav",
+                        f"recordings/call_{call_id}_agent.wav",
+                        f"recordings/call_{call_id}.wav"
+                    )
+                except Exception: pass
 
         async def _handle_unexpected_disconnect(reason: str):
             # If finish_call already ran, ACTIVE_CALLS entry is already gone.
@@ -448,6 +562,23 @@ async def entrypoint(ctx: JobContext):
                 customer_name=customer_name,
             ),
         )
+
+        # Start Voicemail Detector
+        vd_config = campaign_info.get("voicemail_detection") or {"enabled": True, "timeout": 45}
+        if vd_config.get("enabled"):
+            async def run_voicemail_detector():
+                detector = VoicemailDetector(session, timeout_seconds=vd_config.get("timeout", 45))
+                result = await detector.run()
+                if result:
+                    print(f"Voicemail detected! {result}")
+                    await _handle_voicemail_disconnect(result)
+            asyncio.create_task(run_voicemail_detector())
+
+        # Store session in ACTIVE_CALLS so finish_call can find it
+        ACTIVE_CALLS[room_name] = {
+            "session": session,
+            "call_id": call_id,
+        }
 
         print("Session started")
 
@@ -568,6 +699,6 @@ if __name__ == "__main__":
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="callinggen-agent",
+            agent_name="callinggen-agent-dev",
         )
     )

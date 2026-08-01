@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -18,6 +18,17 @@ class Call(Base):
     job_id: Mapped[int] = mapped_column(
         ForeignKey("jobs.id"),
         nullable=False,
+    )
+
+    campaign_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("campaigns.id"),
+        nullable=True,
+    )
+
+    detection_metadata: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
     )
 
     contact_id: Mapped[int] = mapped_column(
