@@ -294,7 +294,7 @@ class VoicemailDetector:
             lower_transcript = transcript.lower()
             
             # Stop detecting if it looks like a real conversation (multiple turns)
-            if transcript.count('\n') >= 4:
+            if transcript.count('\n') >= 8:
                 return None
                 
             for phrase in self.trigger_phrases:
@@ -346,6 +346,7 @@ async def _get_campaign_info(call_id: int) -> dict:
                 "script": campaign.script if campaign else "",
                 "customer_name": contact.name if contact else "",
                 "metadata_fields": contact.metadata_fields if contact else {},
+                "voicemail_detection": campaign.voicemail_detection if campaign else None,
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
@@ -664,10 +665,6 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(record_track(agent_track, call_id, speaker="agent"))
         else:
             print("[agent] Warning: local agent audio track not found for recording")
-
-        ACTIVE_CALLS[ctx.room.name] = {
-            "session": session,
-        }
 
         print(f"Registered active call: {ctx.room.name}")
 
