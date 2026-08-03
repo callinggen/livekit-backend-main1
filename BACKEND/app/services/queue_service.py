@@ -43,7 +43,8 @@ class QueueService:
         if active_call is not None:
             import os
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            call_age = now - (active_call.started_at or now)
+            ref_time = active_call.started_at or active_call.created_at or now
+            call_age = now - ref_time
             
             print("-" * 50)
             print("QUEUE SERVICE: Active Call Check")
