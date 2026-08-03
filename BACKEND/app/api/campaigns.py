@@ -104,28 +104,14 @@ async def list_campaigns(
         )
         total_contacts = total_calls_result.scalar() or 0
 
-        completed_result = await db.execute(
-            select(func.count())
-            .select_from(Call)
-            .join(Contact, Call.contact_id == Contact.id)
-            .where(Contact.campaign_id == c.id, Call.status == "completed")
-        )
-        completed = completed_result.scalar() or 0
-
-        failed_result = await db.execute(
-            select(func.count())
-            .select_from(Call)
-            .join(Contact, Call.contact_id == Contact.id)
-            .where(Contact.campaign_id == c.id, Call.status == "failed")
-        )
-        failed = failed_result.scalar() or 0
-
         credits_result = await db.execute(
             select(func.sum(Call.credits_deducted))
             .join(Contact, Call.contact_id == Contact.id)
             .where(Contact.campaign_id == c.id)
         )
-        credits_used = credits_result.scalar() or 0
+        credits_used = int(credits_result.scalar() or 0)
+        answered = credits_used
+        failed = max(0, total_contacts - answered)
 
         out.append({
             "id": str(c.id),
@@ -134,8 +120,10 @@ async def list_campaigns(
             "schedule": f"{c.schedule_date} {c.schedule_time}",
             "sheetName": "—",
             "totalCalls": total_contacts,
-            "completedCalls": completed,
+            "completedCalls": answered,
             "failedCalls": failed,
+            "answeredCalls": answered,
+            "unansweredCalls": failed,
             "interested": 0,
             "callbacks": 0,
             "creditsUsed": credits_used,
@@ -171,14 +159,10 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         .join(Contact, Call.contact_id == Contact.id)
         .where(Contact.campaign_id == campaign_id)
     )
-    credits_used = credits_result.scalar() or 0
-
-    calls_result = await db.execute(
-        select(Call.status)
-        .join(Contact, Call.contact_id == Contact.id)
-        .where(Contact.campaign_id == campaign_id)
-    )
-    call_statuses = calls_result.scalars().all()
+    credits_used = int(credits_result.scalar() or 0)
+    total_cnt = len(contacts)
+    answered_cnt = credits_used
+    failed_cnt = max(0, total_cnt - answered_cnt)
 
     return {
         "id": str(campaign.id),
@@ -191,9 +175,11 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
         "creditsUsed": credits_used,
         "job": {
-            "total_contacts": len(call_statuses) if call_statuses else len(contacts),
-            "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
-            "failed_contacts": sum(1 for s in call_statuses if s == "failed"),
+            "total_contacts": total_cnt,
+            "completed_contacts": answered_cnt,
+            "failed_contacts": failed_cnt,
+            "answered_contacts": answered_cnt,
+            "unanswered_contacts": failed_cnt,
             "status": job.status if job else "queued",
         },
         "contacts": [

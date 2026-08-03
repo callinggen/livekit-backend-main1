@@ -550,6 +550,15 @@ async def entrypoint(ctx: JobContext):
             if any(p.identity == "customer" for p in participants.values()):
                 customer_joined = True
                 print("Customer participant joined — starting greeting.")
+                if call_id != -1:
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            c = await db.get(Call, call_id)
+                            if c:
+                                c.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                                await db.commit()
+                    except Exception as err:
+                        print(f"[agent] Failed to set started_at for call {call_id}: {err}")
                 break
             await asyncio.sleep(1)
 
