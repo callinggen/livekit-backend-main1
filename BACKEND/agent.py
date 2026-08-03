@@ -5,6 +5,7 @@ import wave
 import re
 import socket
 import sys
+from datetime import datetime, timezone
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
@@ -541,26 +542,27 @@ async def entrypoint(ctx: JobContext):
         print(f"Registered active call: {ctx.room.name}")
 
         # Wait for the SIP customer to actually answer and join the room.
-        # Since wait_until_answered=False, the room exists before the call
-        # is picked up, so we must not greet until the participant is present.
-        print("Waiting for customer participant to join...")
+        print("Waiting for customer participant to pick up call...")
         customer_joined = False
-        for _ in range(60):  # wait up to 60 seconds
+        for i in range(120):  # wait up to 60 seconds (120 * 0.5s)
             participants = ctx.room.remote_participants
-            if any(p.identity == "customer" for p in participants.values()):
-                customer_joined = True
-                print("Customer participant joined — starting greeting.")
-                if call_id != -1:
-                    try:
-                        async with AsyncSessionLocal() as db:
-                            c = await db.get(Call, call_id)
-                            if c:
-                                c.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                                await db.commit()
-                    except Exception as err:
-                        print(f"[agent] Failed to set started_at for call {call_id}: {err}")
-                break
-            await asyncio.sleep(1)
+            customer_p = next((p for p in participants.values() if p.identity == "customer"), None)
+            if customer_p:
+                # Customer participant exists. Check if audio track published or fallback after 3s of presence
+                if len(customer_p.track_publications) > 0 or i >= 6:
+                    customer_joined = True
+                    print(f"Customer connected (tracks={len(customer_p.track_publications)}) — starting greeting.")
+                    if call_id != -1:
+                        try:
+                            async with AsyncSessionLocal() as db:
+                                c = await db.get(Call, call_id)
+                                if c:
+                                    c.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                                    await db.commit()
+                        except Exception as err:
+                            print(f"[agent] Failed to set started_at for call {call_id}: {err}")
+                    break
+            await asyncio.sleep(0.5)
 
         if not customer_joined:
             print("Timeout: customer never joined. Notifying backend and exiting.")
