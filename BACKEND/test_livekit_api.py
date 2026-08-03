@@ -5,20 +5,28 @@ from livekit import api
 
 load_dotenv()
 
-lk = api.LiveKitAPI(
-    url=os.getenv("LIVEKIT_URL"),
-    api_key=os.getenv("LIVEKIT_API_KEY"),
-    api_secret=os.getenv("LIVEKIT_API_SECRET"),
-)
+import asyncio
 
-print("=" * 60)
-print("ROOM SERVICE")
-print("=" * 60)
-print(dir(lk.room))
+async def main():
+    lk = api.LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+    )
 
-print()
+    print("=" * 60)
+    print("ROOM SERVICE")
+    print("=" * 60)
+    print(dir(lk.room))
 
-print("=" * 60)
-print("SIP SERVICE")
-print("=" * 60)
-print(dir(lk.sip))
+    print()
+
+    print("=" * 60)
+    print("SIP SERVICE")
+    print("=" * 60)
+    print(dir(lk.sip))
+    
+    await lk.aclose()
+
+if __name__ == "__main__":
+    asyncio.run(main())

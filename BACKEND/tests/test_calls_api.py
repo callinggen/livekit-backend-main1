@@ -15,7 +15,8 @@ async def test_complete_and_list_calls(client: AsyncClient, db_session: AsyncSes
         script="Script text",
         schedule_date="2026-07-15",
         schedule_time="10:00",
-        status="running"
+        status="running",
+        user_id=1
     )
     db_session.add(campaign)
     await db_session.commit()
