@@ -129,7 +129,13 @@ class CampaignService:
 
         contacts = []
 
-        for item in data.contacts:
+        subset = data.contacts
+        if data.selection_type == "range" and data.start_row and data.end_row:
+            start_idx = max(0, data.start_row - 1)
+            end_idx = min(len(data.contacts), data.end_row)
+            subset = data.contacts[start_idx:end_idx]
+
+        for item in subset:
 
             contact = Contact(
                 campaign_id=campaign.id,
