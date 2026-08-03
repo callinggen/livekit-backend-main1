@@ -13,35 +13,43 @@ GOODBYE_PHRASE = "Thank you for your time. Have a great day! Goodbye."
 def _build_transcript(session: Any) -> str:
     """
     Extract the conversation transcript from the AgentSession.
-
-    LiveKit Agents v1.6 API:
-      session.history          → ChatContext
-      chat_ctx.messages()      → list[ChatMessage]   (method, not property)
-      msg.role                 → ChatRole enum  (e.g. ChatRole.USER)
-      msg.text_content         → str | None
     """
     try:
-        chat_ctx = getattr(session, "history", None)
+        chat_ctx = getattr(session, "chat_ctx", None)
         if chat_ctx is None:
-            print("Warning – session.history is None, transcript will be empty.")
+            chat_ctx = getattr(session, "history", None)
+            
+        if chat_ctx is None:
+            print("Warning – session.chat_ctx/history is None, transcript will be empty.")
             return ""
 
-        # .messages() is a method in v1.6, not a property
-        messages = chat_ctx.messages()
+        # In some versions it's a list, in others it's an object with .messages or .messages()
+        if hasattr(chat_ctx, "messages"):
+            messages = chat_ctx.messages() if callable(chat_ctx.messages) else chat_ctx.messages
+        else:
+            messages = chat_ctx
 
         lines = []
         for msg in messages:
-            # ChatRole enum → "ChatRole.USER" → keep just "user"
-            role = str(getattr(msg, "role", "")).split(".")[-1].lower()
+            # Handle dictionary vs object
+            if isinstance(msg, dict):
+                role = str(msg.get("role", "")).split(".")[-1].lower()
+                content = msg.get("content", "")
+                text = content if isinstance(content, str) else " ".join(str(c) for c in content)
+            else:
+                role = str(getattr(msg, "role", "")).split(".")[-1].lower()
+                text = getattr(msg, "text_content", None)
+                if not text:
+                    raw = getattr(msg, "content", [])
+                    if isinstance(raw, str):
+                        text = raw
+                    elif isinstance(raw, list):
+                        text = " ".join(c for c in raw if isinstance(c, str))
+                    else:
+                        text = str(raw)
+
             if role in ("system", "tool"):
                 continue
-
-            # text_content is the convenience property that joins all str content
-            text = getattr(msg, "text_content", None)
-            if not text:
-                # Fallback: join any raw string items in .content list
-                raw = getattr(msg, "content", [])
-                text = " ".join(c for c in raw if isinstance(c, str))
 
             if text and text.strip():
                 lines.append(f"{role}: {text.strip()}")
@@ -49,7 +57,8 @@ def _build_transcript(session: Any) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        print(f"Warning – could not build transcript: {e}")
+        import traceback
+        print(f"Warning – could not build transcript: {e}\n{traceback.format_exc()}")
         return ""
 
 
@@ -74,15 +83,18 @@ async def finish_call(
     appointment_date: str = "",
     appointment_time: str = "",
 ):
-    print("=" * 60)
-    print("FINISH CALL TOOL CALLED")
-    print(f"  customer_name   : {customer_name}")
-    print(f"  appointment_date: {appointment_date}")
-    print(f"  appointment_time: {appointment_time}")
-    print("=" * 60)
+    import os
+    print("-" * 50)
+    print("AGENT: finish_call TOOL INVOKED")
+    print(f"PID: {os.getpid()}")
+    print(f"customer_name   : '{customer_name}'")
+    print(f"appointment_date: '{appointment_date}'")
+    print(f"appointment_time: '{appointment_time}'")
+    print(f"ACTIVE_CALLS keys: {list(ACTIVE_CALLS.keys())}")
+    print("-" * 50)
 
     if not ACTIVE_CALLS:
-        print("No active calls.")
+        print("[finish_call] WARNING: No active calls in ACTIVE_CALLS dictionary.")
         return "No active call found."
 
     # Temporary: one active call at a time.
@@ -90,8 +102,15 @@ async def finish_call(
     state = ACTIVE_CALLS.get(room_name)
 
     if state is None:
-        print("State already removed.")
+        print(f"[finish_call] WARNING: State for room '{room_name}' already removed.")
         return "No active call found."
+
+    # ── Guard against duplicate invocations ─────────────────────────────────
+    # The LLM can call finish_call a second time while the first is still running
+    # (e.g. customer says goodbye again). Ignore the duplicate.
+    if state.get("finishing"):
+        print("finish_call already in progress — ignoring duplicate invocation.")
+        return "Call finish already in progress."
 
     # Mark as finishing so agent.py knows to wait for us before shutting down
     state["finishing"] = True
@@ -147,9 +166,16 @@ async def finish_call(
             "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
         }
 
-        # Mix WAV tracks
+        with open("finish_call_debug.log", "a") as f:
+            f.write(f"\n--- FINISH CALL INVOKED ---\n")
+            f.write(f"Room: {room_name}\n")
+            f.write(f"Transcript generated: '{transcript}'\n")
+            f.write(f"Payload: {payload}\n")
+
+        # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
         if call_id != -1:
             try:
+                await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
                 from agent import mix_wav_files
                 mix_wav_files(
                     f"recordings/call_{call_id}_customer.wav",
@@ -161,9 +187,11 @@ async def finish_call(
 
         try:
             print("Notifying backend that the call is complete...")
-            await notify_call_complete(room_name, payload=payload)
+            success = await notify_call_complete(room_name, payload=payload)
+            if not success:
+                print(f"[finish_call] FORENSIC ALERT: notify_call_complete returned FALSE for room '{room_name}'!")
         except Exception as e:
-            print(f"Warning – backend notify error (non-fatal): {e}")
+            print(f"[finish_call] ERROR notifying backend: {e}")
 
     finally:
         # ── Step 5: ALWAYS delete the LiveKit room to hang up the call ──
@@ -183,10 +211,12 @@ async def finish_call(
                 await lkapi.room.delete_room(
                     api.DeleteRoomRequest(room=room_name)
                 )
+                with open("finish_call_debug.log", "a") as f: f.write(f"Room deleted successfully — call hung up.\n")
                 print("Room deleted successfully — call hung up.")
             finally:
                 await lkapi.aclose()
         except Exception as e:
+            with open("finish_call_debug.log", "a") as f: f.write(f"Warning – room deletion error: {e}\n")
             print(f"Warning – room deletion error: {e}")
 
         # Remove active call state

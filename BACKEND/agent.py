@@ -372,7 +372,14 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("disconnected")
     def on_room_disconnected(*args):
+        # If finish_call already handled this room (intentional disconnect), skip.
+        # Otherwise the room dropped unexpectedly (SIP timeout, network failure, trunk drop).
+        state = ACTIVE_CALLS.get(room_name)
+        if state is not None and not state.get("finishing"):
+            # Room dropped before finish_call ran — save transcript and notify backend
+            asyncio.create_task(_handle_room_disconnect())
         shutdown_event.set()
+
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
@@ -467,8 +474,67 @@ async def entrypoint(ctx: JobContext):
                     )
                 except Exception: pass
 
+        async def _handle_room_disconnect():
+            """
+            Called when the LiveKit room itself disconnects unexpectedly
+            (SIP trunk timeout, network drop, server-side room deletion).
+            Saves partial transcript and notifies backend so the worker can advance.
+            """
+            state = ACTIVE_CALLS.pop(room_name, None)
+            if state is None:
+                return  # finish_call already handled cleanup
+
+            print(
+                f"[agent] Room disconnected unexpectedly — saving transcript and notifying backend."
+            )
+
+            session = state.get("session")
+            transcript = _build_transcript(session) if session else ""
+
+            # Mix WAV tracks — sleep so recorder coroutine can close file handles
+            if call_id != -1:
+                try:
+                    await asyncio.sleep(1.5)
+                    mix_wav_files(
+                        f"recordings/call_{call_id}_customer.wav",
+                        f"recordings/call_{call_id}_agent.wav",
+                        f"recordings/call_{call_id}.wav"
+                    )
+                except Exception as mix_err:
+                    print(f"Warning – mixing audio failed: {mix_err}")
+
+            try:
+                await notify_call_complete(
+                    room_name,
+                    payload={
+                        "transcript": transcript or None,
+                        "customer_name": None,
+                        "appointment_date": None,
+                        "appointment_time": None,
+                        "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+                    },
+                )
+            except Exception as e:
+                print(f"Warning – backend notify error: {e}")
+
+            # Close session cleanly
+            if session:
+                try:
+                    await asyncio.wait_for(session.aclose(), timeout=5.0)
+                except Exception:
+                    pass
+
         async def _handle_unexpected_disconnect(reason: str):
-            # If finish_call already ran, ACTIVE_CALLS entry is already gone.
+            # If finish_call is already running, let it complete — don't race with it.
+            state_peek = ACTIVE_CALLS.get(room_name)
+            if state_peek is not None and state_peek.get("finishing"):
+                print(
+                    f"Customer disconnected but finish_call is already running — "
+                    f"letting finish_call handle cleanup."
+                )
+                return
+
+            # If finish_call already completed, ACTIVE_CALLS entry is gone.
             state = ACTIVE_CALLS.pop(room_name, None)
             if state is None:
                 return
@@ -482,9 +548,10 @@ async def entrypoint(ctx: JobContext):
             session = state.get("session")
             transcript = _build_transcript(session) if session else ""
 
-            # Mix WAV tracks
+            # Mix WAV tracks — sleep so recorder coroutine can close file handles
             if call_id != -1:
                 try:
+                    await asyncio.sleep(1.5)
                     mix_wav_files(
                         f"recordings/call_{call_id}_customer.wav",
                         f"recordings/call_{call_id}_agent.wav",
@@ -513,14 +580,14 @@ async def entrypoint(ctx: JobContext):
                 except Exception as e:
                     print(f"Warning – session.aclose() error: {e}")
 
-            # Delete the LiveKit room to hang up the SIP call
+            # Delete the LiveKit room to hang up any remaining SIP leg
             try:
-                print("Deleting LiveKit room (this hangs up the SIP call)...")
-                lkapi = api.LiveKitAPI()
+                lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+                lk_key = os.getenv("LIVEKIT_API_KEY")
+                lk_secret = os.getenv("LIVEKIT_API_SECRET")
+                lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret) if lk_url else api.LiveKitAPI()
                 try:
-                    await lkapi.room.delete_room(
-                        api.DeleteRoomRequest(room=room_name)
-                    )
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
                     print("Room deleted successfully.")
                 finally:
                     await lkapi.aclose()
@@ -690,15 +757,17 @@ if __name__ == "__main__":
     # Prevent multiple agent processes from running simultaneously
     try:
         lock_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        lock_socket.bind(('127.0.0.1', 49152))
+        lock_socket.bind(('127.0.0.1', 59152))
     except socket.error:
         print("Error: Another instance of the agent is already running.")
         print("Please stop it before starting a new one to prevent multiple agents in a call.")
         sys.exit(1)
 
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-agent-dev")
+    print(f"[agent] Registering LiveKit agent worker with name: '{agent_name}'")
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="callinggen-agent-dev",
+            agent_name=agent_name,
         )
     )

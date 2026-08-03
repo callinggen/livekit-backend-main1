@@ -11,7 +11,7 @@ from app.models.campaign import Campaign
 
 # If a call stays in dialing/in_progress longer than this, treat it as
 # failed (agent crashed, room was deleted, SIP trunk timed out, user declined, etc.)
-CALL_TIMEOUT_MINUTES = 1  # 60 seconds watchdog timeout to prevent stuck calls/campaigns
+CALL_TIMEOUT_MINUTES = 3  # 3-minute watchdog timeout for in_progress calls
 
 
 class QueueService:
@@ -41,12 +41,23 @@ class QueueService:
         active_call = result.scalars().first()
 
         if active_call is not None:
+            import os
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             call_age = now - (active_call.started_at or now)
+            
+            print("-" * 50)
+            print("QUEUE SERVICE: Active Call Check")
+            print(f"PID: {os.getpid()}")
+            print(f"DATABASE_URL: {os.getenv('DATABASE_URL')}")
+            print(f"Engine URL: {db.bind.url if db.bind else 'N/A'}")
+            print(f"Job ID: {job_id}")
+            print(f"Active Call ID: {active_call.id} | Status: {active_call.status} | Age: {int(call_age.total_seconds())}s")
+            print("-" * 50)
+
             timeout_triggered = False
             if active_call.status == "dialing" and call_age > timedelta(seconds=60):
                 timeout_triggered = True
-            elif active_call.status == "in_progress" and call_age > timedelta(hours=1):
+            elif active_call.status == "in_progress" and call_age > timedelta(minutes=CALL_TIMEOUT_MINUTES):
                 timeout_triggered = True
 
             if timeout_triggered:

@@ -67,7 +67,7 @@ if __name__ == "__main__":
     # Prevent multiple worker processes from running simultaneously
     try:
         lock_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        lock_socket.bind(('127.0.0.1', 49153))
+        lock_socket.bind(('127.0.0.1', 59153))
     except socket.error:
         print("Error: Another instance of the worker is already running.")
         print("Please stop it before starting a new one to prevent duplicate processing.")
