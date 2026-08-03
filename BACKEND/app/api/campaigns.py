@@ -95,11 +95,10 @@ async def list_campaigns(
         )
         job = job_result.scalars().first()
 
-        # Count calls instead of just contacts to match call logs accurately
+        # Count total contacts per campaign accurately and fast
         total_calls_result = await db.execute(
             select(func.count())
-            .select_from(Call)
-            .join(Contact, Call.contact_id == Contact.id)
+            .select_from(Contact)
             .where(Contact.campaign_id == c.id)
         )
         total_contacts = total_calls_result.scalar() or 0
@@ -139,7 +138,14 @@ async def list_campaigns(
 # ── GET /api/campaigns/{campaign_id} ──────────────────────────────────────
 
 @router.get("/campaigns/{campaign_id}")
-async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
+async def get_campaign(
+    campaign_id: int,
+    page: int = 1,
+    limit: int = 50,
+    search: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
     campaign = await db.get(Campaign, campaign_id)
     if campaign is None:
         return {"error": "Not found"}
@@ -149,10 +155,10 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
     )
     job = job_result.scalars().first()
 
-    contacts_result = await db.execute(
-        select(Contact).where(Contact.campaign_id == campaign_id)
+    total_cnt_res = await db.execute(
+        select(func.count()).select_from(Contact).where(Contact.campaign_id == campaign_id)
     )
-    contacts = contacts_result.scalars().all()
+    total_cnt = total_cnt_res.scalar() or 0
 
     credits_result = await db.execute(
         select(func.sum(Call.credits_deducted))
@@ -160,9 +166,22 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         .where(Contact.campaign_id == campaign_id)
     )
     credits_used = int(credits_result.scalar() or 0)
-    total_cnt = len(contacts)
     answered_cnt = credits_used
     failed_cnt = max(0, total_cnt - answered_cnt)
+
+    # Fast paginated contacts query
+    contact_query = select(Contact).where(Contact.campaign_id == campaign_id)
+    if search:
+        s = f"%{search}%"
+        contact_query = contact_query.where(
+            or_(Contact.name.ilike(s), Contact.phone.ilike(s), Contact.customer_name.ilike(s))
+        )
+    if status_filter:
+        contact_query = contact_query.where(Contact.status == status_filter)
+
+    offset = (max(1, page) - 1) * limit
+    contacts_result = await db.execute(contact_query.order_by(Contact.id.asc()).offset(offset).limit(limit))
+    contacts = contacts_result.scalars().all()
 
     return {
         "id": str(campaign.id),
