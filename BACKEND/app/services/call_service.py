@@ -134,8 +134,10 @@ class CallService:
             print(f"[CallService] Call {call_id} is ALREADY completed")
             return call
 
-        # ── Determine if it's a success or failure ────────────────────
-        is_success = transcript is not None and len(transcript.strip()) > 0
+        # ── Determine if it's a connected call (answered/customer joined) ──
+        has_transcript = bool(transcript and transcript.strip())
+        has_recording = bool(recording_url and recording_url.strip())
+        is_success = has_transcript or has_recording or (call.started_at is not None)
         
         # Determine if we should deduct a credit (transitioning to completed and no credit deducted yet)
         should_deduct = is_success and call.credits_deducted == 0
