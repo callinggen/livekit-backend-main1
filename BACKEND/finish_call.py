@@ -25,9 +25,12 @@ def _build_transcript(session: Any) -> str:
 
         # In some versions it's a list, in others it's an object with .messages or .messages()
         if hasattr(chat_ctx, "messages"):
-            messages = chat_ctx.messages() if callable(chat_ctx.messages) else chat_ctx.messages
-        else:
+            raw_msgs = getattr(chat_ctx, "messages", [])
+            messages = raw_msgs() if callable(raw_msgs) else raw_msgs
+        elif isinstance(chat_ctx, (list, tuple)):
             messages = chat_ctx
+        else:
+            messages = []
 
         lines = []
         for msg in messages:
