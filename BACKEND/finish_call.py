@@ -123,9 +123,15 @@ async def finish_call(
 
     print(f"Room: {room_name}")
 
-    # Determine appropriate goodbye phrase
+    # Determine appropriate goodbye phrase dynamically based on customer conversation context
+    transcript = _build_transcript(session)
+    lower_t = transcript.lower()
+
     if (appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()):
-        goodbye_phrase = "Thank you. Your appointment request has been recorded. Goodbye."
+        if "call me" in lower_t or "call back" in lower_t or "reschedule" in lower_t or "later" in lower_t or "after" in lower_t:
+            goodbye_phrase = "Thank you. I have scheduled your callback. Goodbye!"
+        else:
+            goodbye_phrase = "Thank you. Your appointment has been booked. Goodbye!"
     else:
         goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
 

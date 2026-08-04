@@ -95,8 +95,14 @@ def build_agent_instructions(
     today_date = ist_now.strftime("%Y-%m-%d")
     today_readable = ist_now.strftime("%A, %B %d, %Y")
     today_time = ist_now.strftime("%I:%M %p IST")
-    tomorrow_date = (ist_now + timedelta(days=1)).strftime("%Y-%m-%d (%A, %B %d)")
-    day_after_date = (ist_now + timedelta(days=2)).strftime("%Y-%m-%d (%A, %B %d)")
+    # Dynamic day-of-week mapping for the next 7 days
+    days_mapping = []
+    for i in range(1, 8):
+        future_dt = ist_now + timedelta(days=i)
+        day_name = future_dt.strftime("%A")
+        iso_date = future_dt.strftime("%Y-%m-%d")
+        days_mapping.append(f"  * \"this {day_name}\" / \"next {day_name}\" = {iso_date} ({future_dt.strftime('%B %d, %Y')})")
+    days_context_str = "\n".join(days_mapping)
 
     date_context = f"""
 CURRENT DATE & TIME INFORMATION (DYNAMIC REAL-TIME CONTEXT):
@@ -104,14 +110,19 @@ CURRENT DATE & TIME INFORMATION (DYNAMIC REAL-TIME CONTEXT):
 - Today's Time: {today_time}
 - Current Year: {ist_now.year}
 - Calculated Relative Dates for Reference:
+  * "today" = {today_date} ({today_readable})
   * "tomorrow" = {tomorrow_date}
   * "day after tomorrow" = {day_after_date}
+{days_context_str}
 
-DATE RESOLUTION RULES:
-- You know today's exact date is {today_readable}.
-- When a customer mentions relative dates like "tomorrow", "day after tomorrow", "this Thursday", or "next Monday", automatically resolve the exact date without asking the customer for the year or date!
-- Assume the current year ({ist_now.year}) for any date mentioned by the customer. NEVER ask the customer "what year?" or "which year?".
-- If the customer specifies only a day and month (e.g., "August 5th"), assume {ist_now.year} automatically.
+DATE & CALLBACK RESOLUTION RULES:
+- You know today's exact date is {today_readable} (ISO: {today_date}).
+- IF THE CUSTOMER ASKS TO BE CALLED BACK TODAY (e.g. "call me today at 5:30 PM", "after 5:30 PM today", or "today 5 PM"):
+  * ACCEPT TODAY IMMEDIATELY! Do NOT suggest tomorrow, do NOT ask "would tomorrow work better?".
+  * Use today's date ({today_date}) and confirm the requested time.
+- When the customer mentions a day of the week (e.g. "this Friday", "next Monday", "this Thursday"):
+  * Automatically resolve it to the exact calculated date listed above without asking the customer for the year or date.
+- Assume current year ({ist_now.year}) for any date mentioned. NEVER ask "what year?".
 - If the customer specifies a date in the past relative to Today ({today_date}), politely inform them: "I'm sorry, that date has already passed. Could you please provide a future date?"
 """
 
