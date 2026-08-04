@@ -62,6 +62,15 @@ def _build_transcript(session: Any) -> str:
                     continue
                 lines.append(f"{role}: {clean_t}")
 
+        if not lines:
+            fallback_lines = getattr(session, "_transcript_lines", [])
+            if not fallback_lines and hasattr(session, "room"):
+                room_name = getattr(session.room, "name", None)
+                if room_name and room_name in ACTIVE_CALLS:
+                    fallback_lines = ACTIVE_CALLS[room_name].get("lines", [])
+            if fallback_lines:
+                lines = fallback_lines
+
         return "\n".join(lines)
 
     except Exception as e:

@@ -167,7 +167,11 @@ class CallService:
                         }
 
         # ── Determine if it's a success or failure ────────────────────
-        is_success = transcript is not None and len(transcript.strip()) > 0 and not is_voicemail
+        has_transcript = bool(transcript and len(transcript.strip()) > 0)
+        has_duration = bool(call.duration and call.duration > 5)
+        has_audio = bool(recording_url or (call.recording_url and os.path.exists(call.recording_url.lstrip("/"))))
+
+        is_success = (has_transcript or has_duration or has_audio) and not is_voicemail
         
         # Determine if we should deduct a credit (transitioning to completed and no credit deducted yet)
         should_deduct = is_success and call.credits_deducted == 0 and not is_voicemail
