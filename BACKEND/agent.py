@@ -95,6 +95,8 @@ def build_agent_instructions(
     today_date = ist_now.strftime("%Y-%m-%d")
     today_readable = ist_now.strftime("%A, %B %d, %Y")
     today_time = ist_now.strftime("%I:%M %p IST")
+    tomorrow_date = (ist_now + timedelta(days=1)).strftime("%Y-%m-%d (%A, %B %d)")
+    day_after_date = (ist_now + timedelta(days=2)).strftime("%Y-%m-%d (%A, %B %d)")
     # Dynamic day-of-week mapping for the next 7 days
     days_mapping = []
     for i in range(1, 8):
