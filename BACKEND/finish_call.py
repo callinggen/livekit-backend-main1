@@ -130,6 +130,8 @@ async def finish_call(
         print("[finish_call] WARNING: State for room active call not found.")
         return "No active call found."
 
+    room_str = room_name
+
     # ── Guard against duplicate invocations ─────────────────────────────────
     # The LLM can call finish_call a second time while the first is still running
     # (e.g. customer says goodbye again). Ignore the duplicate.
@@ -187,7 +189,7 @@ async def finish_call(
 
         # ── Step 4: Notify backend with full payload ──────────────────────
         try:
-            call_id = int(room_name.rsplit("-", 1)[-1])
+            call_id = int(room_str.rsplit("-", 1)[-1])
         except (ValueError, IndexError):
             call_id = -1
 
@@ -201,7 +203,7 @@ async def finish_call(
 
         with open("finish_call_debug.log", "a") as f:
             f.write(f"\n--- FINISH CALL INVOKED ---\n")
-            f.write(f"Room: {room_name}\n")
+            f.write(f"Room: {room_str}\n")
             f.write(f"Transcript generated: '{transcript}'\n")
             f.write(f"Payload: {payload}\n")
 
@@ -220,9 +222,9 @@ async def finish_call(
 
         try:
             print("Notifying backend that the call is complete...")
-            success = await notify_call_complete(room_name, payload=payload)
+            success = await notify_call_complete(room_str, payload=payload)
             if not success:
-                print(f"[finish_call] FORENSIC ALERT: notify_call_complete returned FALSE for room '{room_name}'!")
+                print(f"[finish_call] FORENSIC ALERT: notify_call_complete returned FALSE for room '{room_str}'!")
         except Exception as e:
             print(f"[finish_call] ERROR notifying backend: {e}")
 
@@ -242,7 +244,7 @@ async def finish_call(
 
             try:
                 await lkapi.room.delete_room(
-                    api.DeleteRoomRequest(room=room_name)
+                    api.DeleteRoomRequest(room=room_str)
                 )
                 with open("finish_call_debug.log", "a") as f: f.write(f"Room deleted successfully — call hung up.\n")
                 print("Room deleted successfully — call hung up.")
@@ -253,6 +255,6 @@ async def finish_call(
             print(f"Warning – room deletion error: {e}")
 
         # Remove active call state
-        ACTIVE_CALLS.pop(room_name, None)
+        ACTIVE_CALLS.pop(room_str, None)
 
     return "Call ended successfully."
