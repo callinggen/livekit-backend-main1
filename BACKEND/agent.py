@@ -672,7 +672,8 @@ async def entrypoint(ctx: JobContext):
         @session.on("conversation_item_added")
         def _on_conversation_item(item: Any):
             try:
-                role = str(getattr(item, "role", "")).split(".")[-1].lower()
+                r_val = getattr(item, "role", "")
+                role = (r_val if isinstance(r_val, str) else str(r_val)).split(".")[-1].lower()
                 text = getattr(item, "text_content", None)
                 if not text:
                     raw = getattr(item, "content", [])
