@@ -39,7 +39,7 @@ async def make_livekit_call(
         # ── EXPLICIT AGENT DISPATCH (Fix for agent not joining) ───────────
         try:
             from livekit.api import CreateAgentDispatchRequest
-            agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-agent-dev")
+            agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
             await lkapi.agent_dispatch.create_dispatch(
                 CreateAgentDispatchRequest(
                     agent_name=agent_name,

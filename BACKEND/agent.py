@@ -761,7 +761,7 @@ if __name__ == "__main__":
         print("Please stop it before starting a new one to prevent multiple agents in a call.")
         sys.exit(1)
 
-    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-agent-dev")
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
     print(f"[agent] Registering LiveKit agent worker with name: '{agent_name}'")
     cli.run_app(
         WorkerOptions(
