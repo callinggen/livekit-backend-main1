@@ -832,6 +832,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name=agent_name,
-            num_idle_processes=1,
+            num_idle_processes=5,
         )
     )

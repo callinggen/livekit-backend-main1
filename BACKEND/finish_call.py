@@ -114,9 +114,17 @@ async def finish_call(
         print("[finish_call] WARNING: No active calls in ACTIVE_CALLS dictionary.")
         return "No active call found."
 
-    # Temporary: one active call at a time.
-    room_name = list(ACTIVE_CALLS.keys())[0]
-    state = ACTIVE_CALLS.get(room_name)
+    # Dynamic multi-channel room resolution: match room for active call
+    room_name = None
+    for r_name, st in ACTIVE_CALLS.items():
+        if st and not st.get("finishing"):
+            room_name = r_name
+            break
+
+    if not room_name and ACTIVE_CALLS:
+        room_name = list(ACTIVE_CALLS.keys())[0]
+
+    state = ACTIVE_CALLS.get(room_name) if room_name else None
 
     if state is None:
         print(f"[finish_call] WARNING: State for room '{room_name}' already removed.")
