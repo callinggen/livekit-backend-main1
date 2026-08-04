@@ -391,6 +391,10 @@ async def entrypoint(ctx: JobContext):
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
 
+        if room_name in ACTIVE_CALLS:
+            print(f"[agent] Warning: Call room '{room_name}' is already handled by another agent process. Exiting duplicate instance.")
+            return
+
         # Scan for already subscribed audio tracks from pre-existing customer participant
         for participant in ctx.room.remote_participants.values():
             if participant.identity == "customer":
@@ -767,5 +771,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name=agent_name,
+            num_idle_processes=1,
         )
     )
