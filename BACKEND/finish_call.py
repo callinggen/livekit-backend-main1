@@ -126,8 +126,8 @@ async def finish_call(
 
     state = ACTIVE_CALLS.get(room_name) if room_name else None
 
-    if state is None:
-        print(f"[finish_call] WARNING: State for room '{room_name}' already removed.")
+    if not room_name or state is None:
+        print("[finish_call] WARNING: State for room active call not found.")
         return "No active call found."
 
     # ── Guard against duplicate invocations ─────────────────────────────────
