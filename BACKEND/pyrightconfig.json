@@ -3,7 +3,8 @@
   "venvPath": "..",
   "venv": ".venv",
   "extraPaths": [
-    "."
+    ".",
+    "C:\\Users\\DELL\\AppData\\Roaming\\Python\\Python314\\site-packages"
   ],
   "exclude": [
     "**/__pyrefly_virtual__/**"
