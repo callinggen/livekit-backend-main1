@@ -391,8 +391,14 @@ async def entrypoint(ctx: JobContext):
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
 
-        if room_name in ACTIVE_CALLS:
-            print(f"[agent] Warning: Call room '{room_name}' is already handled by another agent process. Exiting duplicate instance.")
+        # Cross-process atomic file lock per room to guarantee strictly 1 agent process per call room
+        import tempfile
+        lock_file_path = os.path.join(tempfile.gettempdir(), f"livekit_room_{ctx.room.name}.lock")
+        try:
+            lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(lock_fd)
+        except FileExistsError:
+            print(f"[agent] Atomic lock file '{lock_file_path}' exists! Another agent process is handling room '{ctx.room.name}'. Exiting duplicate process immediately.")
             return
 
         # Scan for already subscribed audio tracks from pre-existing customer participant
@@ -752,6 +758,13 @@ async def entrypoint(ctx: JobContext):
 
         # Safety cleanup in case finish_call never ran or timed out.
         ACTIVE_CALLS.pop(ctx.room.name, None)
+        import tempfile
+        try:
+            lock_file_path = os.path.join(tempfile.gettempdir(), f"livekit_room_{ctx.room.name}.lock")
+            if os.path.exists(lock_file_path):
+                os.remove(lock_file_path)
+        except Exception:
+            pass
         print(f"Removed active call: {ctx.room.name}")
 
 
