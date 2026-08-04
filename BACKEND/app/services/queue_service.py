@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+import os
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,29 +32,20 @@ class QueueService:
             print("Job not found")
             return False
 
-        # ── Watchdog: Check for any stuck calls in this job > 60s ────────────
+        # ── Watchdog & Concurrency Check: Check all active calls in dialing/in_progress ────
         result = await db.execute(
             select(Call).where(
                 Call.job_id == job.id,
                 Call.status.in_(["dialing", "in_progress"]),
             )
         )
-        active_call = result.scalars().first()
+        active_calls = result.scalars().all()
 
-        if active_call is not None:
-            import os
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        valid_active_calls = []
+
+        for active_call in active_calls:
             call_age = now - (active_call.started_at or now)
-            
-            print("-" * 50)
-            print("QUEUE SERVICE: Active Call Check")
-            print(f"PID: {os.getpid()}")
-            print(f"DATABASE_URL: {os.getenv('DATABASE_URL')}")
-            print(f"Engine URL: {db.bind.url if db.bind else 'N/A'}")
-            print(f"Job ID: {job_id}")
-            print(f"Active Call ID: {active_call.id} | Status: {active_call.status} | Age: {int(call_age.total_seconds())}s")
-            print("-" * 50)
-
             timeout_triggered = False
             if active_call.status == "dialing" and call_age > timedelta(seconds=60):
                 timeout_triggered = True
@@ -66,12 +58,20 @@ class QueueService:
                     f"for {int(call_age.total_seconds())}s — marking as failed (timeout)."
                 )
                 await CallService.fail_call(db=db, call_id=active_call.id)
-                # Fall through to pick the next contact or finish the job
             else:
-                print(f"Call {active_call.id} still in progress ({int(call_age.total_seconds())}s), waiting...")
-                return True
+                valid_active_calls.append(active_call)
 
-        print(f"Loaded Job {job.id}")
+        active_calls_count = len(valid_active_calls)
+        max_concurrency = int(os.getenv("MAX_CONCURRENT_CALLS", "3"))
+
+        if active_calls_count >= max_concurrency:
+            print(
+                f"Job {job_id} reached max concurrency "
+                f"({active_calls_count}/{max_concurrency} active calls). Waiting for a call slot..."
+            )
+            return True
+
+        print(f"Loaded Job {job.id} (Active calls: {active_calls_count}/{max_concurrency})")
         result = await db.execute(
             select(Contact).where(
                 Contact.campaign_id == job.campaign_id,
@@ -82,26 +82,18 @@ class QueueService:
         contact = result.scalars().first()
 
         if contact is None:
-            # Check if there are any contacts currently being called
-            calling_res = await db.execute(
-                select(Contact).where(
-                    Contact.campaign_id == job.campaign_id,
-                    Contact.status == "calling",
-                )
-            )
-            calling_contact = calling_res.scalars().first()
-            if calling_contact is not None:
-                print(f"Contact {calling_contact.id} is still in 'calling' state, waiting...")
+            if active_calls_count > 0:
+                print(f"No more pending contacts, but {active_calls_count} active call(s) still in progress. Waiting...")
                 return True
 
-            print("No pending contacts, no active calling contacts, and no active calls.")
+            print("No pending contacts and no active calls remaining.")
             job.status = "completed"
             job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            
+
             campaign = await db.get(Campaign, job.campaign_id)
             if campaign:
                 campaign.status = "completed"
-                
+
             await db.commit()
 
             return False

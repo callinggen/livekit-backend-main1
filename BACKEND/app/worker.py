@@ -60,7 +60,7 @@ async def worker():
                         job.status = "failed"
                         await db.commit()
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(1)
 
 
 if __name__ == "__main__":
