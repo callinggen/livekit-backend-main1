@@ -665,32 +665,34 @@ async def entrypoint(ctx: JobContext):
             asyncio.create_task(run_voicemail_detector())
 
         # Real-time transcript buffer for continuous failsafe preservation
-        session._transcript_lines = []
+        transcript_lines: list[str] = []
+        setattr(session, "_transcript_lines", transcript_lines)
 
-        @session.on("user_speech_committed")
-        def _on_user_speech(msg):
-            text = getattr(msg, "content", "") or getattr(msg, "text", "")
-            if not text and hasattr(msg, "text_content"):
-                text = getattr(msg, "text_content", "")
-            if text and isinstance(text, str) and text.strip():
-                clean_t = text.strip()
-                if not any(h in clean_t.lower() for h in ["wave of covid", "second wave", "third wave"]):
-                    session._transcript_lines.append(f"user: {clean_t}")
-
-        @session.on("agent_speech_committed")
-        def _on_agent_speech(msg):
-            text = getattr(msg, "content", "") or getattr(msg, "text", "")
-            if not text and hasattr(msg, "text_content"):
-                text = getattr(msg, "text_content", "")
-            if text and isinstance(text, str) and text.strip():
-                clean_t = text.strip()
-                session._transcript_lines.append(f"assistant: {clean_t}")
+        @session.on("conversation_item_added")
+        def _on_conversation_item(item: Any):
+            try:
+                role = str(getattr(item, "role", "")).split(".")[-1].lower()
+                text = getattr(item, "text_content", None)
+                if not text:
+                    raw = getattr(item, "content", [])
+                    if isinstance(raw, str):
+                        text = raw
+                    elif isinstance(raw, list):
+                        text = " ".join(str(c) for c in raw if isinstance(c, str))
+                    else:
+                        text = str(raw)
+                if role not in ("system", "tool") and text and text.strip():
+                    clean_t = text.strip()
+                    if not any(h in clean_t.lower() for h in ["wave of covid", "second wave", "third wave"]):
+                        transcript_lines.append(f"{role}: {clean_t}")
+            except Exception:
+                pass
 
         # Store session in ACTIVE_CALLS so finish_call can find it
         ACTIVE_CALLS[room_name] = {
             "session": session,
             "call_id": call_id,
-            "lines": session._transcript_lines,
+            "lines": transcript_lines,
         }
 
         print("Session started")
