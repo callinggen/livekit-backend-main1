@@ -19,7 +19,7 @@ from livekit.agents import (
     cli,
 )
 
-from livekit.plugins import sarvam, openai
+from livekit.plugins import sarvam, openai, silero
 
 # Database access to read campaign + contact at runtime
 from sqlalchemy import select
@@ -608,6 +608,7 @@ async def entrypoint(ctx: JobContext):
         print(f"[agent] Selected TTS speaker: {speaker_voice} for agent: {agent_type}")
 
         session = AgentSession(
+            vad=silero.VAD.load(),
             stt=sarvam.STT(),
 
             llm=openai.LLM(
