@@ -81,18 +81,18 @@ def _build_transcript(session: Any) -> str:
 
 @function_tool(
     description="""
-Call this tool whenever the call/conversation is complete or needs to end.
-This includes:
-- When an appointment is booked or confirmed by the customer.
-- When the customer is not interested, busy, or declines.
+Call this tool IMMEDIATELY whenever the call/conversation is complete or needs to end.
+MUST BE CALLED IMMEDIATELY IN THESE CASES:
+- When the customer says "not interested", "no thanks", "don't call me", or declines.
+- When an appointment or callback date/time is requested or confirmed.
 - When the customer says goodbye, thank you, or indicates they want to hang up.
 
-Calling this tool will automatically say goodbye and hang up the call.
+Calling this tool will automatically speak the appropriate goodbye phrase and hang up the SIP call.
 
 Pass any details collected during the conversation:
 - customer_name: the customer's full name
-- appointment_date: the date if an appointment was booked (e.g. "2026-07-15")
-- appointment_time: the time if an appointment was booked (e.g. "10:00 AM")
+- appointment_date: the date if an appointment or callback was requested (e.g. "2026-08-07")
+- appointment_time: the time if an appointment or callback was requested (e.g. "05:30 PM")
 """
 )
 async def finish_call(

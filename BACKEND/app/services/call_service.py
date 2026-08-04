@@ -204,19 +204,30 @@ class CallService:
             and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
         )
 
-        # Check transcript for refusal / do not call signals
+        # Check transcript for response signals
         lower_tx = (transcript or "").lower()
-        is_opt_out = any(phrase in lower_tx for phrase in [
-            "do not call", "don't call", "stop calling", "remove my number",
-            "not interested", "no assistance", "don't need", "no thanks",
-            "refuse", "declined", "never call"
+        is_not_interested = any(phrase in lower_tx for phrase in [
+            "not interested", "no interest", "don't want", "dont want", "no thanks",
+            "not needing", "no assistance", "refuse", "declined", "stop calling",
+            "do not call", "don't call", "never call", "remove my number"
+        ])
+        is_reschedule = any(phrase in lower_tx for phrase in [
+            "call me", "call back", "reschedule", "later today", "tomorrow at",
+            "after", "later this week", "next week", "would work better"
         ])
 
         # Default fallbacks before async background LLM enrichment
         if transcript:
             call.transcript = transcript
-            call.summary = "Do Not Call Request" if is_opt_out else "General Inquiry"
-            call.category = "COLD" if is_opt_out else "UNCATEGORIZED"
+            if is_not_interested:
+                call.summary = "Not Interested"
+                call.category = "COLD"
+            elif is_reschedule:
+                call.summary = "Callback Requested"
+                call.category = "WARM"
+            else:
+                call.summary = "General Inquiry"
+                call.category = "UNCATEGORIZED"
         else:
             call.summary = "General Inquiry"
             call.category = "UNCATEGORIZED"
@@ -235,14 +246,16 @@ class CallService:
                 contact.customer_name = customer_name
 
             if is_voicemail:
-                contact.response = "No Answer"
-            elif is_opt_out:
-                contact.response = "Do Not Call / Refusal"
+                contact.response = "Voicemail"
+            elif is_not_interested:
+                contact.response = "Not Interested"
             elif has_valid_appointment:
                 contact.appointment_date = appointment_date
                 if appointment_time:
                     contact.appointment_time = appointment_time
-                contact.response = "Appointment Booked"
+                contact.response = "Rescheduled" if is_reschedule else "Appointment Booked"
+            elif is_reschedule:
+                contact.response = "Rescheduled"
             else:
                 contact.response = "Answered" if is_success else "No Answer / Cut"
 
@@ -280,7 +293,7 @@ class CallService:
         if transcript and len(transcript.strip()) > 20:
             import asyncio
             asyncio.create_task(
-                _analyze_and_update_summary(call.id, transcript, business_outcome, is_opt_out)
+                _analyze_and_update_summary(call.id, transcript, business_outcome, is_not_interested)
             )
 
         return call

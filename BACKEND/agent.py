@@ -68,11 +68,21 @@ AGENT_BASE_PROMPTS: dict[str, str] = {
     ),
 }
 
-# ── Date/time validation rules injected into every agent ──────────────────────
+# ── Date/time & Call Termination rules injected into every agent ─────────────
 DATE_TIME_VALIDATION_RULES = """
 TIME & APPOINTMENT VALIDATION RULES:
 - If the customer mentions a time without AM or PM (e.g. "3 o'clock" or "10:30"), ask: "Is that AM or PM?"
 - When calling finish_call, pass appointment_date in YYYY-MM-DD format (e.g. "2026-07-29") and appointment_time with AM/PM (e.g. "02:00 PM").
+
+CALL TERMINATION & FINISH_CALL RULES:
+- IF THE CUSTOMER SAYS "NOT INTERESTED", "NO THANKS", "DON'T CALL ME", "NOT REQUIRED", OR DECLINES:
+  1. Say: "No problem at all. Thank you for your time, and have a great day!"
+  2. IMMEDIATELY CALL THE `finish_call` TOOL! NEVER CONTINUE ASKING QUESTIONS OR PROLONG THE CALL AFTER DECLINE.
+- IF THE CUSTOMER SAYS "GOODBYE", "BYE", "THANK YOU", OR INDICATES HANGUP:
+  1. IMMEDIATELY CALL THE `finish_call` TOOL!
+- IF A CALLBACK OR APPOINTMENT IS CONFIRMED:
+  1. Confirm the date/time.
+  2. IMMEDIATELY CALL THE `finish_call` TOOL!
 """
 
 
