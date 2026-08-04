@@ -6,15 +6,11 @@ from livekit.protocol.sip import CreateSIPParticipantRequest
 
 import os
 
-TRUNK_ID = os.getenv("SIP_TRUNK_ID", "ST_mmfofL7PdLRq")
-
 
 async def make_livekit_call(
     phone: str,
     room_name: str,
-    
 ):
-
     lkapi = api.LiveKitAPI()
     
     # Sanitize the phone number to remove spaces, dashes, parentheses
@@ -25,9 +21,10 @@ async def make_livekit_call(
         else:
             clean_phone = f"+{clean_phone}"
 
+    sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_yZR7oi5aS79a")
     sip_call_from = os.getenv("SIP_CALL_FROM", "+917971442271")
     req = CreateSIPParticipantRequest(
-        sip_trunk_id=TRUNK_ID,
+        sip_trunk_id=sip_trunk_id,
         sip_call_to=clean_phone,
         sip_number=sip_call_from,
         room_name=room_name,
@@ -62,7 +59,6 @@ async def make_livekit_call(
         }
 
     except Exception as e:
-
         return {
             "success": False,
             "error": str(e),
