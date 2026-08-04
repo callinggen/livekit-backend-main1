@@ -1,3 +1,4 @@
+from typing import Any
 from dotenv import load_dotenv
 import asyncio
 import os
@@ -678,7 +679,7 @@ async def entrypoint(ctx: JobContext):
                     if isinstance(raw, str):
                         text = raw
                     elif isinstance(raw, list):
-                        text = " ".join(str(c) for c in raw if isinstance(c, str))
+                        text = " ".join(c for c in raw if isinstance(c, str))
                     else:
                         text = str(raw)
                 if role not in ("system", "tool") and text and text.strip():
