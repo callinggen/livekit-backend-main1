@@ -52,7 +52,12 @@ def _build_transcript(session: Any) -> str:
                 continue
 
             if text and text.strip():
-                lines.append(f"{role}: {text.strip()}")
+                clean_t = text.strip()
+                lower_t = clean_t.lower()
+                # Filter out Sarvam STT static audio model benchmark hallucinations
+                if "wave of covid" in lower_t or "second wave" in lower_t or "third wave" in lower_t:
+                    continue
+                lines.append(f"{role}: {clean_t}")
 
         return "\n".join(lines)
 
