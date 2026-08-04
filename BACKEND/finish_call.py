@@ -23,14 +23,14 @@ def _build_transcript(session: Any) -> str:
             print("Warning – session.chat_ctx/history is None, transcript will be empty.")
             return ""
 
-        # In some versions it's a list, in others it's an object with .messages or .messages()
+        messages: Any = []
         if hasattr(chat_ctx, "messages"):
             raw_msgs = getattr(chat_ctx, "messages", [])
-            messages = raw_msgs() if callable(raw_msgs) else raw_msgs
+            res = raw_msgs() if callable(raw_msgs) else raw_msgs
+            if isinstance(res, (list, tuple)):
+                messages = res
         elif isinstance(chat_ctx, (list, tuple)):
             messages = chat_ctx
-        else:
-            messages = []
 
         lines = []
         for msg in messages:
