@@ -727,16 +727,15 @@ async def entrypoint(ctx: JobContext):
 
         print(f"Registered active call: {ctx.room.name}")
 
-        # Wait for the SIP customer to actually answer and join the room.
-        # Since wait_until_answered=False, the room exists before the call
-        # is picked up, so we must not greet until the participant is present.
-        print("Waiting for customer participant to join...")
+        # Wait for the customer / inbound SIP participant to join the room.
+        print("Waiting for customer/inbound participant to join...")
         customer_joined = False
         for _ in range(60):  # wait up to 60 seconds
             participants = ctx.room.remote_participants
-            if any(p.identity == "customer" for p in participants.values()):
+            if len(participants) > 0:
                 customer_joined = True
-                print("Customer participant joined — starting greeting.")
+                identities = [p.identity for p in participants.values()]
+                print(f"Customer/Inbound participant joined ({identities}) — starting greeting.")
                 break
             await asyncio.sleep(1)
 
