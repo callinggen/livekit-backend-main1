@@ -756,13 +756,15 @@ async def entrypoint(ctx: JobContext):
             # Small buffer to let audio pipeline stabilize
             await asyncio.sleep(0.5)
 
-            # Build a personalised greeting using customer name if available
+            # Force the agent to strictly follow STEP 1 of the script verbatim
             greeting_instructions = (
-                f"Greet the customer by name ('{customer_name}') and introduce yourself. "
-                "Then follow the campaign script to begin the conversation."
+                f"You are now starting the call. The customer's name is '{customer_name}'. "
+                "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
+                "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
                 if customer_name.strip()
                 else
-                "Introduce yourself and begin the conversation following the campaign script."
+                "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
+                "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
             )
 
             await session.generate_reply(instructions=greeting_instructions)
