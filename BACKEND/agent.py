@@ -635,9 +635,9 @@ async def entrypoint(ctx: JobContext):
                     _handle_unexpected_disconnect("customer hung up")
                 )
 
-        # Dynamic voice selection based on agent_type
-        speaker_voice = "ashutosh" if "Raj" in agent_type else "shreya"
-        print(f"[agent] Selected TTS speaker: {speaker_voice} for agent: {agent_type}")
+        # Dynamic voice selection based on agent_type using cost-effective bulbul:v2 model (50% cheaper)
+        speaker_voice = "abhilash" if "Raj" in agent_type else "anushka"
+        print(f"[agent] Selected TTS speaker: {speaker_voice} (bulbul:v2) for agent: {agent_type}")
 
         session = AgentSession(
             vad=silero.VAD.load(),
@@ -650,6 +650,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
+                model="bulbul:v2",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
