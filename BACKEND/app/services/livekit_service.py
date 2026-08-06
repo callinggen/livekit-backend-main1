@@ -34,6 +34,17 @@ async def make_livekit_call(
     )
 
     try:
+        # Dispatch AI Agent Worker to the room
+        try:
+            await lkapi.agent_dispatch.create_dispatch(
+                api.CreateAgentDispatchRequest(
+                    room=room_name,
+                    agent_name="",
+                )
+            )
+        except Exception as d_err:
+            print(f"[livekit_service] Agent dispatch note: {d_err}")
+
         participant = await lkapi.sip.create_sip_participant(req)
 
         return {
