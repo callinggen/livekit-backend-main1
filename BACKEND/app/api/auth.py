@@ -35,51 +35,81 @@ def validate_password_policy(password: str):
 async def login(
     login_data: LoginRequest, db: AsyncSession = Depends(get_db)
 ):
-    identifier = login_data.identifier
-    
-    # Try fetching by email first
-    stmt = select(User).where(User.email == identifier)
-    result = await db.execute(stmt)
-    user = result.scalars().first()
-    
-    if not user:
-        # Try fetching by phone
-        stmt = select(User).where(User.phone_number == identifier)
+    try:
+        identifier = login_data.identifier
+        
+        # Try fetching by email first
+        stmt = select(User).where(User.email == identifier)
         result = await db.execute(stmt)
         user = result.scalars().first()
         
-    if not user:
+        if not user:
+            # Try fetching by phone safely
+            try:
+                stmt = select(User).where(User.phone_number == identifier)
+                result = await db.execute(stmt)
+                user = result.scalars().first()
+            except Exception:
+                pass
+            
+        if not user:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "status": "user_not_found",
+                    "message": "No account exists with this email."
+                }
+            )
+            
+        if not login_data.password or not verify_password(login_data.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Incorrect email/phone number or password",
+            )
+            
+        # Update last login safely
+        try:
+            user.last_login_at = datetime.utcnow()
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            print(f"Warning: could not update last_login_at: {e}")
+            
+        is_first_login = getattr(user, 'is_first_login', False)
+        if is_first_login is None:
+            is_first_login = False
+
+        is_admin = getattr(user, 'is_admin', False)
+        if is_admin is None:
+            is_admin = False
+
+        credits_val = getattr(user, 'credits', 2000)
+        if credits_val is None:
+            credits_val = 2000
+
+        full_name_val = getattr(user, 'full_name', None) or user.email or "User"
+            
+        return Token(
+            access_token=create_access_token(
+                subject=user.id, 
+                is_first_login=is_first_login, 
+                is_admin=is_admin
+            ),
+            token_type="bearer",
+            full_name=full_name_val,
+            is_first_login=is_first_login,
+            is_admin=is_admin,
+            refresh_token=None,
+            credits=credits_val
+        )
+    except HTTPException:
+        raise
+    except Exception as err:
+        print(f"Error during login: {err}")
         return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={
-                "status": "user_not_found",
-                "message": "No account exists with this email."
-            }
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"Server login error: {str(err)}"}
         )
-        
-    if not login_data.password or not verify_password(login_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email/phone number or password",
-        )
-        
-    # Update last login
-    user.last_login_at = datetime.utcnow()
-    await db.commit()
-        
-    return Token(
-        access_token=create_access_token(
-            subject=user.id, 
-            is_first_login=user.is_first_login, 
-            is_admin=user.is_admin
-        ),
-        token_type="bearer",
-        full_name=user.full_name,
-        is_first_login=user.is_first_login,
-        is_admin=user.is_admin,
-        refresh_token=None,
-        credits=user.credits
-    )
 
 
 
