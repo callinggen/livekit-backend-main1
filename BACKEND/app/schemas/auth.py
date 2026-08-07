@@ -8,6 +8,7 @@ class Token(BaseModel):
     is_admin: bool = False
     refresh_token: str | None = None
     credits: int = 2000
+    subscription_plan: str | None = None
 
 class TokenPayload(BaseModel):
     sub: str | None = None
@@ -24,6 +25,7 @@ class UserResponse(BaseModel):
     email: str | None = None
     phone_number: str | None = None
     credits: int = 2000
+    subscription_plan: str | None = None
 
     class Config:
         from_attributes = True
@@ -53,3 +55,5 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     phone_number: str | None = None
     password: str
+    subscription_plan: str | None = None
+    credits: int | None = None

@@ -78,7 +78,8 @@ async def login(
         is_first_login=user.is_first_login,
         is_admin=user.is_admin,
         refresh_token=None,
-        credits=user.credits
+        credits=user.credits,
+        subscription_plan=user.subscription_plan
     )
 
 
@@ -122,7 +123,8 @@ async def change_password(
         "is_first_login": False,
         "is_admin": current_user.is_admin,
         "refresh_token": None,
-        "credits": current_user.credits
+        "credits": current_user.credits,
+        "subscription_plan": current_user.subscription_plan
     }
 
 @router.post("/forgot-password")
@@ -227,14 +229,15 @@ async def reset_password(
     return {"message": "Password reset successfully."}
 
 @router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me_old(current_user: User = Depends(get_current_user)):
     return {
         "id": current_user.id,
         "email": current_user.email,
         "full_name": current_user.full_name,
         "is_first_login": current_user.is_first_login,
         "is_admin": current_user.is_admin,
-        "credits": current_user.credits
+        "credits": current_user.credits,
+        "subscription_plan": current_user.subscription_plan
     }
 
 @router.get("/user/credits")
@@ -289,9 +292,13 @@ async def register_user(
         phone_number=user_data.phone_number,
         hashed_password=get_password_hash(user_data.password),
         is_first_login=False,
-        is_admin=False
+        is_admin=False,
+        subscription_plan=user_data.subscription_plan
     )
     
+    if user_data.credits is not None:
+        new_user.credits = user_data.credits
+
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
@@ -316,4 +323,5 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "credits": current_user.credits,
         "is_first_login": current_user.is_first_login,
         "is_admin": current_user.is_admin,
+        "subscription_plan": current_user.subscription_plan,
     }
