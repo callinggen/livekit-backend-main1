@@ -635,9 +635,9 @@ async def entrypoint(ctx: JobContext):
                     _handle_unexpected_disconnect("customer hung up")
                 )
 
-        # Dynamic voice selection based on agent_type
-        speaker_voice = "ashutosh" if "Raj" in agent_type else "shreya"
-        print(f"[agent] Selected TTS speaker: {speaker_voice} for agent: {agent_type}")
+        # Dynamic voice selection based on agent_type using cost-effective bulbul:v2 model (50% cheaper)
+        speaker_voice = "abhilash" if "Raj" in agent_type else "anushka"
+        print(f"[agent] Selected TTS speaker: {speaker_voice} (bulbul:v2) for agent: {agent_type}")
 
         session = AgentSession(
             vad=silero.VAD.load(),
@@ -650,6 +650,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
+                model="bulbul:v2",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
@@ -727,16 +728,15 @@ async def entrypoint(ctx: JobContext):
 
         print(f"Registered active call: {ctx.room.name}")
 
-        # Wait for the SIP customer to actually answer and join the room.
-        # Since wait_until_answered=False, the room exists before the call
-        # is picked up, so we must not greet until the participant is present.
-        print("Waiting for customer participant to join...")
+        # Wait for the customer / inbound SIP participant to join the room.
+        print("Waiting for customer/inbound participant to join...")
         customer_joined = False
         for _ in range(60):  # wait up to 60 seconds
             participants = ctx.room.remote_participants
-            if any(p.identity == "customer" for p in participants.values()):
+            if len(participants) > 0:
                 customer_joined = True
-                print("Customer participant joined — starting greeting.")
+                identities = [p.identity for p in participants.values()]
+                print(f"Customer/Inbound participant joined ({identities}) — starting greeting.")
                 break
             await asyncio.sleep(1)
 
@@ -757,13 +757,15 @@ async def entrypoint(ctx: JobContext):
             # Small buffer to let audio pipeline stabilize
             await asyncio.sleep(0.5)
 
-            # Build a personalised greeting using customer name if available
+            # Force the agent to strictly follow STEP 1 of the script verbatim
             greeting_instructions = (
-                f"Greet the customer by name ('{customer_name}') and introduce yourself. "
-                "Then follow the campaign script to begin the conversation."
+                f"You are now starting the call. The customer's name is '{customer_name}'. "
+                "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
+                "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
                 if customer_name.strip()
                 else
-                "Introduce yourself and begin the conversation following the campaign script."
+                "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
+                "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
             )
 
             await session.generate_reply(instructions=greeting_instructions)
