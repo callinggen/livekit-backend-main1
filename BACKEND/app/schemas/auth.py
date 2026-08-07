@@ -1,4 +1,6 @@
 from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+from app.schemas.agent import AgentCreate
 
 class Token(BaseModel):
     access_token: str
@@ -57,3 +59,4 @@ class RegisterRequest(BaseModel):
     password: str
     subscription_plan: str | None = None
     credits: int | None = None
+    agents: Optional[List[AgentCreate]] = None
