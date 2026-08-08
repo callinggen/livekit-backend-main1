@@ -22,6 +22,8 @@ class UserUpdateRequest(BaseModel):
     phone_number: str | None = None
     credits: int | None = None
     subscription_plan: str | None = None
+    company_name: str | None = None
+    industry: str | None = None
 
 @router.get("/stats")
 async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
@@ -200,17 +202,23 @@ async def create_user(
             detail="Must provide either email or phone number"
         )
 
-    temp_password = secrets.token_urlsafe(12)
+    raw_password = user_data.password or secrets.token_urlsafe(12)
 
     new_user = User(
         full_name=user_data.full_name,
         email=user_data.email,
         phone_number=user_data.phone_number,
-        hashed_password=get_password_hash(temp_password),
-        is_first_login=True,
+        hashed_password=get_password_hash(raw_password),
+        is_first_login=False if user_data.password else True,
         is_admin=False,
-        credits=2000,
-        subscription_plan="Starter"
+        credits=user_data.credits if user_data.credits is not None else 2000,
+        subscription_plan=user_data.subscription_plan or "Starter",
+        company_name=user_data.company_name,
+        industry=user_data.industry,
+        agent_name=user_data.agent_name,
+        agent_language=user_data.agent_language,
+        agent_voice=user_data.agent_voice,
+        agent_script=user_data.agent_script,
     )
     
     db.add(new_user)
@@ -230,6 +238,11 @@ async def create_user(
             "raw_id": new_user.id,
             "email": new_user.email,
             "full_name": new_user.full_name,
+            "company_name": getattr(new_user, "company_name", None),
+            "industry": getattr(new_user, "industry", None),
+            "agent_name": getattr(new_user, "agent_name", None),
+            "agent_language": getattr(new_user, "agent_language", None),
+            "agent_voice": getattr(new_user, "agent_voice", None),
             "credits": new_user.credits,
             "subscription_plan": new_user.subscription_plan
         }
@@ -261,6 +274,10 @@ async def update_user_by_admin(
         user.credits = update_data.credits
     if update_data.subscription_plan is not None:
         user.subscription_plan = update_data.subscription_plan
+    if update_data.company_name is not None:
+        user.company_name = update_data.company_name
+    if update_data.industry is not None:
+        user.industry = update_data.industry
 
     await db.commit()
     await db.refresh(user)
@@ -272,6 +289,8 @@ async def update_user_by_admin(
             "raw_id": user.id,
             "name": user.full_name,
             "email": user.email,
+            "company_name": getattr(user, "company_name", "CallingGen Corp"),
+            "industry": getattr(user, "industry", "Technology & Software"),
             "credits": user.credits,
             "plan": user.subscription_plan
         }

@@ -12,7 +12,7 @@ import secrets
 from app.database import get_db
 from app.models.user import User
 from app.models.password_reset import PasswordReset
-from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest
+from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
 
@@ -79,7 +79,14 @@ async def login(
         is_admin=user.is_admin,
         refresh_token=None,
         credits=user.credits,
-        subscription_plan=user.subscription_plan
+        subscription_plan=user.subscription_plan,
+        company_name=getattr(user, "company_name", None),
+        industry=getattr(user, "industry", None),
+        phone_number=user.phone_number,
+        agent_name=getattr(user, "agent_name", None),
+        agent_language=getattr(user, "agent_language", None),
+        agent_voice=getattr(user, "agent_voice", None),
+        agent_script=getattr(user, "agent_script", None),
     )
 
 
@@ -228,18 +235,6 @@ async def reset_password(
     
     return {"message": "Password reset successfully."}
 
-@router.get("/me")
-async def get_me_old(current_user: User = Depends(get_current_user)):
-    return {
-        "id": current_user.id,
-        "email": current_user.email,
-        "full_name": current_user.full_name,
-        "is_first_login": current_user.is_first_login,
-        "is_admin": current_user.is_admin,
-        "credits": current_user.credits,
-        "subscription_plan": current_user.subscription_plan
-    }
-
 @router.get("/user/credits")
 async def get_user_credits(current_user: User = Depends(get_current_user)):
     return {
@@ -293,7 +288,13 @@ async def register_user(
         hashed_password=get_password_hash(user_data.password),
         is_first_login=False,
         is_admin=False,
-        subscription_plan=user_data.subscription_plan
+        subscription_plan=user_data.subscription_plan,
+        company_name=user_data.company_name,
+        industry=user_data.industry,
+        agent_name=user_data.agent_name,
+        agent_language=user_data.agent_language,
+        agent_voice=user_data.agent_voice,
+        agent_script=user_data.agent_script,
     )
     
     if user_data.credits is not None:
@@ -308,7 +309,12 @@ async def register_user(
         "user": {
             "id": new_user.id,
             "email": new_user.email,
-            "full_name": new_user.full_name
+            "full_name": new_user.full_name,
+            "company_name": new_user.company_name,
+            "industry": new_user.industry,
+            "agent_name": new_user.agent_name,
+            "agent_language": new_user.agent_language,
+            "agent_voice": new_user.agent_voice,
         }
     }
 
@@ -320,8 +326,59 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "phone_number": current_user.phone_number,
         "full_name": current_user.full_name,
+        "company_name": getattr(current_user, "company_name", None),
+        "industry": getattr(current_user, "industry", None),
         "credits": current_user.credits,
         "is_first_login": current_user.is_first_login,
         "is_admin": current_user.is_admin,
         "subscription_plan": current_user.subscription_plan,
+        "agent_name": getattr(current_user, "agent_name", None),
+        "agent_language": getattr(current_user, "agent_language", None),
+        "agent_voice": getattr(current_user, "agent_voice", None),
+        "agent_script": getattr(current_user, "agent_script", None),
     }
+
+@router.put("/profile")
+async def update_my_profile(
+    data: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if data.full_name is not None:
+        current_user.full_name = data.full_name
+    if data.company_name is not None:
+        current_user.company_name = data.company_name
+    if data.industry is not None:
+        current_user.industry = data.industry
+    if data.phone_number is not None:
+        current_user.phone_number = data.phone_number
+    if data.agent_name is not None:
+        current_user.agent_name = data.agent_name
+    if data.agent_language is not None:
+        current_user.agent_language = data.agent_language
+    if data.agent_voice is not None:
+        current_user.agent_voice = data.agent_voice
+    if data.agent_script is not None:
+        current_user.agent_script = data.agent_script
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    return {
+        "message": "Profile updated successfully",
+        "user": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "full_name": current_user.full_name,
+            "company_name": getattr(current_user, "company_name", None),
+            "industry": getattr(current_user, "industry", None),
+            "phone_number": current_user.phone_number,
+            "credits": current_user.credits,
+            "subscription_plan": current_user.subscription_plan,
+            "agent_name": getattr(current_user, "agent_name", None),
+            "agent_language": getattr(current_user, "agent_language", None),
+            "agent_voice": getattr(current_user, "agent_voice", None),
+            "agent_script": getattr(current_user, "agent_script", None),
+        }
+    }
+
