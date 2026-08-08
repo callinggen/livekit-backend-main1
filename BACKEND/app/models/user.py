@@ -64,3 +64,8 @@ class User(Base):
         Integer,
         default=2000,
     )
+
+    subscription_plan: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
