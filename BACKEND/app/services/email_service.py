@@ -97,9 +97,14 @@ class EmailService:
         self._send_email(to_email, subject, html_body, is_html=True)
 
     # --- Account & Admin Notifications ---
-    def send_welcome_email(self, to_email: str, temp_password: str, full_name: str = "User", company_name: str | None = None):
+    def send_welcome_email(self, to_email: str, temp_password: str, full_name: str = "User", company_name: str | None = None, plan_name: str = "Starter", credits: int = 2000):
         subject = "Welcome to CallingGen - Account Credentials"
-        html_body = email_templates.get_welcome_account_html(full_name, to_email, temp_password, company_name)
+        html_body = email_templates.get_welcome_account_html(full_name, to_email, temp_password, company_name, plan_name, credits)
+        self._send_email(to_email, subject, html_body, is_html=True)
+
+    def send_plan_credit_updated_email(self, to_email: str, full_name: str, plan_name: str, new_credits: int):
+        subject = f"CallingGen Subscription Updated: {plan_name} ({new_credits} credits)"
+        html_body = email_templates.get_plan_credit_updated_html(full_name, to_email, plan_name, new_credits)
         self._send_email(to_email, subject, html_body, is_html=True)
 
     def send_account_activated_email(self, to_email: str, full_name: str):
@@ -114,3 +119,4 @@ class EmailService:
 
 # Create a singleton instance
 email_service = EmailService()
+

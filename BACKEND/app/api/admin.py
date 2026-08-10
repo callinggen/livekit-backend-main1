@@ -296,7 +296,9 @@ async def update_user_by_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    old_credits = user.credits or 0
     credits_changed = False
+    plan_changed = False
     status_changed_to_active = False
     status_changed_to_inactive = False
 
@@ -309,8 +311,9 @@ async def update_user_by_admin(
     if update_data.credits is not None and update_data.credits != user.credits:
         user.credits = update_data.credits
         credits_changed = True
-    if update_data.subscription_plan is not None:
+    if update_data.subscription_plan is not None and update_data.subscription_plan != user.subscription_plan:
         user.subscription_plan = update_data.subscription_plan
+        plan_changed = True
     if update_data.company_name is not None:
         user.company_name = update_data.company_name
     if update_data.industry is not None:
@@ -338,7 +341,10 @@ async def update_user_by_admin(
     await db.refresh(user)
 
     # Trigger notification events
-    if credits_changed:
+    if credits_changed or plan_changed:
+        # If credits were increased/topped up or plan updated, send confirmation email
+        if plan_changed or (update_data.credits is not None and update_data.credits > old_credits):
+            notification_service.notify_plan_credit_updated(user)
         try:
             await notification_service.check_and_trigger_credit_notifications(db, user)
         except Exception as e:
@@ -348,6 +354,7 @@ async def update_user_by_admin(
         notification_service.notify_account_activated(user)
     elif status_changed_to_inactive:
         notification_service.notify_account_deactivated(user)
+
 
     return {
         "message": "User updated successfully",

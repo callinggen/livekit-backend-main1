@@ -164,25 +164,47 @@ def get_password_reset_success_html(full_name: str, email: str) -> str:
     """
     return _wrap_email_layout("Password Reset Confirmation", body, button_text="Log In to Account", button_url="#/login")
 
-def get_welcome_account_html(full_name: str, email: str, temp_password: str, company_name: str | None = None) -> str:
+def get_welcome_account_html(full_name: str, email: str, temp_password: str, company_name: str | None = None, plan_name: str = "Starter", credits: int = 2000) -> str:
     name_str = html.escape(full_name or "User")
     email_str = html.escape(email)
     pass_str = html.escape(temp_password)
     comp_str = html.escape(company_name or "CallingGen")
+    plan_str = html.escape(plan_name or "Starter")
     
     body = f"""
     <p>Hello <strong>{name_str}</strong>,</p>
     <p>Welcome to CallingGen! An administrator has created a new account for you under <strong>{comp_str}</strong>.</p>
     
     <div style="background-color: #1e293b; border: 1px solid #334155; padding: 18px; border-radius: 8px; margin: 20px 0;">
-        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Login Credentials</div>
+        <div style="font-size: 12px; color: #94a3b8; font-weight: 600; text-transform: uppercase;">Account & Credentials Summary</div>
         <div style="margin-top: 10px; font-size: 14px;"><strong>Email:</strong> <span style="color: #60a5fa;">{email_str}</span></div>
-        <div style="margin-top: 6px; font-size: 14px;"><strong>Temporary Password:</strong> <code style="background-color: #0f172a; color: #34d399; padding: 4px 8px; border-radius: 4px; font-family: monospace;">{pass_str}</code></div>
+        <div style="margin-top: 6px; font-size: 14px;"><strong>Subscription Plan:</strong> <span style="color: #c084fc; font-weight: 600;">{plan_str}</span></div>
+        <div style="margin-top: 6px; font-size: 14px;"><strong>Initial Credits Allocated:</strong> <span style="color: #34d399; font-weight: 600;">{credits} Credits</span></div>
+        <div style="margin-top: 10px; font-size: 14px; border-top: 1px border-zinc-700; pt-2;"><strong>Temporary Password:</strong> <code style="background-color: #0f172a; color: #34d399; padding: 4px 8px; border-radius: 4px; font-family: monospace;">{pass_str}</code></div>
     </div>
 
     <p style="font-size: 13px; color: #94a3b8;">Upon your first login, you will be prompted to change your temporary password to a secure personal password.</p>
     """
     return _wrap_email_layout("Welcome to CallingGen", body, button_text="Log In & Complete Setup", button_url="#/login")
+
+def get_plan_credit_updated_html(full_name: str, email: str, plan_name: str, new_credits: int) -> str:
+    name_str = html.escape(full_name or "Client")
+    email_str = html.escape(email)
+    plan_str = html.escape(plan_name or "Standard")
+    
+    body = f"""
+    <p>Hello <strong>{name_str}</strong>,</p>
+    <p>Your CallingGen account subscription plan and credit allocation have been updated by your account administrator.</p>
+    
+    <div style="background-color: #1e1b4b; border-left: 4px solid #8b5cf6; padding: 18px; border-radius: 8px; margin: 20px 0;">
+        <div style="font-size: 12px; color: #c4b5fd; font-weight: 600; text-transform: uppercase;">Updated Subscription & Balance</div>
+        <div style="margin-top: 10px; font-size: 15px; color: #ffffff;"><strong>Active Plan:</strong> <span style="color: #ddd6fe; font-weight: 700;">{plan_str}</span></div>
+        <div style="margin-top: 6px; font-size: 22px; font-weight: 800; color: #34d399;">{new_credits} <span style="font-size: 14px; font-weight: 500; color: #a7f3d0;">Total Available Credits</span></div>
+    </div>
+
+    <p>You can now use your updated credit balance to launch AI voice calling campaigns.</p>
+    """
+    return _wrap_email_layout("CallingGen Subscription & Credits Updated", body, button_text="View Account Dashboard", button_url="#/dashboard")
 
 def get_account_activated_html(full_name: str, email: str) -> str:
     name_str = html.escape(full_name or "Client")
@@ -211,3 +233,4 @@ def get_account_deactivated_html(full_name: str, email: str) -> str:
     <p>If you believe this is an error or need assistance reactivating your account, please contact support or your account manager.</p>
     """
     return _wrap_email_layout("Account Deactivated Notice", body)
+

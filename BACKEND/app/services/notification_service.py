@@ -176,9 +176,24 @@ class NotificationService:
                 temp_password=temp_password,
                 full_name=user.full_name or "User",
                 company_name=user.company_name,
+                plan_name=user.subscription_plan or "Starter",
+                credits=user.credits or 2000,
             )
         except Exception as e:
             print(f"[NotificationService] Error sending welcome email: {e}")
+
+    def notify_plan_credit_updated(self, user: User):
+        if not user or not user.email:
+            return
+        try:
+            email_service.send_plan_credit_updated_email(
+                to_email=user.email,
+                full_name=user.full_name or "User",
+                plan_name=user.subscription_plan or "Standard",
+                new_credits=user.credits or 0,
+            )
+        except Exception as e:
+            print(f"[NotificationService] Error sending plan credit updated email: {e}")
 
     def notify_account_activated(self, user: User):
         if not user or not user.email:
@@ -204,3 +219,4 @@ class NotificationService:
 
 # Singleton instance
 notification_service = NotificationService()
+
