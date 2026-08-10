@@ -209,7 +209,7 @@ async def create_user(
         email=user_data.email,
         phone_number=user_data.phone_number,
         hashed_password=get_password_hash(raw_password),
-        is_first_login=False if user_data.password else True,
+        is_first_login=True,
         is_admin=False,
         credits=user_data.credits if user_data.credits is not None else 2000,
         subscription_plan=user_data.subscription_plan or "Starter",
@@ -227,7 +227,7 @@ async def create_user(
     
     if user_data.email:
         try:
-            email_service.send_welcome_email(user_data.email, temp_password)
+            email_service.send_welcome_email(user_data.email, raw_password)
         except Exception as e:
             print(f"Failed to send welcome email to {user_data.email}: {e}")
     
