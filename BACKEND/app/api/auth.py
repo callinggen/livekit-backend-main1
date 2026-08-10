@@ -65,7 +65,7 @@ async def login(
         )
         
     # Update last login
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
         
     return Token(
@@ -116,7 +116,7 @@ async def change_password(
 
     current_user.hashed_password = get_password_hash(data.new_password)
     current_user.is_first_login = False
-    current_user.password_changed_at = datetime.utcnow()
+    current_user.password_changed_at = datetime.now(timezone.utc)
     
     await db.commit()
     
@@ -159,7 +159,7 @@ async def forgot_password(
         )
         
     reset_code = ''.join(random.choices(string.digits, k=6))
-    expires_at = datetime.utcnow() + timedelta(minutes=15)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
     
     reset_entry = PasswordReset(
         email=clean_email,
@@ -196,7 +196,7 @@ async def verify_reset_code(
     stmt = select(PasswordReset).where(
         func.lower(PasswordReset.email) == clean_email,
         PasswordReset.reset_code == data.reset_code.strip(),
-        PasswordReset.expires_at > datetime.utcnow()
+        PasswordReset.expires_at > datetime.now(timezone.utc)
     )
     result = await db.execute(stmt)
     reset_entry = result.scalars().first()
@@ -217,7 +217,7 @@ async def reset_password(
     stmt = select(PasswordReset).where(
         func.lower(PasswordReset.email) == clean_email,
         PasswordReset.reset_code == data.reset_code.strip(),
-        PasswordReset.expires_at > datetime.utcnow()
+        PasswordReset.expires_at > datetime.now(timezone.utc)
     )
     result = await db.execute(stmt)
     reset_entry = result.scalars().first()
@@ -248,7 +248,7 @@ async def reset_password(
         
     user.hashed_password = get_password_hash(data.new_password)
     user.is_first_login = False
-    user.password_changed_at = datetime.utcnow()
+    user.password_changed_at = datetime.now(timezone.utc)
     
     await db.delete(reset_entry)
     await db.commit()
