@@ -6,3 +6,4 @@ from .report import Report
 from .user import User
 from .password_reset import PasswordReset
 from .notification_state import UserNotificationState
+from .agent import Agent

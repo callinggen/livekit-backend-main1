@@ -21,7 +21,10 @@ async def make_livekit_call(
         else:
             clean_phone = f"+{clean_phone}"
 
-    sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_yZR7oi5aS79a")
+    sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3yaCewggPpAs")
+    if sip_trunk_id == "ST_yZR7oi5aS79a":
+        sip_trunk_id = "ST_3yaCewggPpAs"
+        
     sip_call_from = os.getenv("SIP_CALL_FROM", "+917971442271")
     req = CreateSIPParticipantRequest(
         sip_trunk_id=sip_trunk_id,

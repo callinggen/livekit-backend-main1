@@ -12,6 +12,7 @@ import secrets
 from app.database import get_db
 from app.models.user import User
 from app.models.password_reset import PasswordReset
+from app.models.agent import Agent
 from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
@@ -66,7 +67,7 @@ async def login(
         )
         
     # Update last login
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
         
     return Token(
@@ -119,7 +120,7 @@ async def change_password(
 
     current_user.hashed_password = get_password_hash(data.new_password)
     current_user.is_first_login = False
-    current_user.password_changed_at = datetime.utcnow()
+    current_user.password_changed_at = datetime.now(timezone.utc)
     
     await db.commit()
 
@@ -168,7 +169,7 @@ async def forgot_password(
         )
         
     reset_code = ''.join(random.choices(string.digits, k=6))
-    expires_at = datetime.utcnow() + timedelta(minutes=15)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
     
     reset_entry = PasswordReset(
         email=clean_email,
@@ -206,7 +207,7 @@ async def verify_reset_code(
     stmt = select(PasswordReset).where(
         func.lower(PasswordReset.email) == clean_email,
         PasswordReset.reset_code == data.reset_code.strip(),
-        PasswordReset.expires_at > datetime.utcnow()
+        PasswordReset.expires_at > datetime.now(timezone.utc)
     )
     result = await db.execute(stmt)
     reset_entry = result.scalars().first()
@@ -227,7 +228,7 @@ async def reset_password(
     stmt = select(PasswordReset).where(
         func.lower(PasswordReset.email) == clean_email,
         PasswordReset.reset_code == data.reset_code.strip(),
-        PasswordReset.expires_at > datetime.utcnow()
+        PasswordReset.expires_at > datetime.now(timezone.utc)
     )
     result = await db.execute(stmt)
     reset_entry = result.scalars().first()
@@ -258,7 +259,7 @@ async def reset_password(
         
     user.hashed_password = get_password_hash(data.new_password)
     user.is_first_login = False
-    user.password_changed_at = datetime.utcnow()
+    user.password_changed_at = datetime.now(timezone.utc)
     
     await db.delete(reset_entry)
     await db.commit()
@@ -336,6 +337,19 @@ async def register_user(
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+    
+    # Create associated agents if provided
+    if user_data.agents:
+        for agent_data in user_data.agents:
+            new_agent = Agent(
+                user_id=new_user.id,
+                name=agent_data.name,
+                language=agent_data.language,
+                voice=agent_data.voice,
+                script=agent_data.script
+            )
+            db.add(new_agent)
+        await db.commit()
     
     return {
         "message": "User registered successfully",

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy import func
 from datetime import datetime, timedelta, timezone
 
@@ -103,7 +104,9 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     ]
 
     # 8. Recent users (top 10)
-    recent_users_res = await db.execute(select(User).order_by(User.created_at.desc()).limit(10))
+    recent_users_res = await db.execute(
+        select(User).options(selectinload(User.agents)).order_by(User.created_at.desc()).limit(10)
+    )
     recent_users_list = recent_users_res.scalars().all()
 
     recent_users = [
@@ -120,6 +123,17 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
             "status": "Active",
             "createdAt": u.created_at.isoformat() if u.created_at else datetime.utcnow().isoformat(),
+            "agents": [
+                {
+                    "id": f"AGT-{a.id}",
+                    "name": a.name,
+                    "language": a.language,
+                    "voice": a.voice,
+                    "script": a.script,
+                    "status": "Active"
+                }
+                for a in u.agents
+            ]
         }
         for u in recent_users_list
     ]
@@ -155,7 +169,7 @@ def Math_round(val: float) -> int:
 @router.get("/users")
 async def get_all_users(db: AsyncSession = Depends(get_db)):
     """Return list of all registered users."""
-    res = await db.execute(select(User).order_by(User.id.desc()))
+    res = await db.execute(select(User).options(selectinload(User.agents)).order_by(User.id.desc()))
     users = res.scalars().all()
 
     return [
@@ -173,9 +187,21 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
             "status": "Active" if getattr(u, "is_active", True) else "Inactive",
             "is_admin": u.is_admin,
             "createdAt": u.created_at.isoformat() if u.created_at else datetime.utcnow().isoformat(),
+            "agents": [
+                {
+                    "id": f"AGT-{a.id}",
+                    "name": a.name,
+                    "language": a.language,
+                    "voice": a.voice,
+                    "script": a.script,
+                    "status": "Active"
+                }
+                for a in u.agents
+            ]
         }
         for u in users
     ]
+
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 async def create_user(
