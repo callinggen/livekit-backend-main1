@@ -123,7 +123,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "credits": u.credits or 0,
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
             "status": "Active",
-            "createdAt": u.created_at.isoformat() if u.created_at else datetime.utcnow().isoformat(),
+            "createdAt": u.created_at.isoformat() if u.created_at else datetime.now(timezone.utc).isoformat(),
             "agents": [
                 {
                     "id": f"AGT-{a.id}",
@@ -165,7 +165,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     }
 
 def Math_round(val: float) -> int:
-    return int(round(val))
+    return round(val)
 
 @router.get("/users")
 async def get_all_users(db: AsyncSession = Depends(get_db)):

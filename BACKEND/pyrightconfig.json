@@ -1,13 +1,12 @@
 {
-  "pythonVersion": "3.12",
-  "venvPath": ".",
-  "venv": ".venv",
+  "pythonVersion": "3.14",
   "extraPaths": [
     ".",
-    ".venv/lib/python3.12/site-packages"
+    "C:\\Users\\DELL\\AppData\\Roaming\\Python\\Python314\\site-packages",
+    "C:\\Python314\\Lib\\site-packages"
   ],
   "exclude": [
-    "**/__pyrefly_virtual__/**",
-    ".venv/**"
+    "**/__pyrefly_virtual__/**"
   ]
 }
+
