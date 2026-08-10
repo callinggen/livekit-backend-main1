@@ -56,7 +56,7 @@ class ChangePasswordRequest(BaseModel):
 
 class UserCreateRequest(BaseModel):
     full_name: str
-    email: EmailStr
+    email: EmailStr | None = None
     phone_number: str | None = None
     password: str | None = None
     subscription_plan: str | None = None
