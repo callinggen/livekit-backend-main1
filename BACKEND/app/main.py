@@ -32,6 +32,12 @@ async def lifespan(app: FastAPI):
     # Ensure all tables exist on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        for col_name in ["company_name", "industry", "agent_name", "agent_language", "agent_voice", "agent_script"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} VARCHAR;"))
+            except Exception:
+                pass
 
     # Ensure default admin user exists
     async with AsyncSessionLocal() as db:

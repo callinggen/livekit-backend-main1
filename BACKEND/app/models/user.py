@@ -69,3 +69,35 @@ class User(Base):
         String,
         nullable=True,
     )
+
+    company_name: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    industry: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    agent_name: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    agent_language: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    agent_voice: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    agent_script: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+

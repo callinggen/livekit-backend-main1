@@ -9,6 +9,13 @@ class Token(BaseModel):
     refresh_token: str | None = None
     credits: int = 2000
     subscription_plan: str | None = None
+    company_name: str | None = None
+    industry: str | None = None
+    phone_number: str | None = None
+    agent_name: str | None = None
+    agent_language: str | None = None
+    agent_voice: str | None = None
+    agent_script: str | None = None
 
 class TokenPayload(BaseModel):
     sub: str | None = None
@@ -49,6 +56,15 @@ class UserCreateRequest(BaseModel):
     full_name: str
     email: EmailStr
     phone_number: str | None = None
+    password: str | None = None
+    subscription_plan: str | None = None
+    credits: int | None = None
+    company_name: str | None = None
+    industry: str | None = None
+    agent_name: str | None = None
+    agent_language: str | None = None
+    agent_voice: str | None = None
+    agent_script: str | None = None
 
 class RegisterRequest(BaseModel):
     full_name: str
@@ -57,3 +73,21 @@ class RegisterRequest(BaseModel):
     password: str
     subscription_plan: str | None = None
     credits: int | None = None
+    company_name: str | None = None
+    industry: str | None = None
+    agent_name: str | None = None
+    agent_language: str | None = None
+    agent_voice: str | None = None
+    agent_script: str | None = None
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str | None = None
+    phone_number: str | None = None
+    company_name: str | None = None
+    industry: str | None = None
+    agent_name: str | None = None
+    agent_language: str | None = None
+    agent_voice: str | None = None
+    agent_script: str | None = None
+
+
