@@ -12,12 +12,8 @@ import secrets
 from app.database import get_db
 from app.models.user import User
 from app.models.password_reset import PasswordReset
-<<<<<<< HEAD
-from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
-=======
 from app.models.agent import Agent
-from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest
->>>>>>> origin/dynamic-agents-feature
+from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
 
