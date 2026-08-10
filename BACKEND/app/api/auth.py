@@ -12,7 +12,12 @@ import secrets
 from app.database import get_db
 from app.models.user import User
 from app.models.password_reset import PasswordReset
+<<<<<<< HEAD
 from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
+=======
+from app.models.agent import Agent
+from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest
+>>>>>>> origin/dynamic-agents-feature
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
 
@@ -322,6 +327,19 @@ async def register_user(
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+    
+    # Create associated agents if provided
+    if user_data.agents:
+        for agent_data in user_data.agents:
+            new_agent = Agent(
+                user_id=new_user.id,
+                name=agent_data.name,
+                language=agent_data.language,
+                voice=agent_data.voice,
+                script=agent_data.script
+            )
+            db.add(new_agent)
+        await db.commit()
     
     return {
         "message": "User registered successfully",

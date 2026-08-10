@@ -1,4 +1,6 @@
 from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+from app.schemas.agent import AgentCreate
 
 class Token(BaseModel):
     access_token: str
@@ -79,6 +81,7 @@ class RegisterRequest(BaseModel):
     agent_language: str | None = None
     agent_voice: str | None = None
     agent_script: str | None = None
+    agents: Optional[List[AgentCreate]] = None
 
 class ProfileUpdateRequest(BaseModel):
     full_name: str | None = None
@@ -89,5 +92,3 @@ class ProfileUpdateRequest(BaseModel):
     agent_language: str | None = None
     agent_voice: str | None = None
     agent_script: str | None = None
-
-

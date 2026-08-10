@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import DateTime, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -100,4 +100,4 @@ class User(Base):
         nullable=True,
     )
 
-
+    agents = relationship("Agent", back_populates="user", cascade="all, delete-orphan")
