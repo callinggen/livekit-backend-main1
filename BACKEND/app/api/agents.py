@@ -79,6 +79,20 @@ async def get_agents(
     agents = result.scalars().all()
     
     if not agents:
+        # Prioritize custom agent created during user registration / admin setup
+        if current_user.agent_name:
+            custom_agent = Agent(
+                user_id=current_user.id,
+                name=current_user.agent_name,
+                language=current_user.agent_language or "English (US)",
+                voice=current_user.agent_voice or "Nova (ElevenLabs)",
+                script=current_user.agent_script or ""
+            )
+            db.add(custom_agent)
+            await db.commit()
+            await db.refresh(custom_agent)
+            return [custom_agent]
+
         new_agents = []
         for da in DEFAULT_AGENTS:
             ag = Agent(

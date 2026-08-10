@@ -350,6 +350,16 @@ async def register_user(
             )
             db.add(new_agent)
         await db.commit()
+    elif user_data.agent_name:
+        new_agent = Agent(
+            user_id=new_user.id,
+            name=user_data.agent_name,
+            language=user_data.agent_language or "English (US)",
+            voice=user_data.agent_voice or "Nova (ElevenLabs)",
+            script=user_data.agent_script or ""
+        )
+        db.add(new_agent)
+        await db.commit()
     
     return {
         "message": "User registered successfully",
@@ -407,6 +417,29 @@ async def update_my_profile(
         current_user.agent_voice = data.agent_voice
     if data.agent_script is not None:
         current_user.agent_script = data.agent_script
+
+    # Sync with Agent model if an agent exists or create one
+    stmt = select(Agent).where(Agent.user_id == current_user.id)
+    res = await db.execute(stmt)
+    existing_agent = res.scalars().first()
+    if existing_agent:
+        if data.agent_name is not None:
+            existing_agent.name = data.agent_name
+        if data.agent_language is not None:
+            existing_agent.language = data.agent_language
+        if data.agent_voice is not None:
+            existing_agent.voice = data.agent_voice
+        if data.agent_script is not None:
+            existing_agent.script = data.agent_script
+    elif current_user.agent_name:
+        new_agent = Agent(
+            user_id=current_user.id,
+            name=current_user.agent_name,
+            language=current_user.agent_language or "English (US)",
+            voice=current_user.agent_voice or "Nova (ElevenLabs)",
+            script=current_user.agent_script or ""
+        )
+        db.add(new_agent)
 
     await db.commit()
     await db.refresh(current_user)
