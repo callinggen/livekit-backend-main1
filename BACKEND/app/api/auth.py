@@ -15,6 +15,8 @@ from app.models.password_reset import PasswordReset
 from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
+from app.services.notification_service import notification_service
+
 
 router = APIRouter()
 email_validator = TypeAdapter(EmailStr)
@@ -113,11 +115,19 @@ async def change_password(
             detail=str(e)
         )
 
+    was_first_login = current_user.is_first_login
+
     current_user.hashed_password = get_password_hash(data.new_password)
     current_user.is_first_login = False
     current_user.password_changed_at = datetime.utcnow()
     
     await db.commit()
+
+    if was_first_login:
+        notification_service.notify_first_time_password_changed(current_user)
+    else:
+        notification_service.notify_password_changed(current_user)
+
     
     return {
         "access_token": create_access_token(
@@ -174,7 +184,7 @@ async def forgot_password(
     print(f"==================================================\n")
 
     try:
-        email_service.send_password_reset_email(clean_email, reset_code)
+        notification_service.notify_password_reset_requested(clean_email, reset_code)
     except Exception as e:
         print(f"Email sending failed: {e}")
         # Delete the reset entry since we failed to send the email
@@ -184,6 +194,7 @@ async def forgot_password(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to send email to {clean_email}. Error: {str(e)}"
         )
+
         
     return {"message": f"Verification code sent to {clean_email}. Please check your inbox and Spam folder."}
 
@@ -252,7 +263,10 @@ async def reset_password(
     await db.delete(reset_entry)
     await db.commit()
     
+    notification_service.notify_password_reset_completed(user)
+    
     return {"message": "Password reset successfully."}
+
 
 @router.get("/user/credits")
 async def get_user_credits(current_user: User = Depends(get_current_user)):

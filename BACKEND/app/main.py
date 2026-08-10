@@ -24,6 +24,7 @@ from app.models.job import Job
 from app.models.call import Call
 from app.models.user import User
 from app.models.password_reset import PasswordReset
+from app.models.notification_state import UserNotificationState
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
 
@@ -33,11 +34,12 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         from sqlalchemy import text
-        for col_name in ["company_name", "industry", "agent_name", "agent_language", "agent_voice", "agent_script"]:
+        for col_name in ["company_name", "industry", "agent_name", "agent_language", "agent_voice", "agent_script", "is_active"]:
             try:
                 await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} VARCHAR;"))
             except Exception:
                 pass
+
 
     # Ensure default admin user exists
     async with AsyncSessionLocal() as db:

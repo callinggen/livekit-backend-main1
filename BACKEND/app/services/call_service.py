@@ -8,6 +8,8 @@ from app.models.contact import Contact
 from app.models.job import Job
 from app.models.campaign import Campaign
 from app.models.user import User
+from app.services.notification_service import notification_service
+
 
 
 async def _get_credit_owner_for_call(db: AsyncSession, call: Call) -> Optional[User]:
@@ -189,6 +191,11 @@ class CallService:
             if owner and owner.credits > 0:
                 owner.credits -= 1
                 call.credits_deducted = 1
+                try:
+                    await notification_service.check_and_trigger_credit_notifications(db, owner)
+                except Exception as e:
+                    print(f"Error checking credit notifications: {e}")
+
         
         if recording_url:
             call.recording_url = recording_url

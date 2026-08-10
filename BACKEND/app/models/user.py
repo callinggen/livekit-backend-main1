@@ -50,6 +50,11 @@ class User(Base):
         default=False,
     )
 
+    is_active: Mapped[bool] = mapped_column(
+        default=True,
+    )
+
+
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime,
         nullable=True,

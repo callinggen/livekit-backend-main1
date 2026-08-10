@@ -11,6 +11,7 @@ from app.models.call import Call
 from app.schemas.auth import UserCreateRequest
 from app.core.security import get_password_hash
 from app.services.email_service import email_service
+from app.services.notification_service import notification_service
 import secrets
 from pydantic import BaseModel
 
@@ -24,6 +25,9 @@ class UserUpdateRequest(BaseModel):
     subscription_plan: str | None = None
     company_name: str | None = None
     industry: str | None = None
+    status: str | None = None
+    is_active: bool | None = None
+
 
 @router.get("/stats")
 async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
@@ -166,7 +170,7 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
             "plan": u.subscription_plan or "Starter",
             "credits": u.credits or 0,
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
-            "status": "Active",
+            "status": "Active" if getattr(u, "is_active", True) else "Inactive",
             "is_admin": u.is_admin,
             "createdAt": u.created_at.isoformat() if u.created_at else datetime.utcnow().isoformat(),
         }
@@ -211,6 +215,7 @@ async def create_user(
         hashed_password=get_password_hash(raw_password),
         is_first_login=True,
         is_admin=False,
+        is_active=True,
         credits=user_data.credits if user_data.credits is not None else 2000,
         subscription_plan=user_data.subscription_plan or "Starter",
         company_name=user_data.company_name,
@@ -227,9 +232,10 @@ async def create_user(
     
     if user_data.email:
         try:
-            email_service.send_welcome_email(user_data.email, raw_password)
+            notification_service.notify_account_created(new_user, raw_password)
         except Exception as e:
             print(f"Failed to send welcome email to {user_data.email}: {e}")
+
     
     return {
         "message": "User created successfully",
@@ -264,14 +270,19 @@ async def update_user_by_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    credits_changed = False
+    status_changed_to_active = False
+    status_changed_to_inactive = False
+
     if update_data.full_name is not None:
         user.full_name = update_data.full_name
     if update_data.email is not None:
         user.email = update_data.email
     if update_data.phone_number is not None:
         user.phone_number = update_data.phone_number
-    if update_data.credits is not None:
+    if update_data.credits is not None and update_data.credits != user.credits:
         user.credits = update_data.credits
+        credits_changed = True
     if update_data.subscription_plan is not None:
         user.subscription_plan = update_data.subscription_plan
     if update_data.company_name is not None:
@@ -279,8 +290,38 @@ async def update_user_by_admin(
     if update_data.industry is not None:
         user.industry = update_data.industry
 
+    # Handle status toggles
+    if update_data.is_active is not None:
+        if update_data.is_active and not getattr(user, "is_active", True):
+            user.is_active = True
+            status_changed_to_active = True
+        elif not update_data.is_active and getattr(user, "is_active", True):
+            user.is_active = False
+            status_changed_to_inactive = True
+
+    if update_data.status is not None:
+        new_status = update_data.status.strip().lower()
+        if new_status == "active" and not getattr(user, "is_active", True):
+            user.is_active = True
+            status_changed_to_active = True
+        elif new_status in ("inactive", "suspended", "deactivated") and getattr(user, "is_active", True):
+            user.is_active = False
+            status_changed_to_inactive = True
+
     await db.commit()
     await db.refresh(user)
+
+    # Trigger notification events
+    if credits_changed:
+        try:
+            await notification_service.check_and_trigger_credit_notifications(db, user)
+        except Exception as e:
+            print(f"Error checking credit notifications on admin update: {e}")
+
+    if status_changed_to_active:
+        notification_service.notify_account_activated(user)
+    elif status_changed_to_inactive:
+        notification_service.notify_account_deactivated(user)
 
     return {
         "message": "User updated successfully",
@@ -292,9 +333,11 @@ async def update_user_by_admin(
             "company_name": getattr(user, "company_name", "CallingGen Corp"),
             "industry": getattr(user, "industry", "Technology & Software"),
             "credits": user.credits,
-            "plan": user.subscription_plan
+            "plan": user.subscription_plan,
+            "status": "Active" if getattr(user, "is_active", True) else "Inactive"
         }
     }
+
 
 @router.delete("/users/{user_id}")
 async def delete_user_by_admin(
