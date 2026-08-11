@@ -28,7 +28,7 @@ from app.database import AsyncSessionLocal
 from app.models.call import Call
 from app.models.contact import Contact
 from app.models.campaign import Campaign
-from app.models.agent import Agent
+from app.models.agent import Agent as AgentModel
 
 load_dotenv()
 
@@ -366,9 +366,9 @@ async def _get_campaign_info(call_id: int) -> dict:
 
             voice_profile = "Meera"  # Default fallback
             if campaign:
-                agent_stmt = select(Agent).where(
-                    Agent.name == campaign.agent,
-                    Agent.user_id == campaign.user_id
+                agent_stmt = select(AgentModel).where(
+                    AgentModel.name == campaign.agent,
+                    AgentModel.user_id == campaign.user_id
                 )
                 agent_res = await db.execute(agent_stmt)
                 agent_obj = agent_res.scalars().first()
