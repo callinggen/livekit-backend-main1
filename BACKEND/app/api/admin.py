@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
 from app.models.user import User
+from app.models.agent import Agent
 from app.models.campaign import Campaign
 from app.models.call import Call
 from app.models.agent import Agent
@@ -123,7 +124,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             "credits": u.credits or 0,
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
             "status": "Active",
-            "createdAt": u.created_at.isoformat() if u.created_at else datetime.utcnow().isoformat(),
+            "createdAt": u.created_at.isoformat() if u.created_at else datetime.now(timezone.utc).isoformat(),
             "agents": [
                 {
                     "id": f"AGT-{a.id}",
@@ -165,7 +166,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     }
 
 def Math_round(val: float) -> int:
-    return int(round(val))
+    return round(val)
 
 @router.get("/users")
 async def get_all_users(db: AsyncSession = Depends(get_db)):
@@ -187,7 +188,7 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
             "status": "Active" if getattr(u, "is_active", True) else "Inactive",
             "is_admin": u.is_admin,
-            "createdAt": u.created_at.isoformat() if u.created_at else datetime.utcnow().isoformat(),
+            "createdAt": u.created_at.isoformat() if u.created_at else datetime.now(timezone.utc).isoformat(),
             "agents": [
                 {
                     "id": f"AGT-{a.id}",
@@ -198,7 +199,18 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
                     "status": "Active"
                 }
                 for a in u.agents
-            ]
+            ] if u.agents else (
+                [
+                    {
+                        "id": f"AGT-{u.id}",
+                        "name": u.agent_name,
+                        "language": u.agent_language or "English (US)",
+                        "voice": u.agent_voice or "Nova (ElevenLabs)",
+                        "script": u.agent_script or "",
+                        "status": "Active"
+                    }
+                ] if u.agent_name else []
+            )
         }
         for u in users
     ]
@@ -267,6 +279,29 @@ async def create_user(
             script=user_data.agent_script or ""
         )
         db.add(custom_agent)
+        await db.commit()
+    
+    # Create associated Agent record for this specific account
+    if getattr(user_data, "agents", None):
+        for agent_data in user_data.agents:
+            ag = Agent(
+                user_id=new_user.id,
+                name=agent_data.name,
+                language=agent_data.language,
+                voice=agent_data.voice,
+                script=agent_data.script
+            )
+            db.add(ag)
+        await db.commit()
+    elif user_data.agent_name:
+        ag = Agent(
+            user_id=new_user.id,
+            name=user_data.agent_name,
+            language=user_data.agent_language or "English (US)",
+            voice=user_data.agent_voice or "Nova (ElevenLabs)",
+            script=user_data.agent_script or ""
+        )
+        db.add(ag)
         await db.commit()
     
     if user_data.email:
