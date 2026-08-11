@@ -144,8 +144,6 @@ class CallService:
         if call.started_at:
             started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
             call.duration = int((now - started).total_seconds())
-        elif call.duration is None:
-            call.duration = 0
 
         if recording_url:
             call.recording_url = recording_url
@@ -181,8 +179,8 @@ class CallService:
                         }
 
         # ── Determine if it's a success or failure ────────────────────
-        has_transcript = bool(transcript and len(transcript.strip()) > 0)
-        has_duration = bool(call.duration is not None and call.duration > 0)
+        has_transcript = bool(transcript and transcript.strip())
+        has_duration = call.duration > 0
         has_audio = bool(recording_url or (call.recording_url and os.path.exists(call.recording_url.lstrip("/"))))
 
         is_success = (has_transcript or has_duration or has_audio) and not is_voicemail

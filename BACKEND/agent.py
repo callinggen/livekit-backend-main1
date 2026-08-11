@@ -28,6 +28,7 @@ from app.database import AsyncSessionLocal
 from app.models.call import Call
 from app.models.contact import Contact
 from app.models.campaign import Campaign
+from app.models.agent import Agent as AgentModel
 
 load_dotenv()
 
@@ -347,14 +348,14 @@ async def _get_campaign_info(call_id: int) -> dict:
     """
     Look up the campaign and contact for a given call_id so the agent
     can use the correct script, agent type, and customer name.
-    Returns a dict with keys: agent_type, script, customer_name.
+    Returns a dict with keys: agent_type, script, customer_name, voice.
     """
     try:
         async with AsyncSessionLocal() as db:
             call = await db.get(Call, call_id)
             if call is None:
                 print(f"[agent] Warning: call {call_id} not found in DB")
-                return {"agent_type": "Voice-A (Sales)", "script": "", "customer_name": "", "metadata_fields": {}}
+                return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
 
             contact = await db.get(Contact, call.contact_id)
 
@@ -363,16 +364,28 @@ async def _get_campaign_info(call_id: int) -> dict:
             job = await db.get(Job, call.job_id)
             campaign = await db.get(Campaign, job.campaign_id) if job else None
 
+            voice_profile = "Meera"  # Default fallback
+            if campaign:
+                agent_stmt = select(AgentModel).where(
+                    AgentModel.name == campaign.agent,
+                    AgentModel.user_id == campaign.user_id
+                )
+                agent_res = await db.execute(agent_stmt)
+                agent_obj = agent_res.scalars().first()
+                if agent_obj:
+                    voice_profile = agent_obj.voice
+
             return {
                 "agent_type": campaign.agent if campaign else "Voice-E (Tax Agent)",
                 "script": campaign.script if campaign else "",
                 "customer_name": contact.name if contact else "",
                 "metadata_fields": contact.metadata_fields if contact else {},
                 "voicemail_detection": campaign.voicemail_detection if campaign else None,
+                "voice": voice_profile,
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
 
 
 async def entrypoint(ctx: JobContext):
@@ -639,9 +652,18 @@ async def entrypoint(ctx: JobContext):
                     _handle_unexpected_disconnect("customer hung up")
                 )
 
-        # Dynamic voice selection based on agent_type using cost-effective bulbul:v2 model (50% cheaper)
-        speaker_voice = "abhilash" if "Raj" in agent_type else "anushka"
-        print(f"[agent] Selected TTS speaker: {speaker_voice} (bulbul:v2) for agent: {agent_type}")
+        # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
+        SARVAM_VOICE_MAPPING = {
+            "Meera": "anushka",
+            "Raj": "abhilash",
+            "Manisha": "manisha",
+            "Karun": "karun",
+            "Vidya": "vidya",
+            "Hitesh": "hitesh",
+        }
+        db_voice = campaign_info.get("voice", "Meera")
+        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")
+        print(f"[agent] Configured agent voice profile: {db_voice} -> mapped to Sarvam speaker: {speaker_voice}")
 
         session = AgentSession(
             vad=silero.VAD.load(),
