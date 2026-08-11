@@ -95,7 +95,7 @@ async def complete_call(
     print("BACKEND API: POST /api/calls/{call_id}/complete RECEIVED")
     print(f"PID: {os.getpid()}")
     print(f"Call ID: {call_id}")
-    print(f"Body: {body.dict() if body else None}")
+    print(f"Body: {body.model_dump() if body else None}")
     print("-" * 50)
 
     call = await CallService.complete_call(
