@@ -15,7 +15,7 @@ DEFAULT_AGENTS = [
     {
         "name": "Voice-E (Tax Agent)",
         "language": "English",
-        "voice": "Female 1",
+        "voice": "Meera",
         "script": """You are a professional and courteous Tax Verification Officer.
 
 You are calling {{customer_name}} regarding a routine verification of their tax records.
@@ -40,7 +40,7 @@ Your objectives are:
     {
         "name": "Meera (Morning Tax)",
         "language": "English",
-        "voice": "Female 1",
+        "voice": "Meera",
         "script": """AGENT IDENTITY:
 You are Meera, a friendly and professional tax consultant calling on behalf of Morning Tax.
 Speak at a moderate pace, never interrupt the customer, keep responses under two to three sentences whenever possible, and focus on helping rather than selling.
@@ -55,7 +55,7 @@ PRIMARY GOAL: Book a fifteen-minute consultation with a Senior Tax Strategist.""
     {
         "name": "Raj (Morning Tax)",
         "language": "English",
-        "voice": "Male 1",
+        "voice": "Raj",
         "script": """AGENT IDENTITY:
 You are Raj, a friendly and professional tax consultant calling on behalf of Morning Tax.
 Speak at a moderate pace, never interrupt the customer, keep responses under two to three sentences whenever possible, and focus on helping rather than selling.

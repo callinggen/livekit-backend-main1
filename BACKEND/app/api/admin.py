@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.campaign import Campaign
 from app.models.call import Call
+from app.models.agent import Agent
 from app.schemas.auth import UserCreateRequest
 from app.core.security import get_password_hash
 from app.services.email_service import email_service
@@ -255,6 +256,18 @@ async def create_user(
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+
+    # Insert custom agent into the agents table to bypass default agent seeding
+    if user_data.agent_name:
+        custom_agent = Agent(
+            user_id=new_user.id,
+            name=user_data.agent_name,
+            language=user_data.agent_language or "English",
+            voice=user_data.agent_voice or "Meera",
+            script=user_data.agent_script or ""
+        )
+        db.add(custom_agent)
+        await db.commit()
     
     if user_data.email:
         try:

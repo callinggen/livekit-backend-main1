@@ -1,9 +1,14 @@
 import sys
 import json
 import urllib.request
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def update_credits_via_api(email: str, new_credits: int):
-    api_url = "http://localhost:8000/api/admin/users"
+    backend_url = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
+    api_url = f"{backend_url}/api/admin/users"
     
     print(f"Fetching users list from {api_url}...")
     try:
@@ -29,7 +34,7 @@ def update_credits_via_api(email: str, new_credits: int):
     print(f"Found User {user_id} ({target_user.get('name')}, {email}). Current credits: {target_user.get('credits')}")
 
     # Send PUT request to update credits ONLY
-    update_url = f"http://localhost:8000/api/admin/users/{user_id}"
+    update_url = f"{backend_url}/api/admin/users/{user_id}"
     payload = json.dumps({"credits": new_credits}).encode("utf-8")
     
     print(f"\nSending PUT request to {update_url} with {{'credits': {new_credits}}}...")
