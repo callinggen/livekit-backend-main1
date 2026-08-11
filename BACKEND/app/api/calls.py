@@ -144,15 +144,21 @@ async def list_calls(
 
     calls = []
     for call, contact, campaign in rows:
+        is_active = call.status in ("dialing", "in_progress")
+
         response_display = contact.response or "—"
-        if response_display == (contact.customer_name or ""):
+        if is_active:
+            response_display = "In Progress"
+        elif response_display == (contact.customer_name or ""):
             response_display = "Interested" if contact.appointment_date else "—"
 
         cat_upper = (call.category or "").upper()
         resp_lower = (contact.response or "").lower()
         summary_lower = (call.summary or "").lower()
         
-        if cat_upper == "COLD" or any(p in resp_lower or p in summary_lower for p in ["do not call", "refusal", "not interested", "no answer", "cut"]):
+        if is_active:
+            sentiment = "Neutral"
+        elif cat_upper == "COLD" or any(p in resp_lower or p in summary_lower for p in ["do not call", "refusal", "not interested", "no answer", "cut"]):
             sentiment = "Negative"
         elif cat_upper == "HOT" or any(p in resp_lower for p in ["appointment", "booked", "interested"]):
             sentiment = "Positive"
@@ -167,7 +173,7 @@ async def list_calls(
             "response": response_display,
             "datetime": _to_ist(call.started_at),  # BUG-001: IST timestamp
             "campaign": campaign.campaign_name,
-            "duration": _fmt_duration(call.duration or 0),
+            "duration": _fmt_duration(call.duration or 0) if not is_active else "—",
             "transcript": _parse_transcript(call.transcript),
             "summary": call.summary or "",
             "category": call.category or "UNCATEGORIZED",

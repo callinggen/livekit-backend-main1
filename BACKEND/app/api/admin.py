@@ -135,7 +135,18 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
                     "status": "Active"
                 }
                 for a in u.agents
-            ]
+            ] if u.agents else (
+                [
+                    {
+                        "id": f"AGT-{u.id}",
+                        "name": u.agent_name,
+                        "language": u.agent_language or "English",
+                        "voice": u.agent_voice or "Female 1",
+                        "script": u.agent_script or "",
+                        "status": "Active"
+                    }
+                ] if u.agent_name else []
+            )
         }
         for u in recent_users_list
     ]
@@ -252,7 +263,7 @@ async def create_user(
         email=user_data.email,
         phone_number=user_data.phone_number,
         hashed_password=get_password_hash(raw_password),
-        is_first_login=True,
+        is_first_login=False,  # Admin sets password — no forced change needed
         is_admin=False,
         is_active=True,
         credits=user_data.credits if user_data.credits is not None else 2000,
@@ -269,19 +280,6 @@ async def create_user(
     await db.commit()
     await db.refresh(new_user)
 
-    # Insert custom agent into the agents table to bypass default agent seeding
-    if user_data.agent_name:
-        custom_agent = Agent(
-            user_id=new_user.id,
-            name=user_data.agent_name,
-            language=user_data.agent_language or "English",
-            voice=user_data.agent_voice or "Meera",
-            script=user_data.agent_script or ""
-        )
-        db.add(custom_agent)
-        await db.commit()
-    
-    # Create associated Agent record for this specific account
     if getattr(user_data, "agents", None):
         for agent_data in user_data.agents:
             ag = Agent(
@@ -294,11 +292,12 @@ async def create_user(
             db.add(ag)
         await db.commit()
     elif user_data.agent_name:
+        # Only insert once — skip if already inserted above
         ag = Agent(
             user_id=new_user.id,
             name=user_data.agent_name,
-            language=user_data.agent_language or "English (US)",
-            voice=user_data.agent_voice or "Nova (ElevenLabs)",
+            language=user_data.agent_language or "English",
+            voice=user_data.agent_voice or "Meera",
             script=user_data.agent_script or ""
         )
         db.add(ag)
