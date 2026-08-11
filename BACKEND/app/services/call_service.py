@@ -138,6 +138,18 @@ class CallService:
             print(f"[CallService] Call {call_id} is ALREADY completed")
             return call
 
+        # ── Calculate timestamps and duration FIRST ───────────────────
+        now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
+        call.ended_at = now
+        if call.started_at:
+            started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
+            call.duration = int((now - started).total_seconds())
+        elif call.duration is None:
+            call.duration = 0
+
+        if recording_url:
+            call.recording_url = recording_url
+
         # ── Fallback Voicemail Detection ───────────────────────────────
         if not is_voicemail and transcript:
             lower_tx_vm = transcript.lower()
@@ -170,7 +182,7 @@ class CallService:
 
         # ── Determine if it's a success or failure ────────────────────
         has_transcript = bool(transcript and len(transcript.strip()) > 0)
-        has_duration = bool(call.duration and call.duration > 5)
+        has_duration = bool(call.duration is not None and call.duration > 0)
         has_audio = bool(recording_url or (call.recording_url and os.path.exists(call.recording_url.lstrip("/"))))
 
         is_success = (has_transcript or has_duration or has_audio) and not is_voicemail
@@ -195,15 +207,6 @@ class CallService:
                     await notification_service.check_and_trigger_credit_notifications(db, owner)
                 except Exception as e:
                     print(f"Error checking credit notifications: {e}")
-
-        
-        if recording_url:
-            call.recording_url = recording_url
-        now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
-        call.ended_at = now
-        if call.started_at:
-            started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
-            call.duration = int((now - started).total_seconds())
 
         # Check if appointment_date is a real, valid date string
         has_valid_appointment = (

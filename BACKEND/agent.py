@@ -606,22 +606,26 @@ async def entrypoint(ctx: JobContext):
                 except Exception as mix_err:
                     print(f"Warning – mixing audio failed: {mix_err}")
 
-            await notify_call_complete(
-                room_name,
-                payload={
-                    "transcript": transcript or None,
-                    "customer_name": None,
-                    "appointment_date": None,
-                    "appointment_time": None,
-                    "recording_url": f"/api/recordings/call_{call_id}.wav",
-                },
-            )
+            # 1. ALWAYS notify backend FIRST
+            try:
+                await notify_call_complete(
+                    room_name,
+                    payload={
+                        "transcript": transcript or None,
+                        "customer_name": None,
+                        "appointment_date": None,
+                        "appointment_time": None,
+                        "recording_url": f"/api/recordings/call_{call_id}.wav",
+                    },
+                )
+            except Exception as e:
+                print(f"Warning – notify_call_complete error in disconnect handler: {e}")
 
-            # Close the agent session cleanly
+            # 2. Close the agent session cleanly
             if session:
                 try:
                     print("Closing AgentSession...")
-                    await asyncio.wait_for(session.aclose(), timeout=5.0)
+                    await asyncio.wait_for(session.aclose(), timeout=3.0)
                     print("AgentSession closed.")
                 except Exception as e:
                     print(f"Warning – session.aclose() error: {e}")
