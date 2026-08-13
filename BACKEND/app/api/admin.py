@@ -16,7 +16,9 @@ from app.core.security import get_password_hash
 from app.services.email_service import email_service
 from app.services.notification_service import notification_service
 import secrets
+from typing import List, Optional
 from pydantic import BaseModel
+from app.schemas.agent import AgentCreate
 
 router = APIRouter()
 
@@ -30,6 +32,11 @@ class UserUpdateRequest(BaseModel):
     industry: str | None = None
     status: str | None = None
     is_active: bool | None = None
+    agent_name: str | None = None
+    agent_language: str | None = None
+    agent_voice: str | None = None
+    agent_script: str | None = None
+    agents: Optional[List[AgentCreate]] = None
 
 
 @router.get("/stats")
@@ -383,6 +390,32 @@ async def update_user_by_admin(
         elif new_status in ("inactive", "suspended", "deactivated") and getattr(user, "is_active", True):
             user.is_active = False
             status_changed_to_inactive = True
+
+    # Handle agent list updates
+    if update_data.agents is not None:
+        existing_agents_res = await db.execute(select(Agent).where(Agent.user_id == user.id))
+        existing_agents = existing_agents_res.scalars().all()
+        for old_agent in existing_agents:
+            await db.delete(old_agent)
+        await db.commit()
+
+        for agent_data in update_data.agents:
+            new_ag = Agent(
+                user_id=user.id,
+                name=agent_data.name,
+                language=agent_data.language or "English",
+                voice=agent_data.voice or "Meera",
+                script=agent_data.script or ""
+            )
+            db.add(new_ag)
+        await db.commit()
+
+        if update_data.agents:
+            primary = update_data.agents[0]
+            user.agent_name = primary.name
+            user.agent_language = primary.language or "English"
+            user.agent_voice = primary.voice or "Meera"
+            user.agent_script = primary.script or ""
 
     await db.commit()
     await db.refresh(user)
