@@ -162,9 +162,11 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
     job = job_result.scalars().first()
 
     contacts_result = await db.execute(
-        select(Contact).where(Contact.campaign_id == campaign_id)
+        select(Contact, Call)
+        .outerjoin(Call, Contact.id == Call.contact_id)
+        .where(Contact.campaign_id == campaign_id)
     )
-    contacts = contacts_result.scalars().all()
+    results = contacts_result.all()
 
     credits_result = await db.execute(
         select(func.sum(Call.credits_deducted))
@@ -180,6 +182,14 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
     )
     call_statuses = calls_result.scalars().all()
 
+    # Get a list of unique contacts to avoid duplicates if multiple calls exist
+    seen_contacts = set()
+    unique_results = []
+    for ct, call in results:
+        if ct.id not in seen_contacts:
+            seen_contacts.add(ct.id)
+            unique_results.append((ct, call))
+
     return {
         "id": str(campaign.id),
         "name": campaign.campaign_name,
@@ -191,7 +201,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
         "creditsUsed": credits_used,
         "job": {
-            "total_contacts": len(call_statuses) if call_statuses else len(contacts),
+            "total_contacts": len(call_statuses) if call_statuses else len(unique_results),
             "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
             "failed_contacts": sum(1 for s in call_statuses if s in ("failed", "incomplete")),
             "status": job.status if job else "queued",
@@ -202,15 +212,17 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
                 "name": ct.name,
                 "phone": ct.phone,
                 "status": ct.status,
-                "response": ct.response,
+                "response": ct.response or "—",
                 "customer_name": ct.customer_name,
                 "appointment_date": ct.appointment_date,
                 "appointment_time": ct.appointment_time,
                 "transcript": ct.transcript,
-                "duration": ct.duration,
+                "duration": call.duration if call else 0,
+                "datetime": call.started_at.strftime("%Y-%m-%d %I:%M %p") if (call and call.started_at) else (campaign.created_at.strftime("%Y-%m-%d %I:%M %p") if (campaign and campaign.created_at) else ""),
+                "credits": call.credits_deducted if call else 0,
                 "metadata_fields": ct.metadata_fields,
             }
-            for ct in contacts
+            for ct, call in unique_results
         ],
     }
 
