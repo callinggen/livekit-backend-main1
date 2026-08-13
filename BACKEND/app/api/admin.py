@@ -461,99 +461,15 @@ async def delete_user_by_admin(
     
     stmt = select(User).where(User.id == raw_id)
     res = await db.execute(stmt)
-        stmt = select(User).where(User.email == user_data.email)
-        result = await db.execute(stmt)
-        if result.scalars().first():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email is already registered"
-            )
+    user = res.scalars().first()
 
-    if user_data.phone_number:
-        stmt = select(User).where(User.phone_number == user_data.phone_number)
-        result = await db.execute(stmt)
-        if result.scalars().first():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Phone number is already registered"
-            )
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    if not user_data.email and not user_data.phone_number:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Must provide either email or phone number"
-        )
-
-    raw_password = user_data.password or secrets.token_urlsafe(12)
-
-    new_user = User(
-        full_name=user_data.full_name,
-        email=user_data.email,
-        phone_number=user_data.phone_number,
-        hashed_password=get_password_hash(raw_password),
-        is_first_login=False,  # Admin sets password — no forced change needed
-        is_admin=False,
-        is_active=True,
-        credits=user_data.credits if user_data.credits is not None else 2000,
-        subscription_plan=user_data.subscription_plan or "Starter",
-        company_name=user_data.company_name,
-        industry=user_data.industry,
-        agent_name=user_data.agent_name,
-        agent_language=user_data.agent_language,
-        agent_voice=user_data.agent_voice,
-        agent_script=user_data.agent_script,
-    )
-    
-    db.add(new_user)
+    await db.delete(user)
     await db.commit()
-    await db.refresh(new_user)
 
-    if getattr(user_data, "agents", None):
-        for agent_data in user_data.agents:
-            ag = Agent(
-                user_id=new_user.id,
-                name=agent_data.name,
-                language=agent_data.language,
-                voice=agent_data.voice,
-                script=agent_data.script
-            )
-            db.add(ag)
-        await db.commit()
-    elif user_data.agent_name:
-        # Only insert once — skip if already inserted above
-        ag = Agent(
-            user_id=new_user.id,
-            name=user_data.agent_name,
-            language=user_data.agent_language or "English",
-            voice=user_data.agent_voice or "Meera",
-            script=user_data.agent_script or ""
-        )
-        db.add(ag)
-        await db.commit()
-    
-    if user_data.email:
-        try:
-            notification_service.notify_account_created(new_user, raw_password)
-        except Exception as e:
-            print(f"Failed to send welcome email to {user_data.email}: {e}")
-
-    
-    return {
-        "message": "User created successfully",
-        "user": {
-            "id": f"USR-{new_user.id}",
-            "raw_id": new_user.id,
-            "email": new_user.email,
-            "full_name": new_user.full_name,
-            "company_name": getattr(new_user, "company_name", None),
-            "industry": getattr(new_user, "industry", None),
-            "agent_name": getattr(new_user, "agent_name", None),
-            "agent_language": getattr(new_user, "agent_language", None),
-            "agent_voice": getattr(new_user, "agent_voice", None),
-            "credits": new_user.credits,
-            "subscription_plan": new_user.subscription_plan
-        }
-    }
+    return {"message": f"User {user_id} deleted successfully"}
 
 @router.put("/users/{user_id}")
 async def update_user_by_admin(
