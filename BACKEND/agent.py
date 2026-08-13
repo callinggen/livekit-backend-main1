@@ -140,7 +140,10 @@ DATE & CALLBACK RESOLUTION RULES:
 - If the customer specifies a date in the past relative to Today ({today_date}), politely inform them: "I'm sorry, that date has already passed. Could you please provide a future date?"
 """
 
-    base = AGENT_BASE_PROMPTS.get(agent_type, AGENT_BASE_PROMPTS["Meera (Morning Tax)"])
+    if agent_type in AGENT_BASE_PROMPTS:
+        base = AGENT_BASE_PROMPTS[agent_type]
+    else:
+        base = f"You are {agent_type}, a professional AI calling assistant."
     name_clause = (
         f"\nIMPORTANT: You already know the customer's name is '{customer_name}'. "
         "Do NOT ask them for their name — address them by name when appropriate."
@@ -660,6 +663,11 @@ async def entrypoint(ctx: JobContext):
             "Karun": "karun",
             "Vidya": "vidya",
             "Hitesh": "hitesh",
+            "Female 1": "anushka",
+            "Female 2": "anushka",
+            "Male 1": "abhilash",
+            "Male 2": "abhilash",
+            "Nova (ElevenLabs)": "anushka",
         }
         db_voice = campaign_info.get("voice", "Meera")
         speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")

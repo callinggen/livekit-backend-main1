@@ -109,28 +109,21 @@ async def get_agents(
             await db.refresh(ag)
         agents = new_agents
     else:
-        # If user has a custom agent configured on their User profile (e.g. from Admin creation),
-        # ensure that custom agent exists in the agents table and filter out default template agents!
+        # If user has a custom agent configured on User profile missing from agents table, sync it
         if current_user.agent_name:
             has_custom = any(a.name == current_user.agent_name for a in agents)
-            default_names = [da["name"] for da in DEFAULT_AGENTS]
             if not has_custom:
                 custom_agent = Agent(
                     user_id=current_user.id,
                     name=current_user.agent_name,
-                    language=current_user.agent_language or "English (US)",
-                    voice=current_user.agent_voice or "Nova (ElevenLabs)",
+                    language=current_user.agent_language or "English",
+                    voice=current_user.agent_voice or "Meera",
                     script=current_user.agent_script or ""
                 )
                 db.add(custom_agent)
                 await db.commit()
                 await db.refresh(custom_agent)
-                user_custom_agents = [a for a in agents if a.name not in default_names]
-                agents = [custom_agent] + user_custom_agents
-            else:
-                user_custom_agents = [a for a in agents if a.name not in default_names]
-                if user_custom_agents:
-                    agents = user_custom_agents
+                agents = list(agents) + [custom_agent]
 
     return agents
 
