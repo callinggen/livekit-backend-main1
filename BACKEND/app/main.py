@@ -8,6 +8,8 @@ from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
 from app.api.reports import router as report_router
 from app.api.agents import router as agents_router
+from app.api.demo import router as demo_router
+from app.api.calendar import router as calendar_router
 # Ensure recordings directory exists
 os.makedirs("recordings", exist_ok=True)
 
@@ -106,11 +108,14 @@ app.add_middleware(
 )
 
 app.include_router(call_router, prefix="/api", tags=["Calls"])
-app.include_router(report_router, prefix="/api", tags=["reports"])
+app.include_router(report_router, prefix="/api")
+app.include_router(demo_router, prefix="/api")
+app.include_router(calendar_router, tags=["Calendar"])
 app.include_router(campaign_router, prefix="/api", tags=["Campaigns"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
+app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 
 
 @app.get("/")

@@ -67,6 +67,7 @@ class UserCreateRequest(BaseModel):
     agent_language: str | None = None
     agent_voice: str | None = None
     agent_script: str | None = None
+    agents: Optional[List[AgentCreate]] = None
 
 class RegisterRequest(BaseModel):
     full_name: str
