@@ -461,6 +461,201 @@ async def delete_user_by_admin(
     
     stmt = select(User).where(User.id == raw_id)
     res = await db.execute(stmt)
+        stmt = select(User).where(User.email == user_data.email)
+        result = await db.execute(stmt)
+        if result.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email is already registered"
+            )
+
+    if user_data.phone_number:
+        stmt = select(User).where(User.phone_number == user_data.phone_number)
+        result = await db.execute(stmt)
+        if result.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number is already registered"
+            )
+
+    if not user_data.email and not user_data.phone_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must provide either email or phone number"
+        )
+
+    raw_password = user_data.password or secrets.token_urlsafe(12)
+
+    new_user = User(
+        full_name=user_data.full_name,
+        email=user_data.email,
+        phone_number=user_data.phone_number,
+        hashed_password=get_password_hash(raw_password),
+        is_first_login=False,  # Admin sets password — no forced change needed
+        is_admin=False,
+        is_active=True,
+        credits=user_data.credits if user_data.credits is not None else 2000,
+        subscription_plan=user_data.subscription_plan or "Starter",
+        company_name=user_data.company_name,
+        industry=user_data.industry,
+        agent_name=user_data.agent_name,
+        agent_language=user_data.agent_language,
+        agent_voice=user_data.agent_voice,
+        agent_script=user_data.agent_script,
+    )
+    
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    if getattr(user_data, "agents", None):
+        for agent_data in user_data.agents:
+            ag = Agent(
+                user_id=new_user.id,
+                name=agent_data.name,
+                language=agent_data.language,
+                voice=agent_data.voice,
+                script=agent_data.script
+            )
+            db.add(ag)
+        await db.commit()
+    elif user_data.agent_name:
+        # Only insert once — skip if already inserted above
+        ag = Agent(
+            user_id=new_user.id,
+            name=user_data.agent_name,
+            language=user_data.agent_language or "English",
+            voice=user_data.agent_voice or "Meera",
+            script=user_data.agent_script or ""
+        )
+        db.add(ag)
+        await db.commit()
+    
+    if user_data.email:
+        try:
+            notification_service.notify_account_created(new_user, raw_password)
+        except Exception as e:
+            print(f"Failed to send welcome email to {user_data.email}: {e}")
+
+    
+    return {
+        "message": "User created successfully",
+        "user": {
+            "id": f"USR-{new_user.id}",
+            "raw_id": new_user.id,
+            "email": new_user.email,
+            "full_name": new_user.full_name,
+            "company_name": getattr(new_user, "company_name", None),
+            "industry": getattr(new_user, "industry", None),
+            "agent_name": getattr(new_user, "agent_name", None),
+            "agent_language": getattr(new_user, "agent_language", None),
+            "agent_voice": getattr(new_user, "agent_voice", None),
+            "credits": new_user.credits,
+            "subscription_plan": new_user.subscription_plan
+        }
+    }
+
+@router.put("/users/{user_id}")
+async def update_user_by_admin(
+    user_id: str,
+    update_data: UserUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    # Strip USR- prefix if passed
+    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
+    
+    stmt = select(User).where(User.id == raw_id)
+    res = await db.execute(stmt)
+    user = res.scalars().first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    old_credits = user.credits or 0
+    credits_changed = False
+    plan_changed = False
+    status_changed_to_active = False
+    status_changed_to_inactive = False
+
+    if update_data.full_name is not None:
+        user.full_name = update_data.full_name
+    if update_data.email is not None:
+        user.email = update_data.email
+    if update_data.phone_number is not None:
+        user.phone_number = update_data.phone_number
+    if update_data.credits is not None and update_data.credits != user.credits:
+        user.credits = update_data.credits
+        credits_changed = True
+    if update_data.subscription_plan is not None and update_data.subscription_plan != user.subscription_plan:
+        user.subscription_plan = update_data.subscription_plan
+        plan_changed = True
+    if update_data.company_name is not None:
+        user.company_name = update_data.company_name
+    if update_data.industry is not None:
+        user.industry = update_data.industry
+
+    # Handle status toggles
+    if update_data.is_active is not None:
+        if update_data.is_active and not getattr(user, "is_active", True):
+            user.is_active = True
+            status_changed_to_active = True
+        elif not update_data.is_active and getattr(user, "is_active", True):
+            user.is_active = False
+            status_changed_to_inactive = True
+
+    if update_data.status is not None:
+        new_status = update_data.status.strip().lower()
+        if new_status == "active" and not getattr(user, "is_active", True):
+            user.is_active = True
+            status_changed_to_active = True
+        elif new_status in ("inactive", "suspended", "deactivated") and getattr(user, "is_active", True):
+            user.is_active = False
+            status_changed_to_inactive = True
+
+    await db.commit()
+    await db.refresh(user)
+
+    # Trigger notification events
+    if credits_changed or plan_changed:
+        # If credits were increased/topped up or plan updated, send confirmation email
+        if plan_changed or (update_data.credits is not None and update_data.credits > old_credits):
+            notification_service.notify_plan_credit_updated(user)
+        try:
+            await notification_service.check_and_trigger_credit_notifications(db, user)
+        except Exception as e:
+            print(f"Error checking credit notifications on admin update: {e}")
+
+    if status_changed_to_active:
+        notification_service.notify_account_activated(user)
+    elif status_changed_to_inactive:
+        notification_service.notify_account_deactivated(user)
+
+
+    return {
+        "message": "User updated successfully",
+        "user": {
+            "id": f"USR-{user.id}",
+            "raw_id": user.id,
+            "name": user.full_name,
+            "email": user.email,
+            "company_name": getattr(user, "company_name", "CallingGen Corp"),
+            "industry": getattr(user, "industry", "Technology & Software"),
+            "credits": user.credits,
+            "plan": user.subscription_plan,
+            "status": "Active" if getattr(user, "is_active", True) else "Inactive"
+        }
+    }
+
+
+@router.delete("/users/{user_id}")
+async def delete_user_by_admin(
+    user_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
+    
+    stmt = select(User).where(User.id == raw_id)
+    res = await db.execute(stmt)
     user = res.scalars().first()
 
     if not user:
@@ -470,3 +665,34 @@ async def delete_user_by_admin(
     await db.commit()
 
     return {"message": f"User {user_id} deleted successfully"}
+
+
+@router.get("/contact-users")
+async def get_admin_contact_users(db: AsyncSession = Depends(get_db)):
+    """Fetch all contact form submissions and booked appointments for admin."""
+    from app.models.contact_form_user import ContactFormUser
+    result = await db.execute(select(ContactFormUser).order_by(ContactFormUser.created_at.desc()))
+    users = result.scalars().all()
+    return [
+        {
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+            "phone": u.phone,
+            "company": u.company or "N/A",
+            "industry": u.industry or "N/A",
+            "appointment_time": u.appointment_time.isoformat() if u.appointment_time else None,
+            "status": u.status or "booked",
+            "created_at": u.created_at.isoformat() if u.created_at else datetime.now(timezone.utc).isoformat()
+        }
+        for u in users
+    ]
+
+from app.models.contact_form_user import ContactFormUser
+
+
+@router.get('/contact-users')
+async def get_contact_users(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ContactFormUser).order_by(ContactFormUser.created_at.desc()))
+    return result.scalars().all()
+

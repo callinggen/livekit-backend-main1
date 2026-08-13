@@ -377,6 +377,16 @@ async def _get_campaign_info(call_id: int) -> dict:
                 agent_obj = agent_res.scalars().first()
                 if agent_obj:
                     voice_profile = agent_obj.voice
+                else:
+                    # Fallback for dynamic demo personas
+                    if "Alex" in campaign.agent:
+                        voice_profile = "Raj"  # Male voice
+                    elif "James" in campaign.agent:
+                        voice_profile = "Hitesh" # Male voice
+                    elif "Sarah" in campaign.agent:
+                        voice_profile = "Vidya" # Female voice
+                    elif "Voice-E" in campaign.agent:
+                        voice_profile = "Meera" # Female voice
 
             return {
                 "agent_type": campaign.agent if campaign else "Voice-E (Tax Agent)",

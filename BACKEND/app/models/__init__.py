@@ -7,3 +7,5 @@ from .user import User
 from .password_reset import PasswordReset
 from .notification_state import UserNotificationState
 from .agent import Agent
+from .demo_lead import DemoLead
+from .contact_form_user import ContactFormUser

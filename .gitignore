@@ -36,3 +36,7 @@ livekit-server
 *.env
 *.db-wal
 *.db-shm
+
+credentials.json
+token.json
+callinggen.db
