@@ -132,7 +132,7 @@ async def list_campaigns(
             "name": c.campaign_name,
             "date": c.created_at.strftime("%Y-%m-%d") if c.created_at else "",
             "schedule": f"{c.schedule_date} {c.schedule_time}",
-            "sheetName": "—",
+            "sheetName": c.sheet_name or "—",
             "totalCalls": total_contacts,
             "completedCalls": completed,
             "failedCalls": failed,
@@ -142,7 +142,7 @@ async def list_campaigns(
             "agent": c.agent,
             "status": _map_status(c.status),
             "script": c.script,
-            "uploadSource": "API",
+            "uploadSource": c.upload_source or "API",
             "notes": "",
         })
     return out
@@ -200,11 +200,15 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "status": campaign.status,
         "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
         "creditsUsed": credits_used,
+        "upload_source": campaign.upload_source,
+        "sheet_name": campaign.sheet_name,
         "job": {
             "total_contacts": len(call_statuses) if call_statuses else len(unique_results),
             "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
             "failed_contacts": sum(1 for s in call_statuses if s in ("failed", "incomplete")),
             "status": job.status if job else "queued",
+            "started_at": job.started_at.isoformat() if (job and job.started_at) else None,
+            "finished_at": job.finished_at.isoformat() if (job and job.finished_at) else None,
         },
         "contacts": [
             {

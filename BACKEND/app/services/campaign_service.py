@@ -121,6 +121,8 @@ class CampaignService:
             schedule_date=data.schedule_date,
             schedule_time=data.schedule_time,
             status="pending",
+            upload_source=data.upload_source,
+            sheet_name=data.sheet_name,
         )
 
         db.add(campaign)
