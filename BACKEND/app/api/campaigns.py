@@ -70,6 +70,7 @@ async def launch_campaign(
 
 @router.get("/campaigns")
 async def list_campaigns(
+    type: str = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -77,11 +78,16 @@ async def list_campaigns(
     Return all campaigns for the current user with aggregated stats pulled from their latest job.
     Used by the Campaigns page table.
     """
-    result = await db.execute(
-        select(Campaign)
-        .where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
-        .order_by(Campaign.id.desc())
-    )
+    query = select(Campaign).where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
+    
+    if type == "pending":
+        query = query.where(Campaign.campaign_type == "pending")
+    elif type == "normal":
+        query = query.where(Campaign.campaign_type == "normal")
+        
+    query = query.order_by(Campaign.id.desc())
+    
+    result = await db.execute(query)
     campaigns = result.scalars().all()
 
     out = []
@@ -127,6 +133,17 @@ async def list_campaigns(
         )
         credits_used = credits_result.scalar() or 0
 
+        contacts_count_result = await db.execute(
+            select(func.count(Contact.id)).where(Contact.campaign_id == c.id)
+        )
+        contact_count = contacts_count_result.scalar() or 0
+        
+        # Get parent campaign name if it's a pending campaign
+        parent_campaign_name = None
+        if c.parent_campaign_id:
+            parent_result = await db.execute(select(Campaign.campaign_name).where(Campaign.id == c.parent_campaign_id))
+            parent_campaign_name = parent_result.scalar()
+
         out.append({
             "id": str(c.id),
             "name": c.campaign_name,
@@ -134,6 +151,7 @@ async def list_campaigns(
             "schedule": f"{c.schedule_date} {c.schedule_time}",
             "sheetName": "—",
             "totalCalls": total_contacts,
+            "contactCount": contact_count,
             "completedCalls": completed,
             "failedCalls": failed,
             "interested": 0,
@@ -144,6 +162,9 @@ async def list_campaigns(
             "script": c.script,
             "uploadSource": "API",
             "notes": "",
+            "campaignType": c.campaign_type,
+            "parentCampaignId": c.parent_campaign_id,
+            "parentCampaignName": parent_campaign_name,
         })
     return out
 

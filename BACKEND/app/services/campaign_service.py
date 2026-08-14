@@ -121,36 +121,66 @@ class CampaignService:
             schedule_date=data.schedule_date,
             schedule_time=data.schedule_time,
             status="pending",
+            campaign_type="normal",
         )
 
         db.add(campaign)
-
         await db.flush()
 
         contacts = []
-
         subset = data.contacts
+        remaining = []
+
         if data.selection_type == "range" and data.start_row and data.end_row:
             start_idx = max(0, data.start_row - 1)
             end_idx = min(len(data.contacts), data.end_row)
             subset = data.contacts[start_idx:end_idx]
+            remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
 
         for item in subset:
-
             contact = Contact(
                 campaign_id=campaign.id,
                 name=item.name,
                 phone=item.phone,
                 status="pending",
                 metadata_fields=item.metadata_fields,
+                original_row=item.original_row,
             )
-
             contacts.append(contact)
 
         db.add_all(contacts)
 
-        await db.commit()
+        # Create pending campaign for remaining contacts
+        if remaining:
+            pending_campaign = Campaign(
+                user_id=user_id,
+                campaign_name=f"{data.campaign_name} - Remaining",
+                agent=data.agent,
+                script=data.script,
+                schedule_date=data.schedule_date,
+                schedule_time=data.schedule_time,
+                status="pending",
+                campaign_type="pending",
+                parent_campaign_id=campaign.id,
+            )
+            db.add(pending_campaign)
+            await db.flush()
+            
+            pending_contacts = []
+            for item in remaining:
+                contact = Contact(
+                    campaign_id=pending_campaign.id,
+                    name=item.name,
+                    phone=item.phone,
+                    status="pending",
+                    metadata_fields=item.metadata_fields,
+                    original_row=item.original_row,
+                )
+                pending_contacts.append(contact)
+            
+            db.add_all(pending_contacts)
 
+        await db.commit()
         await db.refresh(campaign)
 
         return campaign

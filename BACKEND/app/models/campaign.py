@@ -60,6 +60,18 @@ class Campaign(Base):
         JSON,
         nullable=True,
     )
+    
+    campaign_type: Mapped[str] = mapped_column(
+        String,
+        default="normal",
+    )
+    
+    parent_campaign_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("campaigns.id"),
+        nullable=True,
+    )
+
     contacts = relationship(
     "Contact",
     back_populates="campaign",
