@@ -9,6 +9,7 @@ from app.models.job import Job
 from app.models.contact import Contact
 from app.models.call import Call
 from app.models.campaign import Campaign
+from app.models.user_phone_number import UserPhoneNumber
 
 # If a call stays in dialing/in_progress longer than this, treat it as
 # failed (agent crashed, room was deleted, SIP trunk timed out, user declined, etc.)
@@ -124,9 +125,31 @@ class QueueService:
         print(f"Room Name : {room_name}")
         print("Status -> calling")
 
+        # Dynamic user assigned telephony lookup
+        sip_trunk_id = None
+        sip_call_from = None
+        campaign = await db.get(Campaign, job.campaign_id)
+        if campaign and campaign.user_id:
+            num_stmt = (
+                select(UserPhoneNumber)
+                .where(UserPhoneNumber.user_id == campaign.user_id)
+                .where(UserPhoneNumber.is_active == True)
+                .order_by(UserPhoneNumber.is_default.desc(), UserPhoneNumber.id.asc())
+            )
+            phone_res = await db.execute(num_stmt)
+            user_phone = phone_res.scalars().first()
+            if user_phone:
+                if user_phone.sip_id:
+                    sip_trunk_id = user_phone.sip_id
+                if user_phone.phone_number:
+                    sip_call_from = user_phone.phone_number
+                print(f"Using assigned dynamic telephony for User #{campaign.user_id}: Phone={sip_call_from}, SIP_Trunk={sip_trunk_id}")
+
         result = await make_livekit_call(
             phone=contact.phone,
             room_name=room_name,
+            sip_trunk_id=sip_trunk_id,
+            sip_call_from=sip_call_from,
         )
 
         if result["success"]:

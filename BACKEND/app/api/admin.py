@@ -11,6 +11,8 @@ from app.models.agent import Agent
 from app.models.campaign import Campaign
 from app.models.call import Call
 from app.models.agent import Agent
+from app.models.user_phone_number import UserPhoneNumber
+
 from app.schemas.auth import UserCreateRequest
 from app.core.security import get_password_hash
 from app.services.email_service import email_service
@@ -270,7 +272,8 @@ async def create_user(
         email=user_data.email,
         phone_number=user_data.phone_number,
         hashed_password=get_password_hash(raw_password),
-        is_first_login=False,  # Admin sets password — no forced change needed
+        is_first_login=True,  # Prompt user to change password on first login
+
         is_admin=False,
         is_active=True,
         credits=user_data.credits if user_data.credits is not None else 2000,
@@ -309,8 +312,29 @@ async def create_user(
         )
         db.add(ag)
         await db.commit()
+
+    if getattr(user_data, "phones", None):
+        for phone_data in user_data.phones:
+            pn = UserPhoneNumber(
+                user_id=new_user.id,
+                region=phone_data.region,
+                phone_number=phone_data.phone_number,
+                number_type=phone_data.number_type,
+                provider_name=phone_data.provider_name,
+                provider_account_id=phone_data.provider_account_id,
+                api_key_auth_token=phone_data.api_key_auth_token,
+                sip_id=phone_data.sip_id,
+                sip_username=phone_data.sip_username,
+                sip_password=phone_data.sip_password,
+                status=phone_data.status,
+                is_default=phone_data.is_default,
+                is_active=True,
+            )
+            db.add(pn)
+        await db.commit()
     
     if user_data.email:
+
         try:
             notification_service.notify_account_created(new_user, raw_password)
         except Exception as e:
