@@ -144,6 +144,7 @@ app.include_router(phone_numbers_router)
 
 @app.get("/")
 def home():
+    
     return {
         "status": "running",
         "message": "Backend is working",
