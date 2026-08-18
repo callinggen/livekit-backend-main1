@@ -612,3 +612,131 @@ async def get_contact_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ContactFormUser).order_by(ContactFormUser.created_at.desc()))
     return result.scalars().all()
 
+
+
+@router.get("/users/{user_id}/activity")
+async def get_user_activity(user_id: str, db: AsyncSession = Depends(get_db)):
+    """Fetch high-level activity stats for a specific user."""
+    import zoneinfo
+    
+    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
+    
+    # Verify user exists
+    user_exists = await db.execute(select(User.id).where(User.id == raw_id))
+    if not user_exists.scalars().first():
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Total campaigns
+    camp_res = await db.execute(select(func.count(Campaign.id)).where(Campaign.user_id == raw_id))
+    total_campaigns = camp_res.scalar() or 0
+    
+    # Calculate start of today in IST
+    try:
+        ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+    except Exception:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        
+    now_ist = datetime.now(ist_tz)
+    start_of_day_ist = datetime(now_ist.year, now_ist.month, now_ist.day, tzinfo=ist_tz)
+    # Convert IST start-of-day to naive UTC because Call.started_at is naive UTC
+    start_of_day_utc = start_of_day_ist.astimezone(timezone.utc).replace(tzinfo=None)
+    
+    # Today's Calls Base Query
+    base_calls_query = (
+        select(func.count(Call.id))
+        .join(Campaign, Call.campaign_id == Campaign.id)
+        .where(Campaign.user_id == raw_id)
+        .where(Call.started_at >= start_of_day_utc)
+    )
+    
+    # Total calls today
+    calls_res = await db.execute(base_calls_query)
+    total_calls_today = calls_res.scalar() or 0
+    
+    # Successful calls today
+    succ_res = await db.execute(base_calls_query.where(Call.status == "completed"))
+    successful_calls = succ_res.scalar() or 0
+    
+    # Failed calls today
+    fail_res = await db.execute(base_calls_query.where(Call.status.in_(["failed", "error"])))
+    failed_calls = fail_res.scalar() or 0
+    
+    return {
+        "user_id": user_id,
+        "total_campaigns": total_campaigns,
+        "today": {
+            "calls": total_calls_today,
+            "successful": successful_calls,
+            "failed": failed_calls
+        }
+    }
+
+
+@router.get("/users/{user_id}/campaigns")
+async def get_user_campaigns(user_id: str, db: AsyncSession = Depends(get_db)):
+    """Fetch aggregated campaign stats for a specific user."""
+    from app.models.contact import Contact
+    
+    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
+    
+    # Verify user exists
+    user_exists = await db.execute(select(User.id).where(User.id == raw_id))
+    if not user_exists.scalars().first():
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    subq_contacts = (
+        select(func.count(Contact.id))
+        .where(Contact.campaign_id == Campaign.id)
+        .scalar_subquery()
+    )
+    
+    subq_calls = (
+        select(func.count(Call.id))
+        .where(Call.campaign_id == Campaign.id)
+        .scalar_subquery()
+    )
+    
+    subq_succ = (
+        select(func.count(Call.id))
+        .where(Call.campaign_id == Campaign.id)
+        .where(Call.status == "completed")
+        .scalar_subquery()
+    )
+    
+    subq_fail = (
+        select(func.count(Call.id))
+        .where(Call.campaign_id == Campaign.id)
+        .where(Call.status.in_(["failed", "error"]))
+        .scalar_subquery()
+    )
+    
+    stmt = (
+        select(
+            Campaign,
+            subq_contacts.label("total_contacts"),
+            subq_calls.label("calls_made"),
+            subq_succ.label("successful_calls"),
+            subq_fail.label("failed_calls")
+        )
+        .where(Campaign.user_id == raw_id)
+        .order_by(Campaign.created_at.desc())
+    )
+    
+    res = await db.execute(stmt)
+    rows = res.all()
+    
+    result = []
+    for row in rows:
+        c = row.Campaign
+        result.append({
+            "id": c.id,
+            "campaign_name": c.campaign_name,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "status": c.status,
+            "total_contacts": row.total_contacts or 0,
+            "calls_made": row.calls_made or 0,
+            "successful_calls": row.successful_calls or 0,
+            "failed_calls": row.failed_calls or 0
+        })
+        
+    return result

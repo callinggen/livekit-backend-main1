@@ -60,16 +60,18 @@ class Campaign(Base):
         JSON,
         nullable=True,
     )
-
-    upload_source: Mapped[str | None] = mapped_column(
+    
+    campaign_type: Mapped[str] = mapped_column(
         String,
+        default="normal",
+    )
+    
+    parent_campaign_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("campaigns.id"),
         nullable=True,
     )
 
-    sheet_name: Mapped[str | None] = mapped_column(
-        String,
-        nullable=True,
-    )
     contacts = relationship(
     "Contact",
     back_populates="campaign",

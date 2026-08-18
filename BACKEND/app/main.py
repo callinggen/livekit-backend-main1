@@ -42,11 +42,20 @@ async def lifespan(app: FastAPI):
                 await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} VARCHAR;"))
             except Exception:
                 pass
-        for col_name in ["upload_source", "sheet_name"]:
+                
+        for col_name in ["campaign_type", "parent_campaign_id"]:
             try:
-                await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} VARCHAR;"))
+                if col_name == "campaign_type":
+                    await conn.execute(text("ALTER TABLE campaigns ADD COLUMN campaign_type VARCHAR DEFAULT 'normal';"))
+                elif col_name == "parent_campaign_id":
+                    await conn.execute(text("ALTER TABLE campaigns ADD COLUMN parent_campaign_id INTEGER;"))
             except Exception:
                 pass
+                
+        try:
+            await conn.execute(text("ALTER TABLE contacts ADD COLUMN original_row INTEGER;"))
+        except Exception:
+            pass
 
 
     # Ensure default admin user exists

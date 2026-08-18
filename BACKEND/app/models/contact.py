@@ -67,5 +67,10 @@ class Contact(Base):
         JSON,
         nullable=True,
     )
+    
+    original_row: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
 
     campaign = relationship("Campaign", back_populates="contacts")
