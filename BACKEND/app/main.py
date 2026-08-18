@@ -53,6 +53,12 @@ async def lifespan(app: FastAPI):
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN parent_campaign_id INTEGER;"))
             except Exception:
                 pass
+
+        for col_name in ["upload_source", "sheet_name"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} VARCHAR;"))
+            except Exception:
+                pass
                 
         try:
             await conn.execute(text("ALTER TABLE campaigns ADD COLUMN outbound_phone_number VARCHAR;"))

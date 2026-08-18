@@ -123,6 +123,8 @@ class CampaignService:
             outbound_phone_number=getattr(data, "outbound_phone_number", None),
             status="pending",
             campaign_type="normal",
+            upload_source=data.upload_source,
+            sheet_name=data.sheet_name,
         )
 
 
@@ -164,6 +166,8 @@ class CampaignService:
                 status="pending",
                 campaign_type="pending",
                 parent_campaign_id=campaign.id,
+                upload_source=data.upload_source,
+                sheet_name=data.sheet_name,
             )
             db.add(pending_campaign)
             await db.flush()

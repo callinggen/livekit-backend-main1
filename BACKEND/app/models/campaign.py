@@ -66,6 +66,16 @@ class Campaign(Base):
         JSON,
         nullable=True,
     )
+
+    upload_source: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    sheet_name: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
     
     campaign_type: Mapped[str] = mapped_column(
         String,
