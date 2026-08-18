@@ -10,6 +10,8 @@ from app.api.reports import router as report_router
 from app.api.agents import router as agents_router
 from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
+from app.api.phone_numbers import router as phone_numbers_router
+
 # Ensure recordings directory exists
 os.makedirs("recordings", exist_ok=True)
 
@@ -53,9 +55,15 @@ async def lifespan(app: FastAPI):
                 pass
                 
         try:
+            await conn.execute(text("ALTER TABLE campaigns ADD COLUMN outbound_phone_number VARCHAR;"))
+        except Exception:
+            pass
+
+        try:
             await conn.execute(text("ALTER TABLE contacts ADD COLUMN original_row INTEGER;"))
         except Exception:
             pass
+
 
 
     # Ensure default admin user exists
@@ -130,6 +138,8 @@ app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
+app.include_router(phone_numbers_router)
+
 
 
 @app.get("/")

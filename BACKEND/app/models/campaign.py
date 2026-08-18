@@ -46,7 +46,13 @@ class Campaign(Base):
         nullable=False,
     )
 
+    outbound_phone_number: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
     status: Mapped[str] = mapped_column(
+
         String,
         default="pending",
     )

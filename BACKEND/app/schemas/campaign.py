@@ -11,7 +11,9 @@ class CampaignCreate(BaseModel):
     schedule_date: str
     schedule_time: str
     
+    outbound_phone_number: str | None = None
     selection_type: str = "all"
+
     start_row: int | None = None
     end_row: int | None = None
 

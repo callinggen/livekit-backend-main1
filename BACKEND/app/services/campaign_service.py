@@ -120,9 +120,11 @@ class CampaignService:
             script=data.script,
             schedule_date=data.schedule_date,
             schedule_time=data.schedule_time,
+            outbound_phone_number=getattr(data, "outbound_phone_number", None),
             status="pending",
             campaign_type="normal",
         )
+
 
         db.add(campaign)
         await db.flush()

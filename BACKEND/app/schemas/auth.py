@@ -54,6 +54,19 @@ class ResetPasswordRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     new_password: str
 
+class UserPhoneNumberCreate(BaseModel):
+    region: str = "India (+91)"
+    phone_number: str
+    number_type: str = "Mobile"
+    provider_name: str = "Tata Communications"
+    provider_account_id: str | None = None
+    api_key_auth_token: str | None = None
+    sip_id: str | None = None
+    sip_username: str | None = None
+    sip_password: str | None = None
+    status: str = "Active"
+    is_default: bool = False
+
 class UserCreateRequest(BaseModel):
     full_name: str
     email: EmailStr | None = None
@@ -68,6 +81,8 @@ class UserCreateRequest(BaseModel):
     agent_voice: str | None = None
     agent_script: str | None = None
     agents: Optional[List[AgentCreate]] = None
+    phones: Optional[List[UserPhoneNumberCreate]] = None
+
 
 class RegisterRequest(BaseModel):
     full_name: str
