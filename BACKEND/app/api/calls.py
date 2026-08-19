@@ -173,6 +173,7 @@ async def list_calls(
             "response": response_display,
             "datetime": _to_ist(call.started_at),  # BUG-001: IST timestamp
             "campaign": campaign.campaign_name,
+            "campaign_id": campaign.id,
             "duration": _fmt_duration(call.duration or 0) if not is_active else "—",
             "transcript": _parse_transcript(call.transcript),
             "summary": call.summary or "",
