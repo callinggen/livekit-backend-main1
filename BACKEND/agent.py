@@ -772,20 +772,46 @@ async def entrypoint(ctx: JobContext):
 
         print(f"Registered active call: {ctx.room.name}")
 
-        # Wait for the customer / inbound SIP participant to join the room.
-        print("Waiting for customer/inbound participant to join...")
-        customer_joined = False
-        for _ in range(60):  # wait up to 60 seconds
-            participants = ctx.room.remote_participants
-            if len(participants) > 0:
-                customer_joined = True
-                identities = [p.identity for p in participants.values()]
-                print(f"Customer/Inbound participant joined ({identities}) — starting greeting.")
-                break
-            await asyncio.sleep(1)
+        # Register track_subscribed listener to start recording customer track and detect audio readiness
+        customer_audio_ready = asyncio.Event()
 
-        if not customer_joined:
-            print("Timeout: customer never joined. Notifying backend and exiting.")
+        @ctx.room.on("track_subscribed")
+        def on_track_subscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
+            if track.kind == rtc.TrackKind.KIND_AUDIO and (participant.identity == "customer" or "customer" in participant.identity.lower()):
+                customer_audio_ready.set()
+                asyncio.create_task(record_track(track, call_id, speaker="customer"))
+
+        # Wait for the customer / inbound SIP participant to actually answer the call (not just be in ringing state).
+        print("Waiting for customer/inbound participant to answer the call...")
+        customer_answered = False
+        customer_identity = "customer"
+
+        for _ in range(120):  # Wait up to 60 seconds (0.5s checks)
+            for p in ctx.room.remote_participants.values():
+                if p.identity == "customer" or "customer" in p.identity.lower():
+                    customer_identity = p.identity
+                    call_status = str(p.attributes.get("sip.callStatus", "")).lower()
+                    has_audio_pub = any(pub.kind == rtc.TrackKind.KIND_AUDIO for pub in p.track_publications.values())
+                    
+                    # If track is subscribed, audio is published, or SIP state is active/connected -> call answered!
+                    if customer_audio_ready.is_set() or has_audio_pub or call_status in ("active", "connected", "answered"):
+                        customer_answered = True
+                        break
+                    # If callStatus is explicitly ringing/calling, keep waiting
+                    elif call_status in ("calling", "ringing", "dialing"):
+                        continue
+                    # Fallback: if participant exists and has track publications
+                    elif len(p.track_publications) > 0:
+                        customer_answered = True
+                        break
+
+            if customer_answered:
+                print(f"Customer/Inbound participant answered ({customer_identity}) — starting greeting.")
+                break
+            await asyncio.sleep(0.5)
+
+        if not customer_answered:
+            print("Timeout: customer never answered. Notifying backend and exiting.")
             ACTIVE_CALLS.pop(room_name, None)
             await notify_call_complete(
                 room_name,
@@ -798,8 +824,8 @@ async def entrypoint(ctx: JobContext):
             )
             shutdown_event.set()
         else:
-            # Small buffer to let audio pipeline stabilize
-            await asyncio.sleep(0.5)
+            # Small buffer to let audio pipeline & SIP media stream stabilize
+            await asyncio.sleep(0.8)
 
             # Force the agent to strictly follow STEP 1 of the script verbatim
             greeting_instructions = (
@@ -812,9 +838,18 @@ async def entrypoint(ctx: JobContext):
                 "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
             )
 
-            await session.generate_reply(instructions=greeting_instructions)
-
-            print("Greeting sent")
+            try:
+                print(f"[agent] Generating greeting reply for call {call_id}...")
+                await session.generate_reply(instructions=greeting_instructions)
+                print("[agent] Greeting generated and sent successfully.")
+            except Exception as g_err:
+                print(f"[agent] Error generating initial greeting: {g_err}. Retrying greeting in 0.5s...")
+                await asyncio.sleep(0.5)
+                try:
+                    await session.generate_reply(instructions=greeting_instructions)
+                    print("[agent] Greeting sent on retry successfully.")
+                except Exception as retry_err:
+                    print(f"[agent] Retry greeting failed: {retry_err}")
 
         # Keep the entrypoint alive until the room is deleted.
         # finish_call deletes the LiveKit room → LiveKit fires the
