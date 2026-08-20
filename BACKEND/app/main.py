@@ -131,6 +131,10 @@ app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 
+from whatsapp.routes import router as whatsapp_router
+app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
+app.include_router(whatsapp_router, prefix="/whatsapp", tags=["WhatsApp"])
+
 
 @app.get("/")
 def home():

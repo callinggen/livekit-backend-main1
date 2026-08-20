@@ -165,11 +165,22 @@ async def list_calls(
         else:
             sentiment = "Neutral"
 
+        status_display = call.status.capitalize()
+        if is_active:
+            status_display = "In Progress"
+        elif call.status == "incomplete" or (contact.response and "voicemail" in contact.response.lower()):
+            status_display = "Voicemail"
+            response_display = "Voicemail"
+        elif call.status == "failed" or (contact.response and "no answer" in contact.response.lower()):
+            status_display = "Missed Call"
+            if response_display in ("—", "", "Failed"):
+                response_display = "No Answer"
+
         calls.append({
             "id": str(call.id),
             "name": contact.customer_name or contact.name,
             "phone": contact.phone,
-            "status": call.status.capitalize(),  # "completed" → "Completed"
+            "status": status_display,
             "response": response_display,
             "datetime": _to_ist(call.started_at),  # BUG-001: IST timestamp
             "campaign": campaign.campaign_name,
@@ -187,3 +198,146 @@ async def list_calls(
             "creditsDeducted": call.credits_deducted,
         })
     return calls
+
+
+# ── WhatsApp Phase 1 Endpoints ─────────────────────────────────────────────
+
+class WhatsAppActionRequest(BaseModel):
+    action: str
+    custom_payload: Optional[dict] = None
+
+
+@router.post("/calls/{call_id}/whatsapp-action")
+async def trigger_whatsapp_action(
+    call_id: int,
+    body: WhatsAppActionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Trigger a structured WhatsApp action for a call with allowlist validation,
+    idempotency protection, and call isolation.
+    """
+    from app.services.whatsapp_actions import WhatsAppActionService
+    result = await WhatsAppActionService.execute_action(
+        call_id=call_id,
+        action=body.action,
+        custom_payload=body.custom_payload,
+    )
+    return result
+
+
+@router.get("/calls/{call_id}/whatsapp-actions")
+async def get_call_whatsapp_actions(
+    call_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve all WhatsApp actions and delivery statuses executed for a call."""
+    from app.models.whatsapp_action import WhatsAppAction
+    res = await db.execute(
+        select(WhatsAppAction)
+        .where(WhatsAppAction.call_id == call_id)
+        .order_by(WhatsAppAction.created_at.desc())
+    )
+    actions = res.scalars().all()
+    return [
+        {
+            "id": a.id,
+            "call_id": a.call_id,
+            "contact_id": a.contact_id,
+            "phone": a.phone,
+            "action": a.action,
+            "status": a.status,
+            "payload": a.payload,
+            "error": a.error,
+            "created_at": _to_ist(a.created_at),
+            "sent_at": _to_ist(a.sent_at) if a.sent_at else None,
+        }
+        for a in actions
+    ]
+
+
+@router.get("/calls/whatsapp-hub/conversations")
+async def get_whatsapp_hub_conversations(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retrieve structured contacts and call context for the WhatsApp Hub UI.
+    """
+    from app.models.whatsapp_action import WhatsAppAction
+    res = await db.execute(
+        select(Call, Contact, Campaign)
+        .join(Contact, Call.contact_id == Contact.id)
+        .join(Campaign, Contact.campaign_id == Campaign.id)
+        .order_by(Call.id.desc())
+        .limit(30)
+    )
+    rows = res.all()
+
+    # Also fetch all WhatsApp actions
+    actions_res = await db.execute(select(WhatsAppAction).order_by(WhatsAppAction.created_at.desc()))
+    all_actions = actions_res.scalars().all()
+    actions_by_call = {}
+    for a in all_actions:
+        actions_by_call.setdefault(a.call_id, []).append({
+            "action": a.action,
+            "status": a.status,
+            "sent_at": _to_ist(a.sent_at) if a.sent_at else _to_ist(a.created_at),
+        })
+
+    conversations = []
+    seen_contacts = set()
+
+    for call, contact, campaign in rows:
+        if contact.id in seen_contacts:
+            continue
+        seen_contacts.add(contact.id)
+
+        cat = (call.category or "UNCATEGORIZED").upper()
+        lead_score = 92 if cat == "HOT" else (74 if cat == "WARM" else 45)
+
+        # Parse messages
+        parsed_transcript = _parse_transcript(call.transcript)
+        messages = []
+        for msg in parsed_transcript:
+            is_agent = msg["speaker"].lower() in ("assistant", "agent")
+            messages.append({
+                "sender": "agent" if is_agent else "customer",
+                "text": msg["text"],
+                "time": _to_ist(call.started_at).split(" ")[1] if " " in _to_ist(call.started_at) else "Today",
+                "is_ai": is_agent,
+            })
+
+        # Append sent WhatsApp actions as messages in timeline
+        call_actions = actions_by_call.get(call.id, [])
+        for act in call_actions:
+            messages.append({
+                "sender": "agent",
+                "text": f"Shared {act['action'].replace('SEND_', '').title()} with customer via WhatsApp.",
+                "time": act["sent_at"],
+                "is_ai": True,
+                "action_badge": act["action"],
+                "status": act["status"],
+            })
+
+        last_msg = messages[-1]["text"] if messages else "Call completed."
+        if len(last_msg) > 60:
+            last_msg = last_msg[:57] + "..."
+
+        conversations.append({
+            "call_id": call.id,
+            "contact_id": contact.id,
+            "name": contact.customer_name or contact.name,
+            "phone": contact.phone,
+            "campaign_name": campaign.campaign_name,
+            "status": call.status,
+            "category": cat,
+            "lead_score": lead_score,
+            "last_message": last_msg,
+            "datetime": _to_ist(call.started_at),
+            "summary": call.summary or "Call completed.",
+            "notes": contact.response or "Answered",
+            "messages": messages,
+            "whatsapp_actions": call_actions,
+        })
+
+    return conversations

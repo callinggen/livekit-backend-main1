@@ -154,26 +154,13 @@ async def finish_call(
             goodbye_phrase = "Thank you. I have scheduled your callback. Goodbye!"
         else:
             goodbye_phrase = "Thank you. Your appointment has been booked. Goodbye!"
-    else:
-        goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
-
     try:
-        # ── Step 1: Speak the goodbye phrase via TTS ──────────────────────
-        try:
-            print(f"Speaking goodbye: '{goodbye_phrase}'")
-            speech = session.say(goodbye_phrase, allow_interruptions=False)
-            if speech:
-                try:
-                    await asyncio.wait_for(speech, timeout=8.0)
-                except Exception:
-                    pass
-            # Calculate dynamic audio playback buffer based on character count (approx 10 chars/sec + 1.5s overhead)
-            play_buffer = max(5.0, min(9.0, len(goodbye_phrase) * 0.11 + 1.5))
-            print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming to complete on SIP line...")
-            await asyncio.sleep(play_buffer)
-            print("Goodbye spoken successfully.")
-        except Exception as e:
-            print(f"Warning – could not speak goodbye (non-fatal): {e}")
+        # ── Step 1: Allow in-flight audio to finish playing on SIP line ─────
+        # The LLM has spoken its concluding goodbye sentence in this turn.
+        # Wait 6.0s for the full audio stream to complete playback on the caller's phone.
+        print("Waiting 6.0s for final goodbye audio streaming to complete on SIP line...")
+        await asyncio.sleep(6.0)
+        print("Final speech streaming completed.")
 
         # ── Step 2: Build transcript (after goodbye is in history) ────────
         transcript = _build_transcript(session)
