@@ -790,7 +790,7 @@ async def entrypoint(ctx: JobContext):
             for p in ctx.room.remote_participants.values():
                 if p.identity == "customer" or "customer" in p.identity.lower():
                     customer_identity = p.identity
-                    call_status = str(p.attributes.get("sip.callStatus", "")).lower()
+                    call_status = p.attributes.get("sip.callStatus", "").lower()
                     has_audio_pub = any(pub.kind == rtc.TrackKind.KIND_AUDIO for pub in p.track_publications.values())
                     
                     # If track is subscribed, audio is published, or SIP state is active/connected -> call answered!
