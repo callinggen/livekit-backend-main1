@@ -10,8 +10,9 @@ from app.api.reports import router as report_router
 from app.api.agents import router as agents_router
 from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
-# Ensure recordings directory exists
+# Ensure recordings and uploads directories exist
 os.makedirs("recordings", exist_ok=True)
+os.makedirs(os.path.join("uploads", "materials"), exist_ok=True)
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -112,6 +113,7 @@ app = FastAPI(
 )
 
 app.mount("/api/recordings", StaticFiles(directory="recordings"), name="recordings")
+app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -134,6 +136,12 @@ app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 from whatsapp.routes import router as whatsapp_router
 app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
 app.include_router(whatsapp_router, prefix="/whatsapp", tags=["WhatsApp"])
+
+from app.api.whatsapp_materials import router as whatsapp_materials_router
+app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
+
+from app.api.whatsapp_send import router as whatsapp_send_router
+app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
 
 
 @app.get("/")

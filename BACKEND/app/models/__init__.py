@@ -10,3 +10,4 @@ from .agent import Agent
 from .demo_lead import DemoLead
 from .contact_form_user import ContactFormUser
 from .whatsapp_action import WhatsAppAction
+from .whatsapp_material import WhatsAppMaterial

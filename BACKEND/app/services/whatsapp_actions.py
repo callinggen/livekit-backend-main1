@@ -11,6 +11,7 @@ from app.models.call import Call
 from app.models.contact import Contact
 from app.models.campaign import Campaign
 from app.models.whatsapp_action import WhatsAppAction
+from app.models.user import User
 from whatsapp import service as evolution_service
 from whatsapp.config import EVOLUTION_INSTANCE_NAME
 
@@ -194,6 +195,31 @@ class WhatsAppActionService:
                 action_record.status = "sent"
                 action_record.response = api_res
                 action_record.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+                # ── Deduct 1 WhatsApp Credit upon successful delivery ───────
+                try:
+                    owner_user_id = campaign.user_id if campaign else None
+                    if not owner_user_id and call.job_id:
+                        from app.models.job import Job
+                        job = await db.get(Job, call.job_id)
+                        if job and job.campaign_id:
+                            cmp = await db.get(Campaign, job.campaign_id)
+                            if cmp:
+                                owner_user_id = cmp.user_id
+
+                    if owner_user_id:
+                        credit_user = await db.get(User, owner_user_id)
+                        if credit_user and credit_user.credits > 0:
+                            credit_user.credits -= 1
+                            print(f"[WhatsAppService] Deducted 1 credit for user {credit_user.id} ({credit_user.email}). Remaining credits: {credit_user.credits}")
+                            from app.services.notification_service import notification_service
+                            try:
+                                await notification_service.check_and_trigger_credit_notifications(db, credit_user)
+                            except Exception as notif_err:
+                                print(f"[WhatsAppService] Non-fatal notification check error: {notif_err}")
+                except Exception as credit_err:
+                    print(f"[WhatsAppService] Non-fatal credit deduction error: {credit_err}")
+
                 await db.commit()
 
                 print(
