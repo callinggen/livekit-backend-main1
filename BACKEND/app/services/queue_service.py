@@ -33,6 +33,38 @@ class QueueService:
             print("Job not found")
             return False
 
+        # ── Dynamic user telephony lookup (must happen before concurrency check) ──
+        campaign = await db.get(Campaign, job.campaign_id)
+        user_phone: UserPhoneNumber | None = None
+        sip_trunk_id: str | None = None
+        sip_call_from: str | None = None
+
+        if campaign and campaign.user_id:
+            num_stmt = (
+                select(UserPhoneNumber)
+                .where(UserPhoneNumber.user_id == campaign.user_id)
+                .where(UserPhoneNumber.is_active == True)
+                .order_by(UserPhoneNumber.is_default.desc(), UserPhoneNumber.id.asc())
+            )
+            phone_res = await db.execute(num_stmt)
+            user_phone = phone_res.scalars().first()
+
+            if user_phone:
+                if user_phone.sip_id:
+                    sip_trunk_id = user_phone.sip_id
+                if user_phone.phone_number:
+                    sip_call_from = user_phone.phone_number
+                print(
+                    f"Using assigned dynamic telephony for User #{campaign.user_id}: "
+                    f"Phone={sip_call_from}, SIP_Trunk={sip_trunk_id}, "
+                    f"Max Concurrent={user_phone.max_concurrent_calls}"
+                )
+            else:
+                print(
+                    f"[WARN] No active phone number assigned to User #{campaign.user_id}. "
+                    "Call dispatch will use global env fallback — assign a phone number via Admin to enable dynamic calling."
+                )
+
         # ── Watchdog & Concurrency Check: Check all active calls in dialing/in_progress ────
         result = await db.execute(
             select(Call).where(
@@ -63,7 +95,12 @@ class QueueService:
                 valid_active_calls.append(active_call)
 
         active_calls_count = len(valid_active_calls)
-        max_concurrency = int(os.getenv("MAX_CONCURRENT_CALLS", "3"))
+
+        # Use per-line max_concurrent_calls if available, else global env fallback
+        if user_phone and getattr(user_phone, "max_concurrent_calls", None):
+            max_concurrency = int(user_phone.max_concurrent_calls)
+        else:
+            max_concurrency = int(os.getenv("MAX_CONCURRENT_CALLS", "3"))
 
         if active_calls_count >= max_concurrency:
             print(
@@ -91,7 +128,6 @@ class QueueService:
             job.status = "completed"
             job.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-            campaign = await db.get(Campaign, job.campaign_id)
             if campaign:
                 campaign.status = "completed"
 
@@ -125,26 +161,6 @@ class QueueService:
         print(f"Room Name : {room_name}")
         print("Status -> calling")
 
-        # Dynamic user assigned telephony lookup
-        sip_trunk_id = None
-        sip_call_from = None
-        campaign = await db.get(Campaign, job.campaign_id)
-        if campaign and campaign.user_id:
-            num_stmt = (
-                select(UserPhoneNumber)
-                .where(UserPhoneNumber.user_id == campaign.user_id)
-                .where(UserPhoneNumber.is_active == True)
-                .order_by(UserPhoneNumber.is_default.desc(), UserPhoneNumber.id.asc())
-            )
-            phone_res = await db.execute(num_stmt)
-            user_phone = phone_res.scalars().first()
-            if user_phone:
-                if user_phone.sip_id:
-                    sip_trunk_id = user_phone.sip_id
-                if user_phone.phone_number:
-                    sip_call_from = user_phone.phone_number
-                print(f"Using assigned dynamic telephony for User #{campaign.user_id}: Phone={sip_call_from}, SIP_Trunk={sip_trunk_id}")
-
         result = await make_livekit_call(
             phone=contact.phone,
             room_name=room_name,
@@ -167,4 +183,4 @@ class QueueService:
             print(f"SIP dial failed for call {call.id}: {result.get('error')}")
             await CallService.fail_call(db=db, call_id=call.id)
 
-        return True
+        return True

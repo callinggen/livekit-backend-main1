@@ -24,6 +24,7 @@ class PhoneNumberResponse(BaseModel):
     sip_password: Optional[str] = None
     status: str = "Active"
     is_default: bool = False
+    max_concurrent_calls: int = 3
 
     class Config:
         from_attributes = True
@@ -41,6 +42,7 @@ class AssignPhoneNumberRequest(BaseModel):
     sip_password: Optional[str] = None
     status: str = "Active"
     is_default: bool = False
+    max_concurrent_calls: int = 3
 
 
 DEFAULT_SYSTEM_NUMBERS = [
@@ -183,6 +185,7 @@ async def assign_phone_number(
         sip_password=request.sip_password,
         status=request.status,
         is_default=request.is_default,
+        max_concurrent_calls=request.max_concurrent_calls,
         is_active=True,
     )
 

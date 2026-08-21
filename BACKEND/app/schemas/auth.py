@@ -66,6 +66,7 @@ class UserPhoneNumberCreate(BaseModel):
     sip_password: str | None = None
     status: str = "Active"
     is_default: bool = False
+    max_concurrent_calls: int = 3
 
 class UserCreateRequest(BaseModel):
     full_name: str

@@ -68,6 +68,12 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+        # Per-line concurrency support
+        try:
+            await conn.execute(text("ALTER TABLE user_phone_numbers ADD COLUMN max_concurrent_calls INTEGER DEFAULT 3;"))
+        except Exception:
+            pass
+
         try:
             await conn.execute(text("ALTER TABLE contacts ADD COLUMN original_row INTEGER;"))
         except Exception:
