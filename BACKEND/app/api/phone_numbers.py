@@ -115,17 +115,17 @@ async def get_user_phone_numbers(
             # Mask provider platform details for non-admin users
             return [
                 PhoneNumberResponse(
-                    id=num["id"],
-                    region=num["region"],
-                    phone_number=num["phone_number"],
-                    number_type=num.get("number_type", "Mobile"),
+                    id=int(num["id"]),
+                    region=str(num["region"]),
+                    phone_number=str(num["phone_number"]),
+                    number_type=str(num.get("number_type", "Mobile")),
                     provider_name="Assigned Line",
                     provider_account_id=None,
                     api_key_auth_token=None,
                     sip_id=None,
                     sip_username=None,
                     sip_password=None,
-                    status=num.get("status", "Active"),
+                    status=str(num.get("status", "Active")),
                     is_default=bool(num.get("is_default", False)),
                     max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
                 )
@@ -133,19 +133,19 @@ async def get_user_phone_numbers(
             ]
         return [
             PhoneNumberResponse(
-                id=num["id"],
-                region=num["region"],
-                phone_number=num["phone_number"],
-                number_type=num.get("number_type", "Mobile"),
-                provider_name=num.get("provider_name", ""),
-                provider_account_id=num.get("provider_account_id"),
-                api_key_auth_token=num.get("api_key_auth_token"),
-                sip_id=num.get("sip_id"),
-                sip_username=num.get("sip_username"),
-                sip_password=num.get("sip_password"),
-                status=num.get("status", "Active"),
+                id=int(num["id"]),
+                region=str(num["region"]),
+                phone_number=str(num["phone_number"]),
+                number_type=str(num.get("number_type", "Mobile")),
+                provider_name=str(num.get("provider_name", "")),
+                provider_account_id=str(num["provider_account_id"]) if num.get("provider_account_id") else None,
+                api_key_auth_token=str(num["api_key_auth_token"]) if num.get("api_key_auth_token") else None,
+                sip_id=str(num["sip_id"]) if num.get("sip_id") else None,
+                sip_username=str(num["sip_username"]) if num.get("sip_username") else None,
+                sip_password=str(num["sip_password"]) if num.get("sip_password") else None,
+                status=str(num.get("status", "Active")),
                 is_default=bool(num.get("is_default", False)),
-                max_concurrent_calls=num.get("max_concurrent_calls", 3),
+                max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
             )
             for num in raw_list
         ]
