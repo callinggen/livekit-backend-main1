@@ -98,7 +98,7 @@ class QueueService:
 
         # Use per-line max_concurrent_calls if available, else global env fallback
         if user_phone and getattr(user_phone, "max_concurrent_calls", None):
-            max_concurrency = int(user_phone.max_concurrent_calls)
+            max_concurrency = user_phone.max_concurrent_calls
         else:
             max_concurrency = int(os.getenv("MAX_CONCURRENT_CALLS", "3"))
 

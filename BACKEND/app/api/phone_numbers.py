@@ -112,19 +112,43 @@ async def get_user_phone_numbers(
     if not user_numbers:
         raw_list = DEFAULT_SYSTEM_NUMBERS
         if not current_user.is_admin:
-            # Mask provider platform details for non-admin user
-            masked = []
-            for num in raw_list:
-                item = dict(num)
-                item["provider_name"] = "Assigned Line"
-                item["provider_account_id"] = None
-                item["api_key_auth_token"] = None
-                item["sip_id"] = None
-                item["sip_username"] = None
-                item["sip_password"] = None
-                masked.append(item)
-            return [PhoneNumberResponse(**num) for num in masked]
-        return [PhoneNumberResponse(**num) for num in raw_list]
+            # Mask provider platform details for non-admin users
+            return [
+                PhoneNumberResponse(
+                    id=num["id"],
+                    region=num["region"],
+                    phone_number=num["phone_number"],
+                    number_type=num.get("number_type", "Mobile"),
+                    provider_name="Assigned Line",
+                    provider_account_id=None,
+                    api_key_auth_token=None,
+                    sip_id=None,
+                    sip_username=None,
+                    sip_password=None,
+                    status=num.get("status", "Active"),
+                    is_default=bool(num.get("is_default", False)),
+                    max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
+                )
+                for num in raw_list
+            ]
+        return [
+            PhoneNumberResponse(
+                id=num["id"],
+                region=num["region"],
+                phone_number=num["phone_number"],
+                number_type=num.get("number_type", "Mobile"),
+                provider_name=num.get("provider_name", ""),
+                provider_account_id=num.get("provider_account_id"),
+                api_key_auth_token=num.get("api_key_auth_token"),
+                sip_id=num.get("sip_id"),
+                sip_username=num.get("sip_username"),
+                sip_password=num.get("sip_password"),
+                status=num.get("status", "Active"),
+                is_default=bool(num.get("is_default", False)),
+                max_concurrent_calls=num.get("max_concurrent_calls", 3),
+            )
+            for num in raw_list
+        ]
 
     if not current_user.is_admin:
         res = []
