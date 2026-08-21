@@ -11,6 +11,7 @@ from app.api.agents import router as agents_router
 from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
 from app.api.phone_numbers import router as phone_numbers_router
+from app.api.email_campaigns import router as email_campaign_router
 
 # Ensure recordings directory exists
 os.makedirs("recordings", exist_ok=True)
@@ -30,6 +31,8 @@ from app.models.call import Call
 from app.models.user import User
 from app.models.password_reset import PasswordReset
 from app.models.notification_state import UserNotificationState
+from app.models.email_campaign import EmailCampaign  # registers email tables
+from app.models.email_contact import EmailContact    # registers email tables
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
 
@@ -140,6 +143,7 @@ app.include_router(report_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(calendar_router, tags=["Calendar"])
 app.include_router(campaign_router, prefix="/api", tags=["Campaigns"])
+app.include_router(email_campaign_router, prefix="/api", tags=["Email Campaigns"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])

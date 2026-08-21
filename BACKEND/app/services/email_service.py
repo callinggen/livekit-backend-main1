@@ -19,7 +19,15 @@ class EmailService:
     def is_configured(self):
         return bool(self.smtp_host and self.smtp_user and self.smtp_password)
 
-    def _send_email(self, to_email: str, subject: str, body: str, is_html: bool = False):
+    def _send_email(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        is_html: bool = False,
+        from_override: str | None = None,
+        reply_to: str | None = None,
+    ):
         if not to_email:
             print("[EmailService] No recipient email specified, skipping.")
             return
@@ -35,10 +43,12 @@ class EmailService:
             return
 
         msg = MIMEMultipart("alternative")
-        msg['From'] = self.smtp_from
+        msg['From'] = from_override or self.smtp_from
         msg['To'] = to_email
         msg['Subject'] = subject
-        
+        if reply_to:
+            msg['Reply-To'] = reply_to
+
         subtype = 'html' if is_html else 'plain'
         msg.attach(MIMEText(body, subtype, 'utf-8'))
 
