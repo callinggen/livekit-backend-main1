@@ -1,5 +1,9 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.campaigns import router as campaign_router
@@ -12,6 +16,8 @@ from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
 from app.api.phone_numbers import router as phone_numbers_router
 from app.api.email_campaigns import router as email_campaign_router
+from app.api.payments import router as payment_router
+
 
 # Ensure recordings directory exists
 os.makedirs("recordings", exist_ok=True)
@@ -33,6 +39,8 @@ from app.models.password_reset import PasswordReset
 from app.models.notification_state import UserNotificationState
 from app.models.email_campaign import EmailCampaign  # registers email tables
 from app.models.email_contact import EmailContact    # registers email tables
+from app.models.payment import Payment
+
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
 
@@ -149,6 +157,8 @@ app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 app.include_router(phone_numbers_router)
+app.include_router(payment_router, prefix="/api")
+
 
 
 

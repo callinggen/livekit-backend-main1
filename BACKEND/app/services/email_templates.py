@@ -234,3 +234,55 @@ def get_account_deactivated_html(full_name: str, email: str) -> str:
     """
     return _wrap_email_layout("Account Deactivated Notice", body)
 
+
+def get_payment_invoice_html(
+    full_name: str,
+    email: str,
+    plan_name: str,
+    amount: int,
+    credits: int,
+    order_id: str,
+    payment_id: str
+) -> str:
+    name_str = html.escape(full_name or "Client")
+    email_str = html.escape(email)
+    plan_str = html.escape(plan_name)
+    order_str = html.escape(order_id)
+    payment_str = html.escape(payment_id)
+    price_formatted = f"INR {amount / 100:.2f}"
+    
+    body = f"""
+    <p>Hello <strong>{name_str}</strong>,</p>
+    <p>Thank you for your purchase! We have successfully received your payment for the <strong>{plan_str} Pack</strong>. Your credits have been topped up in your workspace immediately.</p>
+    
+    <div style="background-color: #1e1b4b; border-left: 4px solid #4f46e5; padding: 18px; border-radius: 8px; margin: 20px 0; color: #ffffff;">
+      <div style="font-size: 12px; color: #c4b5fd; font-weight: 600; text-transform: uppercase; margin-bottom: 10px;">Payment Receipt & Invoice</div>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px; color: #e2e8f0;">
+        <tr>
+          <td style="padding: 6px 0; color: #94a3b8; font-weight: 500; text-align: left;">Plan Details:</td>
+          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #ffffff;">{plan_str} Pack</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #94a3b8; font-weight: 500; text-align: left;">Credits Added:</td>
+          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #34d399;">+{credits:,} Credits</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; color: #94a3b8; font-weight: 500; text-align: left;">Total Paid:</td>
+          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #ffffff;">{price_formatted}</td>
+        </tr>
+        <tr style="border-top: 1px solid #334155;">
+          <td style="padding: 8px 0 0 0; color: #94a3b8; font-weight: 500; text-align: left;">Razorpay Order ID:</td>
+          <td style="padding: 8px 0 0 0; text-align: right; font-family: monospace; font-size: 12px; color: #cbd5e1;">{order_str}</td>
+        </tr>
+        <tr>
+          <td style="padding: 4px 0; color: #94a3b8; font-weight: 500; text-align: left;">Razorpay Payment ID:</td>
+          <td style="padding: 4px 0; text-align: right; font-family: monospace; font-size: 12px; color: #cbd5e1;">{payment_str}</td>
+        </tr>
+      </table>
+    </div>
+    
+    <p>You can view your updated credit details and campaign limits directly inside your client workspace dashboard.</p>
+    """
+    return _wrap_email_layout("Payment Invoice Receipt - CallingGen", body, button_text="Open Dashboard", button_url="#/dashboard")
+
+

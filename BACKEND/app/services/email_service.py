@@ -127,6 +127,23 @@ class EmailService:
         html_body = email_templates.get_account_deactivated_html(full_name, to_email)
         self._send_email(to_email, subject, html_body, is_html=True)
 
+    def send_payment_invoice_email(
+        self,
+        to_email: str,
+        full_name: str,
+        plan_name: str,
+        amount: int,
+        credits: int,
+        order_id: str,
+        payment_id: str
+    ):
+        subject = f"Receipt for your purchase of {plan_name} Pack - CallingGen"
+        html_body = email_templates.get_payment_invoice_html(
+            full_name, to_email, plan_name, amount, credits, order_id, payment_id
+        )
+        self._send_email(to_email, subject, html_body, is_html=True)
+
 # Create a singleton instance
+
 email_service = EmailService()
 
