@@ -24,6 +24,7 @@ class PhoneNumberResponse(BaseModel):
     sip_password: Optional[str] = None
     status: str = "Active"
     is_default: bool = False
+    max_concurrent_calls: int = 3
 
     class Config:
         from_attributes = True
@@ -41,6 +42,7 @@ class AssignPhoneNumberRequest(BaseModel):
     sip_password: Optional[str] = None
     status: str = "Active"
     is_default: bool = False
+    max_concurrent_calls: int = 3
 
 
 DEFAULT_SYSTEM_NUMBERS = [
@@ -110,19 +112,43 @@ async def get_user_phone_numbers(
     if not user_numbers:
         raw_list = DEFAULT_SYSTEM_NUMBERS
         if not current_user.is_admin:
-            # Mask provider platform details for non-admin user
-            masked = []
-            for num in raw_list:
-                item = dict(num)
-                item["provider_name"] = "Assigned Line"
-                item["provider_account_id"] = None
-                item["api_key_auth_token"] = None
-                item["sip_id"] = None
-                item["sip_username"] = None
-                item["sip_password"] = None
-                masked.append(item)
-            return [PhoneNumberResponse(**num) for num in masked]
-        return [PhoneNumberResponse(**num) for num in raw_list]
+            # Mask provider platform details for non-admin users
+            return [
+                PhoneNumberResponse(
+                    id=int(num["id"]),
+                    region=str(num["region"]),
+                    phone_number=str(num["phone_number"]),
+                    number_type=str(num.get("number_type", "Mobile")),
+                    provider_name="Assigned Line",
+                    provider_account_id=None,
+                    api_key_auth_token=None,
+                    sip_id=None,
+                    sip_username=None,
+                    sip_password=None,
+                    status=str(num.get("status", "Active")),
+                    is_default=bool(num.get("is_default", False)),
+                    max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
+                )
+                for num in raw_list
+            ]
+        return [
+            PhoneNumberResponse(
+                id=int(num["id"]),
+                region=str(num["region"]),
+                phone_number=str(num["phone_number"]),
+                number_type=str(num.get("number_type", "Mobile")),
+                provider_name=str(num.get("provider_name", "")),
+                provider_account_id=str(num["provider_account_id"]) if num.get("provider_account_id") else None,
+                api_key_auth_token=str(num["api_key_auth_token"]) if num.get("api_key_auth_token") else None,
+                sip_id=str(num["sip_id"]) if num.get("sip_id") else None,
+                sip_username=str(num["sip_username"]) if num.get("sip_username") else None,
+                sip_password=str(num["sip_password"]) if num.get("sip_password") else None,
+                status=str(num.get("status", "Active")),
+                is_default=bool(num.get("is_default", False)),
+                max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
+            )
+            for num in raw_list
+        ]
 
     if not current_user.is_admin:
         res = []
@@ -183,6 +209,7 @@ async def assign_phone_number(
         sip_password=request.sip_password,
         status=request.status,
         is_default=request.is_default,
+        max_concurrent_calls=request.max_concurrent_calls,
         is_active=True,
     )
 

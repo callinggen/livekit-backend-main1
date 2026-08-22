@@ -328,6 +328,7 @@ async def create_user(
                 sip_password=phone_data.sip_password,
                 status=phone_data.status,
                 is_default=phone_data.is_default,
+                max_concurrent_calls=getattr(phone_data, "max_concurrent_calls", 3),
                 is_active=True,
             )
             db.add(pn)

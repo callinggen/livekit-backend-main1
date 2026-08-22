@@ -86,6 +86,12 @@ class UserPhoneNumber(Base):
         default=False,
     )
 
+    # 12. Max Concurrent Calls for this specific line
+    max_concurrent_calls: Mapped[int] = mapped_column(
+        Integer,
+        default=3,
+    )
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
@@ -95,3 +101,4 @@ class UserPhoneNumber(Base):
         DateTime,
         default=lambda: datetime.now(timezone.utc),
     )
+
