@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON
+from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -98,4 +98,29 @@ class Call(Base):
     credits_deducted: Mapped[int] = mapped_column(
         Integer,
         default=0,
+    )
+
+    outcome: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    failure_reason: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    sip_was_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+
+    answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    billing_status: Mapped[str] = mapped_column(
+        String,
+        default="pending",
     )

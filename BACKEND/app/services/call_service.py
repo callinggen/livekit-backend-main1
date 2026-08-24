@@ -11,7 +11,40 @@ from app.models.user import User
 from app.services.notification_service import notification_service
 
 
+def classify_call_end(sip_was_active: bool, disconnect_reason: Optional[str], outcome_override: Optional[str], failure_reason: Optional[str]):
+    """
+    Definitive central classifier for call states and outcomes.
+    Returns: (status, outcome, failure_reason)
+    """
+    if failure_reason:
+        return "failed", "unknown", failure_reason
 
+    # Pre-Answer Cases
+    if not sip_was_active:
+        if outcome_override in ("declined", "busy", "voicemail"):
+            return "ended", outcome_override, None
+        return "ended", "no_answer", None
+
+    # Post-Answer Cases (sip_was_active == True -> NEVER allow no_answer)
+    
+    # Clean outcome_override if it was somehow passed as no_answer
+    if outcome_override == "no_answer":
+        outcome_override = None
+
+    if outcome_override in ("appointment_booked", "rescheduled", "not_interested", "agent_no_response", "customer_hangup", "agent_hangup"):
+        return "completed", outcome_override, None
+
+    if disconnect_reason == "customer_disconnect":
+        return "completed", "customer_hangup", None
+    elif disconnect_reason in ("agent_hangup", "llm_tool"):
+        if outcome_override:
+            return "completed", outcome_override, None
+        return "completed", "agent_hangup", None
+    
+    if outcome_override:
+        return "completed", outcome_override, None
+        
+    return "completed", "answered", None
 async def _get_credit_owner_for_call(db: AsyncSession, call: Call) -> Optional[User]:
     """
     Resolve the user owning this call for credit deduction.
@@ -118,6 +151,9 @@ class CallService:
         recording_url: Optional[str] = None,
         is_voicemail: bool = False,
         detection_metadata: Optional[dict] = None,
+        duration: Optional[int] = None,
+        outcome: Optional[str] = None,
+        failure_reason: Optional[str] = None,
     ):
         import os
         print("-" * 50)
@@ -133,6 +169,9 @@ class CallService:
             print(f"[CallService] Call {call_id} NOT FOUND in DB")
             return None
 
+        # Store previous status to handle watchdog race condition stats
+        was_failed = (call.status == "failed")
+
         # Prevent double completion
         if call.status == "completed":
             print(f"[CallService] Call {call_id} is ALREADY completed")
@@ -141,9 +180,18 @@ class CallService:
         # ── Calculate timestamps and duration FIRST ───────────────────
         now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
         call.ended_at = now
-        if call.started_at:
-            started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
-            call.duration = int((now - started).total_seconds())
+        
+        if duration is not None:
+            call.duration = duration
+        elif call.sip_was_active or call.answered_at:
+            ans_time = call.answered_at or call.started_at
+            if ans_time:
+                ans_time = ans_time.replace(tzinfo=None) if (hasattr(ans_time, "tzinfo") and ans_time.tzinfo) else ans_time
+                call.duration = max(0, int((now - ans_time).total_seconds()))
+            else:
+                call.duration = 0
+        else:
+            call.duration = 0
 
         if recording_url:
             call.recording_url = recording_url
@@ -178,41 +226,7 @@ class CallService:
                             "credits_charged": False
                         }
 
-        # ── Determine if it's a success or failure ────────────────────
-        has_transcript = bool(transcript and transcript.strip())
-        has_duration = call.duration > 0
-        has_audio = bool(recording_url or (call.recording_url and os.path.exists(call.recording_url.lstrip("/"))))
-
-        is_success = (has_transcript or has_duration or has_audio) and not is_voicemail
-        
-        # Determine if we should deduct a credit (transitioning to completed and no credit deducted yet)
-        should_deduct = is_success and call.credits_deducted == 0 and not is_voicemail
-
-        if is_voicemail:
-            call.status = "incomplete"
-        else:
-            call.status = "completed" if is_success else "failed"
-            
-        if detection_metadata:
-            call.detection_metadata = detection_metadata
-        
-        if should_deduct:
-            owner = await _get_credit_owner_for_call(db, call)
-            if owner and owner.credits > 0:
-                owner.credits -= 1
-                call.credits_deducted = 1
-                try:
-                    await notification_service.check_and_trigger_credit_notifications(db, owner)
-                except Exception as e:
-                    print(f"Error checking credit notifications: {e}")
-
-        # Check if appointment_date is a real, valid date string
-        has_valid_appointment = (
-            appointment_date is not None 
-            and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
-        )
-
-        # Check transcript for response signals
+        # Check transcript for response signals (do this first to inform outcome_override)
         lower_tx = (transcript or "").lower()
         is_not_interested = any(phrase in lower_tx for phrase in [
             "not interested", "no interest", "don't want", "dont want", "no thanks",
@@ -223,6 +237,80 @@ class CallService:
             "call me", "call back", "reschedule", "later today", "tomorrow at",
             "after", "later this week", "next week", "would work better"
         ])
+
+        has_valid_appointment = (
+            appointment_date is not None 
+            and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
+        )
+
+        outcome_override = outcome
+        if is_voicemail:
+            outcome_override = "voicemail"
+        elif has_valid_appointment:
+            outcome_override = "appointment_booked"
+        elif is_not_interested:
+            outcome_override = "not_interested"
+        elif is_reschedule:
+            outcome_override = "rescheduled"
+
+        # Note: disconnect_reason is not explicitly passed as a distinct field right now,
+        # but 'outcome' usually contains 'customer_hangup' or 'agent_hangup' from agent.py if a disconnect occurs.
+        # We can map that.
+        disconnect_reason = None
+        if outcome in ("customer_hangup", "agent_hangup"):
+            disconnect_reason = outcome
+
+        final_status, final_outcome, final_failure = classify_call_end(
+            sip_was_active=call.sip_was_active,
+            disconnect_reason=disconnect_reason,
+            outcome_override=outcome_override,
+            failure_reason=failure_reason
+        )
+
+        connected = bool(call.sip_was_active or call.answered_at)
+        
+        print(f"\n[CLASSIFICATION INVARIANT]")
+        print(f"call_id={call_id}")
+        print(f"connected={connected}")
+        print(f"sip_was_active={call.sip_was_active}")
+        print(f"answered_at={call.answered_at}")
+        print(f"outcome={final_outcome}\n")
+
+        if connected and final_outcome == "no_answer":
+            print(f"[CRITICAL ERROR] Connected call {call_id} was classified as no_answer. Autocorrecting to 'answered'.")
+            final_status = "completed"
+            final_outcome = "answered"
+
+        call.status = final_status
+        call.outcome = final_outcome
+        call.failure_reason = final_failure
+        
+        # A successful call is any post-answer call that didn't fail
+        is_success = call.status == "completed"
+        
+        if detection_metadata:
+            call.detection_metadata = detection_metadata
+            
+        # Determine if we should deduct a credit (transitioning to completed and billing is pending)
+        if call.billing_status == "pending":
+            if is_success and not is_voicemail:
+                import math
+                credits_to_deduct = math.floor(max(0, call.duration) / 4)
+                
+                if credits_to_deduct > 0:
+                    owner = await _get_credit_owner_for_call(db, call)
+                    if owner:
+                        owner.credits -= credits_to_deduct
+                        call.credits_deducted = credits_to_deduct
+                        
+                        try:
+                            await notification_service.check_and_trigger_credit_notifications(db, owner)
+                        except Exception as e:
+                            print(f"Error checking credit notifications: {e}")
+                
+                call.billing_status = "billed"
+            else:
+                call.billing_status = "not_billable"
 
         # Default fallbacks before async background LLM enrichment
         if transcript:
@@ -265,7 +353,10 @@ class CallService:
             elif is_reschedule:
                 contact.response = "Rescheduled"
             else:
-                contact.response = "Answered" if is_success else "No Answer / Cut"
+                if call.status == "failed":
+                    contact.response = "Failed"
+                else:
+                    contact.response = call.outcome.replace("_", " ").title() if call.outcome else "Unknown"
 
         business_outcome = contact.response if contact else "None"
 
@@ -274,8 +365,11 @@ class CallService:
         if job:
             if is_success:
                 job.completed_contacts += 1
+                if was_failed:
+                    job.failed_contacts = max(0, job.failed_contacts - 1)
             else:
-                job.failed_contacts += 1
+                if not was_failed:
+                    job.failed_contacts += 1
             # Mark job & campaign complete when all contacts are processed
             if (job.completed_contacts + job.failed_contacts) >= job.total_contacts:
                 job.status = "completed"
@@ -286,6 +380,18 @@ class CallService:
                         campaign.status = "incomplete"
                     else:
                         campaign.status = "completed"
+
+        # ── BACKEND GUARD ─────────────────────────────────────────────
+        if call.sip_was_active or call.answered_at:
+            if call.outcome == "no_answer":
+                print(f"[FATAL ERROR] Connected Call {call_id} attempted to be marked as no_answer!")
+                raise RuntimeError(f"Invalid classification: connected call {call_id} cannot be no_answer")
+                
+        if call.outcome in ("no_answer", "declined", "busy"):
+            call.duration = 0
+            call.credits_deducted = 0
+            if contact:
+                contact.duration = "0"
 
         # ── IMMEDIATE COMMIT ──────────────────────────────────────────
         await db.commit()
@@ -310,6 +416,8 @@ class CallService:
     async def fail_call(
         db: AsyncSession,
         call_id: int,
+        outcome: Optional[str] = None,
+        failure_reason: Optional[str] = None,
     ):
         """
         Mark a call as failed/no_answer and advance the campaign to the next contact.
@@ -319,22 +427,40 @@ class CallService:
         if call is None:
             return None
 
-        if call.status in ("completed", "failed"):
+        if call.status in ("completed", "failed", "ended"):
             return call
 
-        call.status = "failed"
+        final_status, final_outcome, final_failure = classify_call_end(
+            sip_was_active=call.sip_was_active,
+            disconnect_reason=None,
+            outcome_override=outcome,
+            failure_reason=failure_reason
+        )
+
+        call.status = final_status
+        call.outcome = final_outcome
+        call.failure_reason = final_failure
+        
+        if call.billing_status == "pending":
+            call.billing_status = "not_billable"
+        
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         call.ended_at = now
         if call.started_at:
-            started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
-            call.duration = int((now - started).total_seconds())
+            call.duration = 0
 
         contact = await db.get(Contact, call.contact_id)
         if contact:
-            # Differentiate between no-answer / unreached vs call cut
-            has_tx = call.transcript and len(call.transcript.strip()) > 0
-            contact.status = "failed"
-            contact.response = "Call Cut / Disconnected" if has_tx else "No Answer / Declined"
+            if call.status == "failed":
+                contact.status = "failed"
+                contact.response = "System Failure"
+            else:
+                contact.status = "failed" # From campaign's perspective, this contact failed to convert
+                has_tx = call.transcript and len(call.transcript.strip()) > 0
+                if has_tx and call.outcome == "no_answer":
+                    contact.response = "Call Cut / Disconnected"
+                else:
+                    contact.response = (call.outcome or "no_answer").replace("_", " ").title()
 
         job = await db.get(Job, call.job_id)
         if job:
