@@ -44,12 +44,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
                 
-        for col_name in ["campaign_type", "parent_campaign_id"]:
+        for col_name in ["campaign_type", "parent_campaign_id", "whatsapp_automation"]:
             try:
                 if col_name == "campaign_type":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN campaign_type VARCHAR DEFAULT 'normal';"))
                 elif col_name == "parent_campaign_id":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN parent_campaign_id INTEGER;"))
+                elif col_name == "whatsapp_automation":
+                    await conn.execute(text("ALTER TABLE campaigns ADD COLUMN whatsapp_automation JSON;"))
             except Exception:
                 pass
                 
@@ -142,6 +144,9 @@ app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["Wha
 
 from app.api.whatsapp_send import router as whatsapp_send_router
 app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
+
+from app.api.whatsapp_history import router as whatsapp_history_router
+app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
 
 
 @app.get("/")

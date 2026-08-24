@@ -30,6 +30,7 @@ class TextMaterialCreate(BaseModel):
     title: str
     content: str
     tags: Optional[str] = None
+    save_to_base: Optional[bool] = True
 
 
 class MaterialUpdate(BaseModel):
@@ -101,6 +102,20 @@ async def create_text_material(
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="Message content cannot be empty")
 
+    if req.save_to_base is False:
+        return {
+            "success": True,
+            "message": "Text template prepared for single use",
+            "material": {
+                "id": None,
+                "title": req.title.strip(),
+                "type": "text",
+                "content": req.content.strip(),
+                "tags": req.tags.strip() if req.tags else None,
+                "save_to_base": False,
+            },
+        }
+
     material = WhatsAppMaterial(
         user_id=current_user.id,
         title=req.title.strip(),
@@ -134,6 +149,7 @@ async def upload_material(
     title: str = Form(...),
     type: str = Form(...),  # "image" or "document"
     tags: Optional[str] = Form(None),
+    save_to_base: Optional[bool] = Form(True),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -185,13 +201,31 @@ async def upload_material(
     # Base URL for public serving
     file_url = f"/api/whatsapp/materials/file/{unique_name}"
 
+    mime_type = file.content_type or ("image/png" if mat_type == "image" else "application/pdf")
+
+    if not save_to_base:
+        return {
+            "success": True,
+            "message": f"{mat_type.capitalize()} uploaded for single use",
+            "material": {
+                "id": None,
+                "title": title.strip(),
+                "type": mat_type,
+                "file_url": file_url,
+                "file_size": file_size,
+                "mime_type": mime_type,
+                "tags": tags.strip() if tags else None,
+                "save_to_base": False,
+            },
+        }
+
     material = WhatsAppMaterial(
         user_id=current_user.id,
         title=title.strip(),
         type=mat_type,
         file_path=stored_path,
         file_url=file_url,
-        mime_type=file.content_type or ("image/png" if mat_type == "image" else "application/pdf"),
+        mime_type=mime_type,
         file_size=file_size,
         tags=tags.strip() if tags else None,
     )

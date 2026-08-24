@@ -101,6 +101,13 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
                         bg_call.category = clean_cat
                 await bg_db.commit()
                 print(f"[CallService] Background AI classification updated for Call {call_id}: summary='{bg_call.summary}', category='{bg_call.category}'")
+
+                # Asynchronously evaluate Campaign WhatsApp Automation (non-blocking)
+                try:
+                    from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                    asyncio.create_task(WhatsAppAutomationService.process_call_automation(call_id))
+                except Exception as auto_err:
+                    print(f"[CallService] Non-fatal WhatsApp automation trigger error: {auto_err}")
     except Exception as e:
         print(f"[CallService] Background DeepSeek analysis error (non-fatal): {e}")
 
@@ -330,6 +337,14 @@ class CallService:
             asyncio.create_task(
                 _analyze_and_update_summary(call.id, transcript, business_outcome, is_not_interested)
             )
+        else:
+            # Trigger WhatsApp Automation directly if no long transcript analysis
+            try:
+                import asyncio
+                from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                asyncio.create_task(WhatsAppAutomationService.process_call_automation(call.id))
+            except Exception as auto_err:
+                print(f"[CallService] Non-fatal WhatsApp automation trigger error: {auto_err}")
 
         # ── Asynchronously trigger WhatsApp follow-up for Voicemail or Missed Call ──
         if is_voicemail or is_missed_call:
@@ -399,6 +414,14 @@ class CallService:
                         campaign.status = "completed"
 
         await db.commit()
+
+        # Asynchronously evaluate Campaign WhatsApp Automation (non-blocking)
+        try:
+            import asyncio
+            from app.services.whatsapp_automation_service import WhatsAppAutomationService
+            asyncio.create_task(WhatsAppAutomationService.process_call_automation(call.id))
+        except Exception as auto_err:
+            print(f"[CallService] Non-fatal WhatsApp automation fail_call trigger error: {auto_err}")
 
         # Asynchronously trigger missed call / busy WhatsApp follow-up (non-blocking)
         try:

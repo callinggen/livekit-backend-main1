@@ -14,5 +14,6 @@ class CampaignCreate(BaseModel):
     selection_type: str = "all"
     start_row: int | None = None
     end_row: int | None = None
+    whatsapp_automation: dict | None = None
 
     contacts: List[ContactCreate]

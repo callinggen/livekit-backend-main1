@@ -76,8 +76,19 @@ TIME & APPOINTMENT VALIDATION RULES:
 - If the customer mentions a time without AM or PM (e.g. "3 o'clock" or "10:30"), ask: "Is that AM or PM?"
 - When calling finish_call, pass appointment_date in YYYY-MM-DD format (e.g. "2026-07-29") and appointment_time with AM/PM (e.g. "02:00 PM").
 
+HANDLING BUSY CUSTOMERS / "NO TIME RIGHT NOW":
+- If you ask "Do you have a minute?" / "Is now a good time?" or if the customer says "No", "I'm busy", "Not right now", "In a meeting", or has no time to talk:
+  * DO NOT say "Thank you for your time" and hang up immediately!
+  * Instead, offer to schedule a callback / appointment:
+    "No problem at all! Would you like to schedule a quick fifteen minute consultation or callback at a convenient time for you?"
+  * If WhatsApp Automation is enabled, you may also offer to send information over WhatsApp (see WhatsApp rules below).
+
+SPEECH & PRONUNCIATION RULES:
+- Always pronounce time durations in clean words (e.g. say "fifteen minute consultation" rather than "15-minute").
+- Speak in a warm, calm, and conversational tone to ensure completely smooth, natural delivery without vocal glitching.
+
 CALL TERMINATION & FINISH_CALL RULES:
-- IF THE CUSTOMER SAYS "NOT INTERESTED", "NO THANKS", "DON'T CALL ME", "NOT REQUIRED", OR DECLINES:
+- IF THE CUSTOMER EXPLICITLY SAYS "NOT INTERESTED", "NO THANKS, NOT REQUIRED", "DON'T CALL ME", OR REJECTS ANY APPOINTMENT/SERVICE:
   1. Say: "No problem at all. Thank you for your time, and have a great day!"
   2. IMMEDIATELY CALL THE `finish_call` TOOL! NEVER CONTINUE ASKING QUESTIONS OR PROLONG THE CALL AFTER DECLINE.
 - IF THE CUSTOMER SAYS "GOODBYE", "BYE", "THANK YOU", OR INDICATES HANGUP:
@@ -92,6 +103,7 @@ def build_agent_instructions(
     agent_type: str,
     custom_script: str,
     customer_name: str,
+    whatsapp_enabled: bool = False,
 ) -> str:
     """
     Compose the full system prompt for the agent from:
@@ -100,6 +112,7 @@ def build_agent_instructions(
     - the campaign-specific custom script
     - the pre-known customer name
     - mandatory date/time validation rules
+    - conditional post-call WhatsApp permission protocol (if whatsapp_enabled is True)
     """
     from datetime import datetime, timezone, timedelta
 
@@ -152,6 +165,21 @@ DATE & CALLBACK RESOLUTION RULES:
         else ""
     )
 
+    whatsapp_permission_clause = """
+POST-CALL WHATSAPP BROCHURE & MATERIAL PERMISSION PROTOCOL:
+- WhatsApp Follow-Up Automation is ENABLED for this campaign.
+- When the customer says they are busy / don't have time right now:
+  * First ask for a callback / appointment time.
+  * Then ask for permission to send the brochure or details on WhatsApp:
+    "Also, would it be okay if I send our brochure and information on WhatsApp so you can review it at your convenience?"
+- If the customer shows interest, agreement, or before concluding:
+  * Ask for permission: "May I share our brochure / details with you on WhatsApp after this call?"
+- If the customer says "YES", "SURE", "OKAY", "SEND IT", or agrees:
+  * Acknowledge naturally ("Great, I'll send that over to your WhatsApp right away.") and call `finish_call` when concluding.
+- If the customer says "NO", "DON'T SEND", "NOT INTERESTED", or declines WhatsApp:
+  * Respect their preference ("No problem at all!"), do NOT ask again, and call `finish_call`.
+""" if whatsapp_enabled else ""
+
     return f"""{base}
 {name_clause}
 
@@ -174,7 +202,7 @@ WHATSAPP ACTION TOOL:
 You have access to a tool named `send_whatsapp_info`.
 If the customer asks to receive information on WhatsApp (e.g. "send brochure", "send pricing", "send website", "send booking link", "send contact details"):
 Call `send_whatsapp_info` with the matching action (e.g. action="SEND_BROCHURE", "SEND_PRICING", "SEND_WEBSITE", etc.) and naturally confirm to the customer.
-
+{whatsapp_permission_clause}
 CAMPAIGN-SPECIFIC SCRIPT:
 {custom_script}
 
@@ -358,8 +386,8 @@ class VoicemailDetector:
 class DynamicAgent(Agent):
     """Agent whose behaviour is fully driven by the campaign configuration."""
 
-    def __init__(self, agent_type: str, custom_script: str, customer_name: str):
-        instructions = build_agent_instructions(agent_type, custom_script, customer_name)
+    def __init__(self, agent_type: str, custom_script: str, customer_name: str, whatsapp_enabled: bool = False):
+        instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
         super().__init__(
             instructions=instructions,
             tools=[finish_call, send_whatsapp_info],
@@ -370,14 +398,14 @@ async def _get_campaign_info(call_id: int) -> dict:
     """
     Look up the campaign and contact for a given call_id so the agent
     can use the correct script, agent type, and customer name.
-    Returns a dict with keys: agent_type, script, customer_name, voice.
+    Returns a dict with keys: agent_type, script, customer_name, voice, whatsapp_enabled.
     """
     try:
         async with AsyncSessionLocal() as db:
             call = await db.get(Call, call_id)
             if call is None:
                 print(f"[agent] Warning: call {call_id} not found in DB")
-                return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
+                return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False}
 
             contact = await db.get(Contact, call.contact_id)
 
@@ -387,7 +415,11 @@ async def _get_campaign_info(call_id: int) -> dict:
             campaign = await db.get(Campaign, job.campaign_id) if job else None
 
             voice_profile = "Meera"  # Default fallback
+            whatsapp_enabled = False
             if campaign:
+                if campaign.whatsapp_automation and isinstance(campaign.whatsapp_automation, dict):
+                    whatsapp_enabled = bool(campaign.whatsapp_automation.get("enabled", False))
+
                 agent_stmt = select(AgentModel).where(
                     AgentModel.name == campaign.agent,
                     AgentModel.user_id == campaign.user_id
@@ -414,10 +446,12 @@ async def _get_campaign_info(call_id: int) -> dict:
                 "metadata_fields": contact.metadata_fields if contact else {},
                 "voicemail_detection": campaign.voicemail_detection if campaign else None,
                 "voice": voice_profile,
+                "whatsapp_enabled": whatsapp_enabled,
+                "whatsapp_automation": campaign.whatsapp_automation if campaign else None,
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False}
 
 
 async def entrypoint(ctx: JobContext):
@@ -797,6 +831,7 @@ async def entrypoint(ctx: JobContext):
                 agent_type=agent_type,
                 custom_script=custom_script,
                 customer_name=customer_name,
+                whatsapp_enabled=campaign_info.get("whatsapp_enabled", False),
             ),
         )
 
@@ -907,19 +942,22 @@ async def entrypoint(ctx: JobContext):
             )
             shutdown_event.set()
         else:
-            # Force the agent to strictly follow STEP 1 of the script verbatim
-            greeting_instructions = (
-                f"You are now starting the call. The customer's name is '{customer_name}'. "
-                "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
-                "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
-                if customer_name.strip()
-                else
-                "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
-                "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
-            )
+            # Immediately speak the opening greeting as soon as the call connects
+            clean_name = customer_name.strip() if customer_name else ""
+            if clean_name and clean_name.lower() not in ("unknown", ""):
+                greeting_instructions = (
+                    f"The call is now connected. Immediately speak this greeting right now: "
+                    f"'Hi, may I speak with {clean_name}?'"
+                )
+            else:
+                greeting_instructions = (
+                    "The call is now connected. Immediately speak this greeting right now: "
+                    "'Hi, good day! Am I speaking with the concerned person?'"
+                )
 
+            print(f"[agent] Triggering immediate opening greeting: {greeting_instructions}")
             await session.generate_reply(instructions=greeting_instructions)
-            print("Greeting sent")
+            print("[agent] Opening greeting dispatched successfully")
 
         # Keep the entrypoint alive until the room is deleted.
         # finish_call deletes the LiveKit room → LiveKit fires the

@@ -122,6 +122,7 @@ class CampaignService:
             schedule_time=data.schedule_time,
             status="pending",
             campaign_type="normal",
+            whatsapp_automation=data.whatsapp_automation,
         )
 
         db.add(campaign)

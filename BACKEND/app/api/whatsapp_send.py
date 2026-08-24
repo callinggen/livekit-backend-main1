@@ -12,8 +12,10 @@ from app.models.contact import Contact
 from app.models.call import Call
 from app.models.user import User
 from app.models.whatsapp_material import WhatsAppMaterial
+from app.models.whatsapp_send_job import WhatsAppSendJob
+from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
+from app.services.whatsapp_credit_service import WhatsAppCreditService
 from app.core.security import get_current_user
-from app.services.notification_service import notification_service
 from whatsapp import service as evolution_service
 from whatsapp.config import EVOLUTION_INSTANCE_NAME
 
@@ -49,6 +51,9 @@ class SendBulkRequest(BaseModel):
     recipients: List[RecipientItem]
     items: List[MessageContentItem]
     instance_name: Optional[str] = None
+    source_type: Optional[str] = "manual"  # "campaign_manual", "excel_csv", "manual"
+    source_name: Optional[str] = None
+    campaign_id: Optional[int] = None
 
 
 # ── GET /api/whatsapp/campaign-contacts-filtered ───────────────────────────
@@ -162,7 +167,8 @@ async def send_bulk_whatsapp(
 ):
     """
     Execute controlled bulk WhatsApp sending to selected contacts.
-    Deducts exactly 1 credit per successfully sent message item.
+    Deducts exactly 1 credit per text/image/document message item per recipient.
+    Creates a full Send Job with recipient-level tracking for history.
     """
     if not req.recipients:
         raise HTTPException(status_code=400, detail="No recipients provided.")
@@ -186,20 +192,16 @@ async def send_bulk_whatsapp(
     if not valid_recipients:
         raise HTTPException(status_code=400, detail="None of the selected recipients have a valid phone number.")
 
-    # Calculate total required credits: 1 credit per message item per recipient
-    items_count = len(req.items)
-    total_required_credits = len(valid_recipients) * items_count
+    # Convert items to dict for credit service
+    items_dicts = [item.dict() for item in req.items]
 
-    # Refresh user to get fresh credits balance
-    await db.refresh(current_user)
+    # Calculate total required credits: Exactly 1 credit per item (Text=1, Image=1, Document=1)
+    total_required_credits = WhatsAppCreditService.calculate_total_credits(items_dicts, len(valid_recipients))
 
-    if current_user.credits < total_required_credits:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Insufficient WhatsApp credits. Required: {total_required_credits}, Available: {current_user.credits}. Please recharge your credits to proceed.",
-        )
+    # Authoritative credit check
+    await WhatsAppCreditService.verify_and_reserve_credits(db, current_user, total_required_credits)
 
-    # If any text item requested save to Material Base, save it now
+    # Save to Material Base if requested
     for item in req.items:
         if item.type == "text" and item.save_to_material and item.text:
             try:
@@ -215,6 +217,60 @@ async def send_bulk_whatsapp(
             except Exception as mat_err:
                 print(f"[SendBulk] Notice: Could not save material template: {mat_err}")
 
+    # Determine Content Type & Extract Main Message Text
+    text_items = [i for i in req.items if i.type == "text" and i.text]
+    media_items = [i for i in req.items if i.type in ("image", "document")]
+
+    main_text = text_items[0].text if text_items else (media_items[0].caption if media_items and media_items[0].caption else None)
+
+    if text_items and media_items:
+        content_type_str = "Mixed"
+    elif media_items:
+        types_set = set(m.type.title() for m in media_items)
+        content_type_str = " & ".join(sorted(types_set))
+    else:
+        content_type_str = "Text"
+
+    # Determine source name
+    source_name = req.source_name
+    if not source_name:
+        if req.source_type in ("campaign", "campaign_manual") and req.campaign_id:
+            camp = await db.get(Campaign, req.campaign_id)
+            source_name = camp.campaign_name if camp else "Campaign Send"
+        elif req.source_type == "excel_csv":
+            source_name = "Contact File Upload"
+        else:
+            source_name = "Manual Send"
+
+    # Build attachments metadata
+    attachments_meta = []
+    for m in media_items:
+        attachments_meta.append({
+            "title": m.title or m.file_name or "Attachment",
+            "type": m.type,
+            "url": m.media_url,
+            "file_name": m.file_name,
+            "mime_type": m.mime_type,
+        })
+
+    # Create Send Job record
+    send_job = WhatsAppSendJob(
+        user_id=current_user.id,
+        source_type=req.source_type or "manual",
+        source_name=source_name,
+        campaign_id=req.campaign_id,
+        content_type=content_type_str,
+        message_text=main_text,
+        attachments=attachments_meta,
+        total_contacts=len(valid_recipients),
+        sent_count=0,
+        failed_count=0,
+        credits_deducted=0,
+        status="in_progress",
+    )
+    db.add(send_job)
+    await db.flush()
+
     # Track results
     total_sent = 0
     total_failed = 0
@@ -225,6 +281,8 @@ async def send_bulk_whatsapp(
         rec_name = rec["name"]
         rec_phone = rec["phone"]
         rec_item_statuses = []
+        rec_has_error = False
+        last_rec_error = None
 
         for item in req.items:
             # ── 1. Text Message ──────────────────────────────────────────────
@@ -240,18 +298,21 @@ async def send_bulk_whatsapp(
                         text=personalized_text,
                     )
                     # Successful send -> Deduct 1 credit
-                    if current_user.credits > 0:
-                        current_user.credits -= 1
-                        total_credits_deducted += 1
+                    if current_user.credits >= WhatsAppCreditService.CREDIT_PER_TEXT:
+                        current_user.credits -= WhatsAppCreditService.CREDIT_PER_TEXT
+                        total_credits_deducted += WhatsAppCreditService.CREDIT_PER_TEXT
                         total_sent += 1
                         rec_item_statuses.append({"type": "text", "status": "sent", "response": res})
                     else:
                         rec_item_statuses.append({"type": "text", "status": "failed", "error": "Credit exhausted during send"})
                         total_failed += 1
+                        rec_has_error = True
                 except Exception as send_err:
                     print(f"[SendBulk] Text send error for {rec_phone}: {send_err}")
                     rec_item_statuses.append({"type": "text", "status": "failed", "error": str(send_err)})
                     total_failed += 1
+                    rec_has_error = True
+                    last_rec_error = str(send_err)
 
             # ── 2. Image or Document Message ─────────────────────────────────
             elif item.type in ("image", "document"):
@@ -266,6 +327,7 @@ async def send_bulk_whatsapp(
                 if caption:
                     caption = caption.replace("{{name}}", rec_name).replace("{{customer_name}}", rec_name)
 
+                item_cost = WhatsAppCreditService.calculate_item_credits(item.type)
                 try:
                     res = await evolution_service.send_media_message(
                         instance_name=inst,
@@ -276,38 +338,58 @@ async def send_bulk_whatsapp(
                         caption=caption,
                         file_name=item.file_name or ("image.png" if item.type == "image" else "document.pdf"),
                     )
-                    # Successful send -> Deduct 1 credit
-                    if current_user.credits > 0:
-                        current_user.credits -= 1
-                        total_credits_deducted += 1
+                    # Successful send -> Deduct exact credits (1 credit per image/document)
+                    if current_user.credits >= item_cost:
+                        current_user.credits -= item_cost
+                        total_credits_deducted += item_cost
                         total_sent += 1
                         rec_item_statuses.append({"type": item.type, "status": "sent", "response": res})
                     else:
                         rec_item_statuses.append({"type": item.type, "status": "failed", "error": "Credit exhausted during send"})
                         total_failed += 1
+                        rec_has_error = True
                 except Exception as media_err:
                     print(f"[SendBulk] Media send error for {rec_phone}: {media_err}")
                     rec_item_statuses.append({"type": item.type, "status": "failed", "error": str(media_err)})
                     total_failed += 1
+                    rec_has_error = True
+                    last_rec_error = str(media_err)
+
+        # Create recipient log linked to send job
+        rec_status = "sent" if not rec_has_error else ("partial" if any(i.get("status") == "sent" for i in rec_item_statuses) else "failed")
+        rec_log = WhatsAppSendRecipient(
+            send_job_id=send_job.id,
+            contact_id=rec.get("contact_id"),
+            name=rec_name,
+            phone=rec_phone,
+            status=rec_status,
+            error_message=last_rec_error,
+            details={"items": rec_item_statuses},
+            sent_at=datetime.now(timezone.utc),
+        )
+        db.add(rec_log)
 
         recipient_results.append({
             "name": rec_name,
             "phone": rec_phone,
+            "status": rec_status,
             "items": rec_item_statuses,
         })
 
-    # Save credit balance update to DB
-    await db.commit()
+    # Update Send Job summary
+    send_job.sent_count = total_sent
+    send_job.failed_count = total_failed
+    send_job.credits_deducted = total_credits_deducted
+    send_job.status = "completed" if total_failed == 0 else ("partial" if total_sent > 0 else "failed")
+    send_job.completed_at = datetime.now(timezone.utc)
 
-    # Trigger notifications if low credits
-    try:
-        await notification_service.check_and_trigger_credit_notifications(db, current_user)
-    except Exception as notif_err:
-        print(f"[SendBulk] Notification check error: {notif_err}")
+    # Save credit balance and job update to DB
+    await db.commit()
 
     return {
         "success": True,
         "message": f"WhatsApp messages processed. Sent: {total_sent}, Failed: {total_failed}, Credits Deducted: {total_credits_deducted}",
+        "job_id": send_job.id,
         "total_recipients": len(valid_recipients),
         "total_messages_sent": total_sent,
         "total_failed": total_failed,
