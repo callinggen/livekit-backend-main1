@@ -173,6 +173,7 @@ class QueueService:
             call.livekit_participant_id = (
                 str(result["participant_id"])
                 if result["participant_id"] is not None
+               
                 else None
             )
             await db.commit()
@@ -183,4 +184,4 @@ class QueueService:
             print(f"SIP dial failed for call {call.id}: {result.get('error')}")
             await CallService.fail_call(db=db, call_id=call.id)
 
-        return True
+        return True
