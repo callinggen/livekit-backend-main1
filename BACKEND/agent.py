@@ -365,7 +365,7 @@ class VoicemailDetector:
                     pass
                 transcript_text = "\n".join(transcript_raw[0])
             else:
-                transcript_text = str(transcript_raw)
+                transcript_text = transcript_raw
                 
             if not transcript_text:
                 await asyncio.sleep(1.0)
