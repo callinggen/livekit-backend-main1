@@ -159,14 +159,43 @@ class WhatsAppActionService:
                 custom_payload=custom_payload,
             )
 
-            # ── 6. Execute via Evolution API ────────────────────────────────
+            # ── 6. Centralized Credit Safety & Pre-check ────────────────────
+            from app.services.whatsapp_credit_service import WhatsAppCreditService
+            item_type = media_payload.get("media_type", "document") if media_payload else "text"
+            required_credits = WhatsAppCreditService.calculate_item_credits(item_type)
+
+            owner_user_id = campaign.user_id if campaign else None
+            if not owner_user_id and call.job_id:
+                from app.models.job import Job
+                job = await db.get(Job, call.job_id)
+                if job and job.campaign_id:
+                    cmp = await db.get(Campaign, job.campaign_id)
+                    if cmp:
+                        owner_user_id = cmp.user_id
+
+            credit_user = await db.get(User, owner_user_id) if owner_user_id else None
+            if credit_user and (credit_user.credits or 0) < required_credits:
+                error_msg = f"Insufficient WhatsApp credits. Required: {required_credits}, Available: {credit_user.credits}."
+                print(f"[WHATSAPP_ACTION_BLOCKED_CREDITS] call_id={call_id} user_id={credit_user.id} {error_msg}")
+                action_record.status = "failed"
+                action_record.error = error_msg
+                await db.commit()
+                return {
+                    "success": False,
+                    "status": "insufficient_credits",
+                    "action": action_upper,
+                    "error": error_msg,
+                }
+
+            # ── 7. Execute via Evolution API ────────────────────────────────
             print(
                 f"[WHATSAPP_SEND_STARTED] call_id={call_id} contact_id={resolved_contact_id} "
-                f"action={action_upper} phone={mask_phone(resolved_phone)}"
+                f"action={action_upper} phone={mask_phone(resolved_phone)} required_credits={required_credits}"
             )
 
             try:
                 api_res = None
+                actual_item_type = item_type
                 if media_payload:
                     try:
                         api_res = await evolution_service.send_media_message(
@@ -185,52 +214,40 @@ class WhatsAppActionService:
                             number=resolved_phone,
                             text=message_text,
                         )
+                        actual_item_type = "text"
                 else:
                     api_res = await evolution_service.send_text_message(
                         instance_name=inst,
                         number=resolved_phone,
                         text=message_text,
                     )
+                    actual_item_type = "text"
 
                 action_record.status = "sent"
                 action_record.response = api_res
                 action_record.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-                # ── Deduct 1 WhatsApp Credit upon successful delivery ───────
-                try:
-                    owner_user_id = campaign.user_id if campaign else None
-                    if not owner_user_id and call.job_id:
-                        from app.models.job import Job
-                        job = await db.get(Job, call.job_id)
-                        if job and job.campaign_id:
-                            cmp = await db.get(Campaign, job.campaign_id)
-                            if cmp:
-                                owner_user_id = cmp.user_id
-
-                    if owner_user_id:
-                        credit_user = await db.get(User, owner_user_id)
-                        if credit_user and credit_user.credits > 0:
-                            credit_user.credits -= 1
-                            print(f"[WhatsAppService] Deducted 1 credit for user {credit_user.id} ({credit_user.email}). Remaining credits: {credit_user.credits}")
-                            from app.services.notification_service import notification_service
-                            try:
-                                await notification_service.check_and_trigger_credit_notifications(db, credit_user)
-                            except Exception as notif_err:
-                                print(f"[WhatsAppService] Non-fatal notification check error: {notif_err}")
-                except Exception as credit_err:
-                    print(f"[WhatsAppService] Non-fatal credit deduction error: {credit_err}")
+                # ── Deduct WhatsApp Credits via Centralized Service ──────────
+                credits_to_deduct = WhatsAppCreditService.calculate_item_credits(actual_item_type)
+                if credit_user and credits_to_deduct > 0:
+                    try:
+                        await WhatsAppCreditService.deduct_credits(db, credit_user, credits_to_deduct)
+                        print(f"[WhatsAppService] Deducted {credits_to_deduct} credits for user {credit_user.id} ({credit_user.email}). Remaining: {credit_user.credits}")
+                    except Exception as credit_err:
+                        print(f"[WhatsAppService] Non-fatal credit deduction error: {credit_err}")
 
                 await db.commit()
 
                 print(
                     f"[WHATSAPP_SEND_SUCCESS] call_id={call_id} contact_id={resolved_contact_id} "
-                    f"action={action_upper} phone={mask_phone(resolved_phone)}"
+                    f"action={action_upper} phone={mask_phone(resolved_phone)} credits_deducted={credits_to_deduct}"
                 )
                 return {
                     "success": True,
                     "status": "sent",
                     "action": action_upper,
                     "action_id": action_record.id,
+                    "credits_deducted": credits_to_deduct,
                 }
 
             except Exception as send_err:

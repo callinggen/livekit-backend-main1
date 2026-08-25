@@ -195,7 +195,7 @@ async def send_bulk_whatsapp(
     # Convert items to dict for credit service
     items_dicts = [item.dict() for item in req.items]
 
-    # Calculate total required credits: Exactly 1 credit per item (Text=1, Image=1, Document=1)
+    # Calculate total required credits: (Text=1, Image=2, Document=3) per recipient
     total_required_credits = WhatsAppCreditService.calculate_total_credits(items_dicts, len(valid_recipients))
 
     # Authoritative credit check

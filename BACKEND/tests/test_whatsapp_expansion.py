@@ -31,38 +31,56 @@ async def run_tests():
         await conn.run_sync(Base.metadata.create_all)
     print("  -> PASS: Database tables synced successfully.")
 
-    # 2. Test Centralized Credit Rules
-    print("\n[TEST 2] Verifying Centralized WhatsApp Credit Rules...")
-    # Explicit Rule: Image = exactly 1 credit per recipient
+    # 2. Test Centralized Credit Rules (CREDIT SYSTEM — FINAL OVERRIDE)
+    print("\n[TEST 2] Verifying Centralized WhatsApp Credit Rules (Final Authoritative Override)...")
     text_cost = WhatsAppCreditService.calculate_item_credits("text")
     image_cost = WhatsAppCreditService.calculate_item_credits("image")
     doc_cost = WhatsAppCreditService.calculate_item_credits("document")
 
     assert text_cost == 1, f"Expected 1 credit for text, got {text_cost}"
-    assert image_cost == 1, f"CRITICAL: Expected exactly 1 credit for image, got {image_cost}"
-    assert doc_cost == 1, f"Expected 1 credit for document, got {doc_cost}"
+    assert image_cost == 2, f"Expected 2 credits for image, got {image_cost}"
+    assert doc_cost == 3, f"Expected 3 credits for document, got {doc_cost}"
 
-    # Scenario calculations
-    cost_1_text = WhatsAppCreditService.calculate_total_credits([{"type": "text"}], 1)
-    cost_1_img = WhatsAppCreditService.calculate_total_credits([{"type": "image"}], 1)
-    cost_1_doc = WhatsAppCreditService.calculate_total_credits([{"type": "document"}], 1)
-    assert cost_1_text == 1
-    assert cost_1_img == 1
-    assert cost_1_doc == 1
+    # Required Test 1: 1 recipient + Text -> 1 credit
+    t1 = WhatsAppCreditService.calculate_total_credits([{"type": "text"}], 1)
+    assert t1 == 1, f"Test 1 failed: Expected 1, got {t1}"
 
-    cost_100_text = WhatsAppCreditService.calculate_total_credits([{"type": "text"}], 100)
-    cost_100_img = WhatsAppCreditService.calculate_total_credits([{"type": "image"}], 100)
-    cost_100_doc = WhatsAppCreditService.calculate_total_credits([{"type": "document"}], 100)
-    assert cost_100_text == 100
-    assert cost_100_img == 100
-    assert cost_100_doc == 100
+    # Required Test 2: 1 recipient + Image -> 2 credits
+    t2 = WhatsAppCreditService.calculate_total_credits([{"type": "image"}], 1)
+    assert t2 == 2, f"Test 2 failed: Expected 2, got {t2}"
 
-    cost_100_mixed = WhatsAppCreditService.calculate_total_credits([{"type": "text"}, {"type": "image"}], 100)
-    assert cost_100_mixed == 200, f"Expected 200 credits for text+image x 100, got {cost_100_mixed}"
+    # Required Test 3: 1 recipient + Document -> 3 credits
+    t3 = WhatsAppCreditService.calculate_total_credits([{"type": "document"}], 1)
+    assert t3 == 3, f"Test 3 failed: Expected 3, got {t3}"
 
-    print(f"  -> PASS: Single recipient: Text={cost_1_text}, Image={cost_1_img}, Doc={cost_1_doc}")
-    print(f"  -> PASS: 100 recipients: Text={cost_100_text}, Image={cost_100_img}, Doc={cost_100_doc}")
-    print(f"  -> PASS: 100 recipients (Text + Image): {cost_100_mixed} credits")
+    # Required Test 4: 100 recipients + Text -> 100 credits
+    t4 = WhatsAppCreditService.calculate_total_credits([{"type": "text"}], 100)
+    assert t4 == 100, f"Test 4 failed: Expected 100, got {t4}"
+
+    # Required Test 5: 100 recipients + Image -> 200 credits
+    t5 = WhatsAppCreditService.calculate_total_credits([{"type": "image"}], 100)
+    assert t5 == 200, f"Test 5 failed: Expected 200, got {t5}"
+
+    # Required Test 6: 100 recipients + Document -> 300 credits
+    t6 = WhatsAppCreditService.calculate_total_credits([{"type": "document"}], 100)
+    assert t6 == 300, f"Test 6 failed: Expected 300, got {t6}"
+
+    # Required Test 7: 100 recipients + Text + Image -> 300 credits ((1 + 2) * 100)
+    t7 = WhatsAppCreditService.calculate_total_credits([{"type": "text"}, {"type": "image"}], 100)
+    assert t7 == 300, f"Test 7 failed: Expected 300, got {t7}"
+
+    # Required Test 8: 100 recipients + Text + Image + Document -> 600 credits ((1 + 2 + 3) * 100)
+    t8 = WhatsAppCreditService.calculate_total_credits([{"type": "text"}, {"type": "image"}, {"type": "document"}], 100)
+    assert t8 == 600, f"Test 8 failed: Expected 600, got {t8}"
+
+    print(f"  -> PASS: Test 1 (1 recipient + Text): {t1} credit")
+    print(f"  -> PASS: Test 2 (1 recipient + Image): {t2} credits")
+    print(f"  -> PASS: Test 3 (1 recipient + Document): {t3} credits")
+    print(f"  -> PASS: Test 4 (100 recipients + Text): {t4} credits")
+    print(f"  -> PASS: Test 5 (100 recipients + Image): {t5} credits")
+    print(f"  -> PASS: Test 6 (100 recipients + Document): {t6} credits")
+    print(f"  -> PASS: Test 7 (100 recipients + Text + Image): {t7} credits")
+    print(f"  -> PASS: Test 8 (100 recipients + Text + Image + Document): {t8} credits")
 
     # 3. Test Material Base Model & File Validation Rules
     print("\n[TEST 3] Testing Material Base Rules & Validation...")
@@ -178,7 +196,7 @@ async def run_tests():
         # Ensure user has credits
         user = await db.get(User, 1)
         if not user:
-            user = User(id=1, email="test@callinggen.ai", full_name="Tester", credits=2000)
+            user = User(id=1, email="test@callinggen.ai", full_name="Tester", hashed_password="fakehashedpassword", credits=2000)
             db.add(user)
             await db.commit()
             await db.refresh(user)
@@ -242,20 +260,96 @@ async def run_tests():
         await db.commit()
         await db.refresh(call_on)
 
-        # 1st Execution -> Should Match, Create Send Job, and Deduct Credits (1 text + 1 doc = 2 credits)
-        res_on = await WhatsAppAutomationService.process_call_automation(call_on.id)
-        assert res_on is not None, "Expected automation result"
-        assert res_on.get("job_id") is not None
-        print(f"  -> PASS: Automation triggered successfully. Send Job #{res_on.get('job_id')}, Credits Deducted: {res_on.get('credits_deducted')}")
+        # 1st Execution -> Should Match, Create Send Job, and Deduct Credits (1 text + 3 doc = 4 credits)
+        from unittest.mock import patch, AsyncMock
+        with patch("app.services.whatsapp_automation_service.evolution_service.send_text_message", new_callable=AsyncMock) as mock_txt, \
+             patch("app.services.whatsapp_automation_service.evolution_service.send_media_message", new_callable=AsyncMock) as mock_media:
+            mock_txt.return_value = {"status": "SUCCESS", "id": "evo_123"}
+            mock_media.return_value = {"status": "SUCCESS", "id": "evo_456"}
 
-        # 2nd Execution with same call -> Idempotency check should SKIP duplicate
-        res_dup = await WhatsAppAutomationService.process_call_automation(call_on.id)
-        assert res_dup is not None and res_dup.get("status") == "skipped_duplicate"
-        print("  -> PASS: Duplicate protection confirmed (skipped_duplicate).")
+            res_on = await WhatsAppAutomationService.process_call_automation(call_on.id)
+            assert res_on is not None, "Expected automation result"
+            assert res_on.get("job_id") is not None
+            assert res_on.get("credits_deducted") == 4, f"Expected 4 credits deducted, got {res_on.get('credits_deducted')}"
+            print(f"  -> PASS: Automation triggered successfully. Send Job #{res_on.get('job_id')}, Credits Deducted: {res_on.get('credits_deducted')}")
 
-    print("\n" + "=" * 70)
-    print("ALL VERIFICATION SUITE TESTS PASSED SUCCESSFULLY!")
-    print("=" * 70)
+            # 2nd Execution with same call -> Idempotency check should SKIP duplicate
+            res_dup = await WhatsAppAutomationService.process_call_automation(call_on.id)
+            assert res_dup is not None and res_dup.get("status") == "skipped_duplicate"
+            print("  -> PASS: Duplicate protection confirmed (skipped_duplicate).")
+
+    # 7. Test 9: Insufficient Credits Safety
+    print("\n[TEST 7 - Required Test 9] Testing Insufficient Credits Safety...")
+    async with AsyncSessionLocal() as db:
+        # Create user with only 1 credit (insufficient for 1 text + 1 doc = 4 credits)
+        import uuid
+        unique_email = f"lowcredit_{uuid.uuid4().hex[:6]}@callinggen.ai"
+        low_credit_user = User(
+            email=unique_email,
+            full_name="Low Credit User",
+            hashed_password="fakehashedpassword",
+            credits=1,
+        )
+        db.add(low_credit_user)
+        await db.commit()
+        await db.refresh(low_credit_user)
+
+        camp_low = Campaign(
+            user_id=low_credit_user.id,
+            campaign_name="Low Credit Campaign",
+            agent="Meera",
+            script="Hello",
+            schedule_date="2026-08-23",
+            schedule_time="10:00 AM",
+            whatsapp_automation={
+                "enabled": True,
+                "rules": [
+                    {
+                        "id": "rule_1",
+                        "category": "ai_classification",
+                        "value": "Interested",
+                        "message_text": "Hi {{name}}, here is your document.",
+                        "attachments": [{"type": "document", "url": "https://example.com/doc.pdf", "title": "Doc"}],
+                        "enabled": True,
+                    }
+                ],
+            },
+        )
+        db.add(camp_low)
+        await db.flush()
+
+        cont_low = Contact(
+            campaign_id=camp_low.id,
+            name="Pooja",
+            phone="919876500099",
+            status="completed",
+            response="Interested",
+        )
+        db.add(cont_low)
+        await db.flush()
+
+        call_low = Call(
+            campaign_id=camp_low.id,
+            contact_id=cont_low.id,
+            job_id=1,
+            phone="919876500099",
+            status="completed",
+            category="HOT",
+            summary="Interested",
+        )
+        db.add(call_low)
+        await db.commit()
+        await db.refresh(call_low)
+
+        # Trigger automation -> Should fail safely due to insufficient credits (4 required, 1 available)
+        res_insufficient = await WhatsAppAutomationService.process_call_automation(call_low.id)
+        assert res_insufficient is not None
+        assert res_insufficient.get("status") == "failed"
+        assert res_insufficient.get("reason") == "insufficient_credits"
+
+        await db.refresh(low_credit_user)
+        assert low_credit_user.credits == 1, f"Expected credits to remain 1, got {low_credit_user.credits}"
+        print("  -> PASS: Test 9 Insufficient credits blocked correctly. No message sent, 0 credits deducted.")
 
 
 if __name__ == "__main__":

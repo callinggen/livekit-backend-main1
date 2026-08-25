@@ -318,7 +318,7 @@ class WhatsAppAutomationService:
                 print(f"[WhatsAppAutomation] No content or attachments configured for rule in Call {call_id}.")
                 return None
 
-            # 7. Credit Calculation & Safety Check (Image = exactly 1 credit)
+            # 7. Centralized Credit Calculation & Safety Check (Text=1, Image=2, Document=3)
             total_required_credits = WhatsAppCreditService.calculate_total_credits(send_items, 1)
 
             await db.refresh(user)

@@ -142,7 +142,7 @@ async def run_tests():
             assert user.credits == init_credits - 1, f"Expected {init_credits - 1} credits, got {user.credits}"
             print(f"[TEST 4] SEND_MISSED_CALL deducted 1 credit successfully! Current credits: {user.credits}")
 
-            # Send Brochure -> should deduct exactly 1 credit!
+            # Send Brochure -> should deduct 3 credits (Document rule: 3 credits per recipient)!
             curr_credits = user.credits
             res_brochure = await WhatsAppActionService.execute_action(
                 call_id=call.id,
@@ -150,8 +150,8 @@ async def run_tests():
             )
             await db.refresh(user)
             assert res_brochure["success"] is True, "Brochure action failed"
-            assert user.credits == curr_credits - 1, f"Expected {curr_credits - 1} credits, got {user.credits}"
-            print(f"[TEST 5] SEND_BROCHURE deducted 1 credit successfully! Current credits: {user.credits}")
+            assert user.credits == curr_credits - 3, f"Expected {curr_credits - 3} credits (document = 3 credits), got {user.credits}"
+            print(f"[TEST 5] SEND_BROCHURE deducted 3 credits successfully! Current credits: {user.credits}")
 
             # Test Idempotency: duplicate SEND_BROCHURE should skip and NOT deduct credits
             curr_credits = user.credits
