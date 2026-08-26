@@ -97,7 +97,7 @@ class QueueService:
                             res = await lkapi.room.list_rooms(list=req)
                             if not res.rooms:
                                 # Room does not exist. If call is old enough to not be a startup race condition, clean it up.
-                                if call_age > timedelta(minutes=2):
+                                if call_age > timedelta(seconds=15):
                                     print(f"Watchdog: Room '{active_call.room_name}' does not exist but call {active_call.id} is in_progress. Failing call.")
                                     timeout_triggered = True
                             else:
