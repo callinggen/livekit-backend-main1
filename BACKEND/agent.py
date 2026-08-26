@@ -769,7 +769,7 @@ async def entrypoint(ctx: JobContext):
         session = AgentSession(
             vad=silero.VAD.load(
                 min_silence_duration=0.35,
-                speech_threshold=0.5,
+                activation_threshold=0.5,
             ),
             stt=sarvam.STT(),
 
