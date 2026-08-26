@@ -1036,7 +1036,16 @@ async def entrypoint(ctx: JobContext):
                 print(f"[PERF] greeting_complete={t_complete:.3f}")
                 
             try:
-                await session.generate_reply(instructions=greeting_instructions)
+                # Extract initial line of campaign script for instant greeting
+                greeting_text = ""
+                if custom_script and custom_script.strip():
+                    lines = [l.strip() for l in custom_script.strip().split("\n") if l.strip()]
+                    greeting_text = lines[0] if lines else ""
+                if not greeting_text:
+                    greeting_text = f"Hello {customer_name}, thank you for taking my call." if customer_name.strip() else "Hello, thank you for taking my call."
+                
+                print(f"[agent] Delivering instant greeting line: '{greeting_text}'")
+                await session.say(greeting_text, allow_interruptions=True)
                 print(f"[PERF] generate_reply_success=true")
                 print("Greeting generation completed")
             except Exception as e:
