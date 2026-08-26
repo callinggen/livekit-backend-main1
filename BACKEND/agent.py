@@ -854,7 +854,7 @@ async def entrypoint(ctx: JobContext):
             "agent_id": campaign_info.get("agent_id"),
             "agent_name": agent_type,
             "script": custom_script[:50] + "..." if custom_script else "",
-            "voice_profile": db_voice,
+            "voice_profile": raw_db_voice,
             "lines": transcript_lines,
             "answered_at": None,
             "disconnected_event": customer_disconnected_event,
