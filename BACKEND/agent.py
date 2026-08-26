@@ -784,7 +784,7 @@ async def entrypoint(ctx: JobContext):
 
         session = AgentSession(
             vad=silero.VAD.load(
-                min_silence_duration=0.35,
+                min_silence_duration=0.5,
                 activation_threshold=0.5,
             ),
             stt=sarvam.STT(),
@@ -798,7 +798,7 @@ async def entrypoint(ctx: JobContext):
             tts=sarvam.TTS(
                 model="bulbul:v2",
                 speaker=speaker_voice,
-                speech_sample_rate=8000,
+                speech_sample_rate=16000,
             ),
         )
 
@@ -1006,15 +1006,14 @@ async def entrypoint(ctx: JobContext):
                     "or follow Step 1 of the script if applicable. Start speaking now."
                 )
             else:
-                # Force the agent to strictly follow STEP 1 of the script verbatim
                 greeting_instructions = (
-                    f"You are now starting the call. The customer's name is '{customer_name}'. "
-                    "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
-                    "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
+                    f"You are now starting the outbound call. The customer's name is '{customer_name}'. "
+                    f"Greet the customer and speak the initial script line clearly and fluently: '{custom_script[:200]}' "
+                    "Do not improvise or add extra text. Speak smoothly and naturally now."
                     if customer_name.strip()
                     else
-                    "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
-                    "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
+                    f"You are now starting the outbound call. Speak the initial script line clearly and fluently: '{custom_script[:200]}' "
+                    "Do not improvise or add extra text. Speak smoothly and naturally now."
                 )
 
             t_gen_reply = time.monotonic()
