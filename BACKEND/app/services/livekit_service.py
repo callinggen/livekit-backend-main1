@@ -10,7 +10,8 @@ from livekit.protocol.sip import (
     SIPDispatchRuleIndividual,
     CreateSIPDispatchRuleRequest,
 )
-from livekit.api import RoomConfiguration, RoomAgentDispatch
+from livekit.api import RoomAgentDispatch
+from livekit.protocol.room import RoomConfiguration
 
 import os
 
@@ -51,9 +52,18 @@ async def make_livekit_call(
         clean_sip_from = "+917971442271"
 
     agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
-    room_config = RoomConfiguration(
-        agents=[RoomAgentDispatch(agent_name=agent_name)]
+
+    # Step 1: Pre-create the room with agent dispatch config
+    # so the agent auto-joins when the SIP participant connects.
+    from livekit.protocol.room import CreateRoomRequest
+    room_req = CreateRoomRequest(
+        name=room_name,
+        agents=[RoomAgentDispatch(agent_name=agent_name)],
     )
+    try:
+        await lkapi.room.create_room(room_req)
+    except Exception as room_err:
+        print(f"[livekit_service] Warning: could not pre-create room '{room_name}': {room_err}")
 
     req = CreateSIPParticipantRequest(
         sip_trunk_id=sip_trunk_id,
@@ -63,7 +73,6 @@ async def make_livekit_call(
         participant_identity="customer",
         participant_name="Customer",
         wait_until_answered=False,
-        room_config=room_config,
     )
 
     try:
