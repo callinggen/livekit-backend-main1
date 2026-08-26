@@ -798,7 +798,7 @@ async def entrypoint(ctx: JobContext):
             tts=sarvam.TTS(
                 model="bulbul:v2",
                 speaker=speaker_voice,
-                speech_sample_rate=16000,
+                speech_sample_rate=8000,
             ),
         )
 
