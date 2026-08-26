@@ -385,7 +385,12 @@ async def finish_call(
     print(f"Room: {room_name}")
 
     # Determine appropriate goodbye phrase dynamically based on customer conversation context
-    transcript = _build_transcript(session)
+    res = _build_transcript(session)
+    if isinstance(res, tuple) and len(res) == 3:
+        lines, customer_lines, agent_lines = res
+        transcript = "\n".join(lines)
+    else:
+        transcript = str(res or "")
     lower_t = transcript.lower()
 
     if (appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()):
@@ -415,7 +420,12 @@ async def finish_call(
             print(f"Warning – could not speak goodbye (non-fatal): {e}")
 
         # ── Step 2: Build transcript (after goodbye is in history) ────────
-        transcript = _build_transcript(session)
+        res_end = _build_transcript(session)
+        if isinstance(res_end, tuple) and len(res_end) == 3:
+            lines_end, _, _ = res_end
+            transcript = "\n".join(lines_end)
+        else:
+            transcript = str(res_end or "")
         print(f"Transcript lines: {len(transcript.splitlines())}")
 
         # ── Step 3: Close the agent session ──────────────────────────────
