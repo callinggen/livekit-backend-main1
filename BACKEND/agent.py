@@ -1151,6 +1151,7 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name=agent_name,
-            num_idle_processes=5,
+            num_idle_processes=2,
+            load_threshold=0.95,
         )
     )
