@@ -12,12 +12,12 @@ from app.models.payment import Payment
 from app.models.user import User
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 # Load environment variables
-RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "mock_key_id")
-RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "mock_key_secret")
-RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mock_webhook_secret")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "mock_key_id").strip()
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "mock_key_secret").strip()
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mock_webhook_secret").strip()
 
 
 # Determine Mock Mode status
@@ -331,10 +331,11 @@ class PaymentService:
                 detail="User not found for credit allocation"
             )
 
-        # Add credits
+        # Add credits and update plan
         old_credits = user.credits
         user.credits += payment.credits
-        print(f"Successfully processed payment. Allocated {payment.credits} credits to User {user.id}. Balance: {old_credits} -> {user.credits}")
+        user.subscription_plan = payment.plan_name
+        print(f"Successfully processed payment. Allocated {payment.credits} credits to User {user.id}. Balance: {old_credits} -> {user.credits}. New Plan: {user.subscription_plan}")
 
         # Commit all modifications to users & payments tables
         await db.commit()

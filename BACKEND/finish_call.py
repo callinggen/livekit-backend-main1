@@ -62,16 +62,17 @@ def _build_transcript(session: Any) -> str:
                     continue
                 lines.append(f"{role}: {clean_t}")
 
+        # Fallback to real-time buffer if chat_ctx is entirely empty
         if not lines:
-            fallback_lines = getattr(session, "_transcript_lines", [])
-            if not fallback_lines and hasattr(session, "room"):
+            lines = getattr(session, "_transcript_lines", [])
+            if not lines and hasattr(session, "room"):
                 room_name = getattr(session.room, "name", None)
                 if room_name and room_name in ACTIVE_CALLS:
-                    fallback_lines = ACTIVE_CALLS[room_name].get("lines", [])
-            if fallback_lines:
-                lines = fallback_lines
+                    lines = ACTIVE_CALLS[room_name].get("lines", [])
 
-        return "\n".join(lines)
+        customer_lines = sum(1 for line in lines if line.startswith("user:"))
+        agent_lines = sum(1 for line in lines if line.startswith("assistant:"))
+        return lines, customer_lines, agent_lines
 
     except Exception as e:
         import traceback
@@ -79,15 +80,265 @@ def _build_transcript(session: Any) -> str:
         return ""
 
 
+def request_call_finish(
+    room_name: str,
+    reason: str,
+    customer_name: str = "",
+    appointment_date: str = "",
+    appointment_time: str = "",
+    is_voicemail: bool = False,
+    detection_metadata: dict = None,
+    outcome: str = None,
+    failure_reason: str = None,
+):
+    state = ACTIVE_CALLS.get(room_name)
+    if not state:
+        print(f"[CALL END REQUEST] call_id=unknown reason={reason} accepted=false")
+        return False
+
+    if reason == "llm_tool":
+        phase = state.get("call_phase")
+        first_audio = state.get("first_audio_received", False)
+        customer_has_spoken = state.get("customer_has_spoken", False)
+        if phase == "greeting" or (not first_audio and not customer_has_spoken):
+            print(f"[CALL END BLOCKED]\ncall_id={state.get('call_id')}\nreason={reason}\nphase={phase}\nfirst_audio_received={first_audio}\ncustomer_has_spoken={customer_has_spoken}\n")
+            return "Call termination is not allowed during the initial greeting. Continue the conversation."
+
+    if state.get("finishing"):
+        print(f"[CALL END REQUEST] call_id={state.get('call_id')} reason={reason} accepted=false")
+        return False
+
+    state["finishing"] = True
+    print(f"[CALL END REQUEST] call_id={state.get('call_id')} reason={reason} accepted=true")
+    
+    asyncio.create_task(terminate_call_once(
+        room_name=room_name,
+        reason=reason,
+        customer_name=customer_name,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+        is_voicemail=is_voicemail,
+        detection_metadata=detection_metadata,
+        outcome=outcome,
+        failure_reason=failure_reason,
+    ))
+    return True
+
+
+async def terminate_call_once(
+    room_name: str,
+    reason: str,
+    customer_name: str = "",
+    appointment_date: str = "",
+    appointment_time: str = "",
+    is_voicemail: bool = False,
+    detection_metadata: dict = None,
+    outcome: str = None,
+    failure_reason: str = None,
+):
+    import os
+    import time
+    from livekit import api
+    
+    print(f"--- EXECUTING TERMINATE CALL ONCE: room={room_name}, reason={reason} ---")
+
+    state = ACTIVE_CALLS.get(room_name)
+    if state is None:
+        return
+
+    finish_call_requested_at = time.monotonic()
+    room_delete_started_at = None
+    room_delete_completed_at = None
+    duration_calculated_at = None
+    backend_notify_started_at = None
+    backend_notify_completed_at = None
+    
+    session = state.get("session")
+    if session:
+        setattr(session, "_is_finishing", True)
+
+    try:
+        call_id = int(room_name.rsplit("-", 1)[-1])
+    except (ValueError, IndexError):
+        call_id = -1
+        
+    ans_at = state.get("answered_at")
+    sip_was_active = ans_at is not None
+
+    # Stop recording
+    disc_event = state.get("disconnected_event")
+    if disc_event:
+        disc_event.set()
+
+    # ── Step 1: Delay room deletion to allow final TTS to play ──
+    if reason == "llm_tool":
+        print("Waiting 4.5 seconds to allow final agent response to play before hanging up...")
+        await asyncio.sleep(4.5)
+        print("Grace period finished. Proceeding to hang up.")
+
+    # ── Step 2: ALWAYS delete the LiveKit room to hang up the call FIRST ──
+    room_delete_started_at = time.monotonic()
+    try:
+        print("Deleting LiveKit room (hanging up SIP call)...")
+        lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+        lk_key = os.getenv("LIVEKIT_API_KEY")
+        lk_secret = os.getenv("LIVEKIT_API_SECRET")
+        
+        if lk_url:
+            lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
+        else:
+            lkapi = api.LiveKitAPI()
+
+        try:
+            await lkapi.room.delete_room(
+                api.DeleteRoomRequest(room=room_name)
+            )
+            print("Room deleted successfully — call hung up.")
+        finally:
+            await lkapi.aclose()
+    except Exception as e:
+        print(f"Warning – room deletion error: {e}")
+    room_delete_completed_at = time.monotonic()
+
+    # ── Step 2: Wait for actual SIP disconnect ──
+    sip_disconnected_event = state.get("sip_disconnected_event")
+    if sip_disconnected_event:
+        try:
+            await asyncio.wait_for(sip_disconnected_event.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            pass
+
+    duration_calculated_at = time.monotonic()
+    
+    if not sip_was_active:
+        duration = 0
+        state["duration_source"] = "zero_unanswered"
+    else:
+        if state.get("sip_ended_at") is not None:
+            duration = int(state["sip_ended_at"] - ans_at)
+        else:
+            duration = int(duration_calculated_at - ans_at)
+            state["duration_source"] = "timeout_fallback"
+            print(f"[SIP END FALLBACK] call_id={call_id} source=timeout reason=sip_disconnect_event_missing duration_is_approximate=true")
+
+    state["duration"] = duration
+
+    # ── Step 3: Build transcript ────────
+    transcript_str = ""
+    customer_lines = 0
+    agent_lines = 0
+    if session:
+        res = _build_transcript(session)
+        if isinstance(res, tuple) and len(res) == 3:
+            lines, customer_lines, agent_lines = res
+            transcript_str = "\n".join(lines)
+        else:
+            transcript_str = res
+    print(f"Transcript lines: {len(transcript_str.splitlines())}")
+
+    customer_has_spoken = state.get("customer_has_spoken", False)
+    first_audio_received = state.get("first_audio_received", False)
+
+    print(f"\n[TRANSCRIPT]")
+    print(f"call_id={call_id}")
+    print(f"customer_lines={customer_lines}")
+    print(f"agent_lines={agent_lines}")
+    print(f"total_lines={len(transcript_str.splitlines())}\n")
+
+    # Determine if this was an agent_no_response
+    if not outcome and sip_was_active and first_audio_received and not customer_has_spoken:
+        if reason == "customer_silence":
+            outcome = "agent_no_response"
+            print("-> Reclassifying outcome to: agent_no_response")
+
+    # ── Step 4: Mix WAV tracks ────────
+    if call_id != -1:
+        try:
+            await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
+            from agent import mix_wav_files
+            mix_wav_files(
+                f"recordings/call_{call_id}_customer.wav",
+                f"recordings/call_{call_id}_agent.wav",
+                f"recordings/call_{call_id}.wav"
+            )
+        except Exception as mix_err:
+            print(f"Warning – mixing audio failed: {mix_err}")
+
+    print(f"\n[TRANSCRIPT VALIDATION]")
+    print(f"customer_lines={customer_lines}")
+    print(f"agent_lines={agent_lines}")
+    print(f"total_lines={customer_lines + agent_lines}")
+    if agent_lines == 0 and sip_was_active:
+        print("[WARNING] Transcript shows 0 agent lines for an active call!")
+
+    # ── Step 5: Notify backend with full payload ──────────────────────
+    payload = {
+        "transcript": transcript_str or None,
+        "customer_name": customer_name or None,
+        "appointment_date": appointment_date or None,
+        "appointment_time": appointment_time or None,
+        "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+        "duration": duration,
+    }
+    if is_voicemail:
+        payload["is_voicemail"] = True
+        payload["detection_metadata"] = detection_metadata
+    if outcome:
+        payload["outcome"] = outcome
+    if failure_reason:
+        payload["failure_reason"] = failure_reason
+        
+    print(f"\n[CALL TIMING]")
+    print(f"call_id={call_id}")
+    print(f"answered_at={ans_at}")
+    print(f"finish_call_requested_at={finish_call_requested_at}")
+    print(f"room_delete_started_at={room_delete_started_at}")
+    print(f"room_delete_completed_at={room_delete_completed_at}")
+    print(f"sip_disconnect_at={state.get('sip_ended_at')}")
+    print(f"duration_calculated_at={duration_calculated_at}")
+    print(f"duration={duration}")
+    print(f"duration_source={state.get('duration_source')}")
+    
+    backend_notify_started_at = time.monotonic()
+    print(f"backend_notify_started_at={backend_notify_started_at}")
+    
+    try:
+        print(f"Notifying backend that the call is complete (reason={reason})...")
+        success = await notify_call_complete(room_name, payload=payload)
+        if not success:
+            print(f"[finish_call] FORENSIC ALERT: notify_call_complete returned FALSE for room '{room_name}'!")
+    except Exception as e:
+        print(f"[finish_call] ERROR notifying backend: {e}")
+        
+    backend_notify_completed_at = time.monotonic()
+    print(f"backend_notify_completed_at={backend_notify_completed_at}\n")
+
+    # Close session cleanly to prevent background TTS processing
+    if session:
+        try:
+            await asyncio.wait_for(session.aclose(), timeout=3.0)
+        except Exception as e:
+            pass
+
+    # Remove active call state
+    ACTIVE_CALLS.pop(room_name, None)
+
+
 @function_tool(
     description="""
-Call this tool IMMEDIATELY whenever the call/conversation is complete or needs to end.
+Call this tool ONLY when the conversation is completely finished.
 MUST BE CALLED IMMEDIATELY IN THESE CASES:
 - When the customer says "not interested", "no thanks", "don't call me", or declines.
 - When an appointment or callback date/time is requested or confirmed.
 - When the customer says goodbye, thank you, or indicates they want to hang up.
 
-Calling this tool will automatically speak the appropriate goodbye phrase and hang up the SIP call.
+Calling this tool will automatically hang up the SIP call.
+
+CRITICAL RULES:
+- Do not call during the initial greeting.
+- Do not call before the customer responds.
+- Do not call merely because the greeting is complete.
+- Use only after a legitimate conversation-ending condition.
 
 Pass any details collected during the conversation:
 - customer_name: the customer's full name
@@ -104,15 +355,7 @@ async def finish_call(
     print("-" * 50)
     print("AGENT: finish_call TOOL INVOKED")
     print(f"PID: {os.getpid()}")
-    print(f"customer_name   : '{customer_name}'")
-    print(f"appointment_date: '{appointment_date}'")
-    print(f"appointment_time: '{appointment_time}'")
-    print(f"ACTIVE_CALLS keys: {list(ACTIVE_CALLS.keys())}")
     print("-" * 50)
-
-    if not ACTIVE_CALLS:
-        print("[finish_call] WARNING: No active calls in ACTIVE_CALLS dictionary.")
-        return "No active call found."
 
     # Dynamic multi-channel room resolution: match room for active call
     room_name = None
@@ -124,10 +367,7 @@ async def finish_call(
     if not room_name and ACTIVE_CALLS:
         room_name = list(ACTIVE_CALLS.keys())[0]
 
-    state = ACTIVE_CALLS.get(room_name) if room_name else None
-
-    if not room_name or state is None:
-        print("[finish_call] WARNING: State for room active call not found.")
+    if not room_name:
         return "No active call found."
 
     room_str = room_name
@@ -272,5 +512,19 @@ async def finish_call(
 
         # Remove active call state
         ACTIVE_CALLS.pop(room_str, None)
+    res = request_call_finish(
+        room_name=room_name,
+        reason="llm_tool",
+        customer_name=customer_name,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+    )
+
+    if isinstance(res, str):
+        return res
+
+    state = ACTIVE_CALLS.get(room_name)
+    if state:
+        state["call_phase"] = "finishing"
 
     return "Call ended successfully."

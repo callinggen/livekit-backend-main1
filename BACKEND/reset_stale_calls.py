@@ -36,6 +36,8 @@ async def reset():
 
             call.status = "failed"
             call.ended_at = now
+            if call.billing_status == "pending":
+                call.billing_status = "not_billable"
 
             # Mark contact as failed (NOT pending) so the worker does NOT retry it
             contact = await db.get(Contact, call.contact_id)

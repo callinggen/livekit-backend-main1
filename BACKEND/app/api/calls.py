@@ -176,6 +176,9 @@ class CallCompleteRequest(BaseModel):
     recording_url: Optional[str] = None
     is_voicemail: bool = False
     detection_metadata: Optional[dict] = None
+    duration: Optional[int] = None
+    outcome: Optional[str] = None
+    failure_reason: Optional[str] = None
 
 
 class HumanResponseRequest(BaseModel):
@@ -385,6 +388,9 @@ async def complete_call(
         recording_url=body.recording_url if body else None,
         is_voicemail=body.is_voicemail if body else False,
         detection_metadata=body.detection_metadata if body else None,
+        duration=body.duration if body else None,
+        outcome=body.outcome if body else None,
+        failure_reason=body.failure_reason if body else None,
     )
 
     if call is None:
@@ -394,8 +400,30 @@ async def complete_call(
     print(f"[API complete_call] Returning HTTP 200 success for Call {call_id}")
     return {"success": True, "call_id": call.id}
 
+# ── POST /api/calls/{call_id}/active ───────────────────────────────────────
 
-# ── GET /api/calls ──────────────────────────────────────────────────────────
+@router.post("/calls/{call_id}/active")
+async def mark_call_active(
+    call_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    import os
+    print("-" * 50)
+    print("BACKEND API: POST /api/calls/{call_id}/active RECEIVED")
+    print(f"Call ID: {call_id}")
+    print("-" * 50)
+
+    call = await db.get(Call, call_id)
+    if not call:
+        return {"error": "Call not found"}
+
+    if not call.sip_was_active:
+        call.sip_was_active = True
+        call.answered_at = datetime.now(timezone.utc)
+        await db.commit()
+        print(f"Call {call_id} marked sip_was_active = True")
+
+    return {"success": True, "call_id": call.id}
 
 from sqlalchemy import select, or_
 from app.models.user import User
@@ -479,5 +507,8 @@ async def list_calls(
             "caller_number": call.caller_number or (contact.phone if contact else ""),
             "called_number": call.called_number or "",
             "agent_name": agent_name,
+            "outcome": call.outcome or "",
+            "failure_reason": call.failure_reason or "",
+            "sip_was_active": call.sip_was_active,
         })
     return calls

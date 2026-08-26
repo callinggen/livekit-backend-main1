@@ -13,7 +13,7 @@ active_jobs = cur.fetchall()
 print("Active jobs:", active_jobs)
 
 # Reset stuck calls to 'failed'
-cur.execute("UPDATE calls SET status = 'failed' WHERE status IN ('dialing', 'in_progress')")
+cur.execute("UPDATE calls SET status = 'failed', billing_status = 'not_billable' WHERE status IN ('dialing', 'in_progress')")
 print(f"Reset {cur.rowcount} stuck call(s) to 'failed'")
 
 # Reset stuck jobs to 'queued' so they retry

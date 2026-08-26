@@ -113,6 +113,19 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+        # Call lifecycle, SIP state, and billing auto-migrations
+        for col_name, col_type in [
+            ("outcome", "VARCHAR"),
+            ("failure_reason", "VARCHAR"),
+            ("sip_was_active", "BOOLEAN DEFAULT 0"),
+            ("answered_at", "DATETIME"),
+            ("billing_status", "VARCHAR DEFAULT 'pending'"),
+        ]:
+            try:
+                await conn.execute(text(f"ALTER TABLE calls ADD COLUMN {col_name} {col_type};"))
+            except Exception:
+                pass
+
 
 
     # Ensure default admin user exists
