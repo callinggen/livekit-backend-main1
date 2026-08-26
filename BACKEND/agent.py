@@ -749,22 +749,38 @@ async def entrypoint(ctx: JobContext):
             _safe_create_task(_handle_unexpected_disconnect("customer hung up"), name="_handle_unexpected_disconnect", call_id=call_id)
 
         # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
-        SARVAM_VOICE_MAPPING = {
-            "Meera": "anushka",
-            "Raj": "abhilash",
-            "Manisha": "manisha",
-            "Karun": "karun",
-            "Vidya": "vidya",
-            "Hitesh": "hitesh",
-            "Female 1": "anushka",
-            "Female 2": "anushka",
-            "Male 1": "abhilash",
-            "Male 2": "abhilash",
-            "Nova (ElevenLabs)": "anushka",
+        ALLOWED_SARVAM_SPEAKERS = {
+            "anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh", "aditya",
+            "ritu", "priya", "neha", "rahul", "pooja", "rohan", "simran", "kavya", "amit",
+            "dev", "ishita", "shreya", "ratan", "varun", "manan", "sumit", "roopa", "kabir",
+            "aayan", "shubh", "ashutosh", "advait", "anand", "tanya", "tarun", "sunny",
+            "mani", "gokul", "vijay", "shruti", "suhani", "mohit", "kavitha", "rehan", "soham", "rupali"
         }
-        db_voice = campaign_info.get("voice", "Meera")
-        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")
-        print(f"[agent] Configured agent voice profile: {db_voice} -> mapped to Sarvam speaker: {speaker_voice}")
+        SARVAM_VOICE_MAPPING = {
+            "meera": "anushka",
+            "meera (morning tax)": "anushka",
+            "raj": "abhilash",
+            "raj (morning tax)": "abhilash",
+            "john (morning tax)": "anushka",
+            "voice-e": "anushka",
+            "voice-e (tax agent)": "anushka",
+            "manisha": "manisha",
+            "karun": "karun",
+            "vidya": "vidya",
+            "hitesh": "hitesh",
+            "female 1": "anushka",
+            "female 2": "anushka",
+            "male 1": "abhilash",
+            "male 2": "abhilash",
+            "nova (elevenlabs)": "anushka",
+            "alex": "abhilash",
+            "james": "hitesh",
+            "sarah": "vidya",
+        }
+        raw_db_voice = str(campaign_info.get("voice", "Meera")).strip()
+        mapped_speaker = SARVAM_VOICE_MAPPING.get(raw_db_voice.lower(), raw_db_voice.lower())
+        speaker_voice = mapped_speaker if mapped_speaker in ALLOWED_SARVAM_SPEAKERS else "anushka"
+        print(f"[agent] Configured agent voice profile: '{raw_db_voice}' -> mapped to Sarvam speaker: '{speaker_voice}'")
 
         session = AgentSession(
             vad=silero.VAD.load(
