@@ -10,7 +10,7 @@ from backend_client import notify_call_complete
 GOODBYE_PHRASE = "Thank you for your time. Have a great day! Goodbye."
 
 
-def _build_transcript(session: Any) -> str:
+def _build_transcript(session: Any) -> tuple[list[str], int, int]:
     """
     Extract the conversation transcript from the AgentSession.
     """
@@ -21,7 +21,7 @@ def _build_transcript(session: Any) -> str:
             
         if chat_ctx is None:
             print("Warning – session.chat_ctx/history is None, transcript will be empty.")
-            return ""
+            return [], 0, 0
 
         messages: Any = []
         if hasattr(chat_ctx, "messages"):
@@ -77,7 +77,7 @@ def _build_transcript(session: Any) -> str:
     except Exception as e:
         import traceback
         print(f"Warning – could not build transcript: {e}\n{traceback.format_exc()}")
-        return ""
+        return [], 0, 0
 
 
 def request_call_finish(
@@ -87,9 +87,9 @@ def request_call_finish(
     appointment_date: str = "",
     appointment_time: str = "",
     is_voicemail: bool = False,
-    detection_metadata: dict = None,
-    outcome: str = None,
-    failure_reason: str = None,
+    detection_metadata: dict[Any, Any] | None = None,
+    outcome: str | None = None,
+    failure_reason: str | None = None,
 ):
     state = ACTIVE_CALLS.get(room_name)
     if not state:
@@ -132,9 +132,9 @@ async def terminate_call_once(
     appointment_date: str = "",
     appointment_time: str = "",
     is_voicemail: bool = False,
-    detection_metadata: dict = None,
-    outcome: str = None,
-    failure_reason: str = None,
+    detection_metadata: dict[Any, Any] | None = None,
+    outcome: str | None = None,
+    failure_reason: str | None = None,
 ):
     import os
     import time
@@ -272,7 +272,7 @@ async def terminate_call_once(
         print("[WARNING] Transcript shows 0 agent lines for an active call!")
 
     # ── Step 5: Notify backend with full payload ──────────────────────
-    payload = {
+    payload: dict[str, Any] = {
         "transcript": transcript_str or None,
         "customer_name": customer_name or None,
         "appointment_date": appointment_date or None,
