@@ -187,13 +187,17 @@ class QueueService:
         print(f"Processing Contact {contact.id}")
         print(f"Name : {contact.name}")
         print(f"Phone: {contact.phone}")
-        contact.status = "calling"
-        await db.commit()
+        phone_to_dial = contact.phone.strip()
+        if not phone_to_dial.startswith("+"):
+            if len(phone_to_dial) == 10:
+                phone_to_dial = f"+91{phone_to_dial}"
+            elif len(phone_to_dial) == 12 and phone_to_dial.startswith("91"):
+                phone_to_dial = f"+{phone_to_dial}"
 
         call = Call(
             job_id=job.id,
             contact_id=contact.id,
-            phone=contact.phone,
+            phone=phone_to_dial,
             status="dialing",
         )
         db.add(call)
