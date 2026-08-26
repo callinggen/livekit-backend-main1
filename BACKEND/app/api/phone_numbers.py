@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.user_phone_number import UserPhoneNumber
 from app.api.auth import get_current_user
 from app.models.user import User
+from app.services.livekit_service import setup_inbound_sip
 
 router = APIRouter(prefix="/api/user", tags=["Phone Numbers"])
 
@@ -25,6 +26,8 @@ class PhoneNumberResponse(BaseModel):
     status: str = "Active"
     is_default: bool = False
     max_concurrent_calls: int = 3
+    inbound_enabled: bool = False
+    inbound_agent_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -43,6 +46,13 @@ class AssignPhoneNumberRequest(BaseModel):
     status: str = "Active"
     is_default: bool = False
     max_concurrent_calls: int = 3
+    inbound_enabled: bool = False
+    inbound_agent_id: Optional[int] = None
+
+
+class UpdatePhoneNumberRequest(BaseModel):
+    inbound_enabled: bool
+    inbound_agent_id: Optional[int] = None
 
 
 DEFAULT_SYSTEM_NUMBERS = [
@@ -128,6 +138,8 @@ async def get_user_phone_numbers(
                     status=str(num.get("status", "Active")),
                     is_default=bool(num.get("is_default", False)),
                     max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
+                    inbound_enabled=False,
+                    inbound_agent_id=None
                 )
                 for num in raw_list
             ]
@@ -146,6 +158,8 @@ async def get_user_phone_numbers(
                 status=str(num.get("status", "Active")),
                 is_default=bool(num.get("is_default", False)),
                 max_concurrent_calls=int(num.get("max_concurrent_calls", 3)),
+                inbound_enabled=False,
+                inbound_agent_id=None
             )
             for num in raw_list
         ]
@@ -167,6 +181,8 @@ async def get_user_phone_numbers(
                     sip_password=None,
                     status=num.status,
                     is_default=num.is_default,
+                    inbound_enabled=num.inbound_enabled,
+                    inbound_agent_id=num.inbound_agent_id,
                 )
             )
         return res
@@ -210,6 +226,8 @@ async def assign_phone_number(
         status=request.status,
         is_default=request.is_default,
         max_concurrent_calls=request.max_concurrent_calls,
+        inbound_enabled=request.inbound_enabled,
+        inbound_agent_id=request.inbound_agent_id,
         is_active=True,
     )
 
@@ -217,4 +235,36 @@ async def assign_phone_number(
     await db.commit()
     await db.refresh(new_number)
 
+    # Automatically provision LiveKit Inbound SIP Trunk & Dispatch Rule
+    await setup_inbound_sip(new_number.phone_number)
+
     return new_number
+
+
+@router.put("/phone-numbers/{number_id}", response_model=PhoneNumberResponse)
+async def update_phone_number_settings(
+    number_id: int,
+    request: UpdatePhoneNumberRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Allow the tenant (or admin) to configure inbound routing settings for their phone number.
+    """
+    pn = await db.get(UserPhoneNumber, number_id)
+    if not pn:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+
+    if not current_user.is_admin and pn.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this phone line")
+
+    pn.inbound_enabled = request.inbound_enabled
+    pn.inbound_agent_id = request.inbound_agent_id
+
+    await db.commit()
+    await db.refresh(pn)
+
+    if pn.inbound_enabled:
+        await setup_inbound_sip(pn.phone_number)
+
+    return pn

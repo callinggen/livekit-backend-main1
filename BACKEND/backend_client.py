@@ -28,7 +28,24 @@ async def notify_call_complete(
     try:
         call_id = int(room_name.rsplit("-", 1)[-1])
     except (ValueError, IndexError):
-        print(f"[backend_client] Could not parse call_id from room name: {room_name}")
+        call_id = -1
+
+    if call_id == -1:
+        try:
+            from app.database import AsyncSessionLocal
+            from app.models.call import Call
+            from sqlalchemy import select
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(select(Call).where(Call.room_name == room_name))
+                call = result.scalars().first()
+                if call:
+                    call_id = call.id
+        except Exception as db_err:
+            print(f"[backend_client] Database lookup failed for room {room_name}: {db_err}")
+            call_id = -1
+
+    if call_id == -1:
+        print(f"[backend_client] Could not parse or find call_id for room name: {room_name}")
         return False
 
     backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")

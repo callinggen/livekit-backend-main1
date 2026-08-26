@@ -188,10 +188,26 @@ async def finish_call(
             print(f"Warning – session.aclose() error (non-fatal): {e}")
 
         # ── Step 4: Notify backend with full payload ──────────────────────
-        try:
-            call_id = int(room_str.rsplit("-", 1)[-1])
-        except (ValueError, IndexError):
-            call_id = -1
+        call_id = state.get("call_id", -1) if state else -1
+        if call_id == -1 or call_id is None:
+            try:
+                call_id = int(room_str.rsplit("-", 1)[-1])
+            except (ValueError, IndexError):
+                call_id = -1
+
+        if call_id == -1 or call_id is None:
+            try:
+                from app.database import AsyncSessionLocal
+                from app.models.call import Call
+                from sqlalchemy import select
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(select(Call).where(Call.room_name == room_str))
+                    call = result.scalars().first()
+                    if call:
+                        call_id = call.id
+            except Exception as db_err:
+                print(f"[finish_call] Database lookup failed for room {room_str}: {db_err}")
+                call_id = -1
 
         payload = {
             "transcript": transcript or None,

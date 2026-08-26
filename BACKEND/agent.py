@@ -30,7 +30,7 @@ from app.models.contact import Contact
 from app.models.campaign import Campaign
 from app.models.agent import Agent as AgentModel
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ── Agent type → base system prompt ───────────────────────────────────────────
 # ── Agent type → base system prompt ───────────────────────────────────────────
@@ -349,7 +349,7 @@ class DynamicAgent(Agent):
 
 async def _get_campaign_info(call_id: int) -> dict:
     """
-    Look up the campaign and contact for a given call_id so the agent
+    Look up the campaign/agent and contact for a given call_id so the agent
     can use the correct script, agent type, and customer name.
     Returns a dict with keys: agent_type, script, customer_name, voice.
     """
@@ -360,11 +360,42 @@ async def _get_campaign_info(call_id: int) -> dict:
                 print(f"[agent] Warning: call {call_id} not found in DB")
                 return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
 
-            contact = await db.get(Contact, call.contact_id)
+            # Inbound call routing logic
+            if call.direction == "inbound":
+                agent_obj = None
+                if call.agent_id:
+                    agent_obj = await db.get(AgentModel, call.agent_id)
+                
+                voice_profile = "Meera"
+                agent_type = "Sales Agent"
+                script = ""
+                if agent_obj:
+                    voice_profile = agent_obj.voice
+                    agent_type = agent_obj.name
+                    script = agent_obj.script
+                    
+                contact = None
+                if call.contact_id:
+                    contact = await db.get(Contact, call.contact_id)
+
+                return {
+                    "agent_type": agent_type,
+                    "script": script,
+                    "customer_name": contact.customer_name or contact.name if contact else "",
+                    "metadata_fields": {},
+                    "voicemail_detection": {"enabled": False},
+                    "voice": voice_profile,
+                    "direction": "inbound",
+                }
+
+            # Outbound call routing logic
+            contact = None
+            if call.contact_id:
+                contact = await db.get(Contact, call.contact_id)
 
             # Trace up to campaign via job
             from app.models.job import Job
-            job = await db.get(Job, call.job_id)
+            job = await db.get(Job, call.job_id) if call.job_id else None
             campaign = await db.get(Campaign, job.campaign_id) if job else None
 
             voice_profile = "Meera"  # Default fallback
@@ -395,10 +426,11 @@ async def _get_campaign_info(call_id: int) -> dict:
                 "metadata_fields": contact.metadata_fields if contact else {},
                 "voicemail_detection": campaign.voicemail_detection if campaign else None,
                 "voice": voice_profile,
+                "direction": "outbound",
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "direction": "outbound"}
 
 
 async def entrypoint(ctx: JobContext):
@@ -409,12 +441,25 @@ async def entrypoint(ctx: JobContext):
 
     room_name = ctx.room.name
 
-    # ── Extract call_id from room name (format: "call-{call_id}") ────────────
+    # ── Resolve call_id by room name from DB or fallback to parsing room name ──
+    call_id = -1
     try:
-        call_id = int(room_name.rsplit("-", 1)[-1])
-    except (ValueError, IndexError):
-        call_id = -1
-        print(f"[agent] Warning: could not parse call_id from room name: {room_name}")
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Call).where(Call.room_name == room_name)
+            )
+            call = result.scalars().first()
+            if call:
+                call_id = call.id
+    except Exception as e:
+        print(f"[agent] DB lookup error for room_name '{room_name}': {e}")
+
+    if call_id == -1:
+        try:
+            call_id = int(room_name.rsplit("-", 1)[-1])
+        except (ValueError, IndexError):
+            call_id = -1
+            print(f"[agent] Warning: could not parse call_id from room name: {room_name}")
 
     # Register event listeners BEFORE connecting to ensure we don't miss early events
     shutdown_event = asyncio.Event()
@@ -432,12 +477,57 @@ async def entrypoint(ctx: JobContext):
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
-        if track.kind == rtc.TrackKind.KIND_AUDIO and participant.identity == "customer":
+        is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+            participant.identity != ctx.room.local_participant.identity
+        )
+        if track.kind == rtc.TrackKind.KIND_AUDIO and is_customer:
             asyncio.create_task(record_track(track, call_id))
 
     try:
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
+
+        # If it's an inbound call and still call_id == -1, initialize it via backend
+        if (room_name.startswith("inbound-call-") or "inbound" in room_name) and call_id == -1:
+            print("[agent] Inbound room detected. Pre-initializing call via backend...")
+            # Wait up to 5 seconds for remote participant to appear
+            for _ in range(10):
+                if ctx.room.remote_participants:
+                    break
+                await asyncio.sleep(0.5)
+
+            caller_number = None
+            called_number = None
+            for p in ctx.room.remote_participants.values():
+                caller_number = p.attributes.get("sip.caller") or p.identity
+                called_number = p.attributes.get("sip.called")
+                if caller_number:
+                    break
+
+            if not caller_number:
+                caller_number = "Inbound Caller"
+            if not called_number:
+                called_number = os.getenv("SIP_CALL_FROM", "+917971442271")
+
+            backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+            init_url = f"{backend_url}/api/calls/inbound-init"
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.post(init_url, json={
+                        "room_name": room_name,
+                        "caller_number": caller_number,
+                        "called_number": called_number
+                    })
+                    if resp.is_success:
+                        res_data = resp.json()
+                        if res_data.get("success"):
+                            call_id = res_data.get("call_id")
+                            print(f"[agent] Inbound call initialized. Call ID: {call_id}")
+                    else:
+                        print(f"[agent] Failed to init inbound call: {resp.status_code} {resp.text}")
+            except Exception as init_err:
+                print(f"[agent] Error calling inbound-init API: {init_err}")
 
         # Cross-process atomic file lock per room to guarantee strictly 1 agent process per call room
         import tempfile
@@ -451,7 +541,10 @@ async def entrypoint(ctx: JobContext):
 
         # Scan for already subscribed audio tracks from pre-existing customer participant
         for participant in ctx.room.remote_participants.values():
-            if participant.identity == "customer":
+            is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+                participant.identity != ctx.room.local_participant.identity
+            )
+            if is_customer:
                 for publication in participant.track_publications.values():
                     if publication.subscribed and publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
                         print(f"[recorder] Found pre-existing subscribed customer audio track: {publication.track.sid}")
@@ -777,7 +870,10 @@ async def entrypoint(ctx: JobContext):
 
         @ctx.room.on("track_subscribed")
         def on_track_subscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
-            if track.kind == rtc.TrackKind.KIND_AUDIO and (participant.identity == "customer" or "customer" in participant.identity.lower()):
+            is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+                participant.identity != ctx.room.local_participant.identity
+            )
+            if track.kind == rtc.TrackKind.KIND_AUDIO and is_customer:
                 customer_audio_ready.set()
                 asyncio.create_task(record_track(track, call_id, speaker="customer"))
 
@@ -788,7 +884,10 @@ async def entrypoint(ctx: JobContext):
 
         for _ in range(120):  # Wait up to 60 seconds (0.5s checks)
             for p in ctx.room.remote_participants.values():
-                if p.identity == "customer" or "customer" in p.identity.lower():
+                is_customer = p.identity == "customer" or "customer" in p.identity.lower() or (
+                    p.identity != ctx.room.local_participant.identity
+                )
+                if is_customer:
                     customer_identity = p.identity
                     call_status = p.attributes.get("sip.callStatus", "").lower()
                     has_audio_pub = any(pub.kind == rtc.TrackKind.KIND_AUDIO for pub in p.track_publications.values())
@@ -827,16 +926,24 @@ async def entrypoint(ctx: JobContext):
             # Small buffer to let audio pipeline & SIP media stream stabilize
             await asyncio.sleep(0.8)
 
-            # Force the agent to strictly follow STEP 1 of the script verbatim
-            greeting_instructions = (
-                f"You are now starting the call. The customer's name is '{customer_name}'. "
-                "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
-                "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
-                if customer_name.strip()
-                else
-                "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
-                "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
-            )
+            direction = campaign_info.get("direction", "outbound")
+            if direction == "inbound":
+                greeting_instructions = (
+                    f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
+                    f"Greet them warmly (e.g., 'Thank you for calling Morning Tax, my name is {agent_type}. How can I help you today?') "
+                    "or follow Step 1 of the script if applicable. Start speaking now."
+                )
+            else:
+                # Force the agent to strictly follow STEP 1 of the script verbatim
+                greeting_instructions = (
+                    f"You are now starting the call. The customer's name is '{customer_name}'. "
+                    "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
+                    "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
+                    if customer_name.strip()
+                    else
+                    "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
+                    "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
+                )
 
             try:
                 print(f"[agent] Generating greeting reply for call {call_id}...")

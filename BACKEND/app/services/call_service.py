@@ -16,8 +16,16 @@ async def _get_credit_owner_for_call(db: AsyncSession, call: Call) -> Optional[U
     """
     Resolve the user owning this call for credit deduction.
     Traces: call → job → campaign → user
+    Or for inbound: call → tenant_id
     """
     from sqlalchemy import select
+    if call.direction == "inbound" and call.tenant_id:
+        result = await db.execute(select(User).where(User.id == call.tenant_id))
+        return result.scalars().first()
+
+    if not call.job_id:
+        return None
+
     from app.models.job import Job
     from app.models.campaign import Campaign
     job = await db.get(Job, call.job_id)
@@ -241,7 +249,9 @@ class CallService:
             call.category = "UNCATEGORIZED"
 
         # ── Contact ───────────────────────────────────────────────────
-        contact = await db.get(Contact, call.contact_id)
+        contact = None
+        if call.contact_id:
+            contact = await db.get(Contact, call.contact_id)
         if contact:
             if is_voicemail:
                 contact.status = "incomplete"
@@ -270,7 +280,9 @@ class CallService:
         business_outcome = contact.response if contact else "None"
 
         # ── Job / Campaign ────────────────────────────────────────────
-        job = await db.get(Job, call.job_id)
+        job = None
+        if call.job_id:
+            job = await db.get(Job, call.job_id)
         if job:
             if is_success:
                 job.completed_contacts += 1
@@ -329,14 +341,18 @@ class CallService:
             started = call.started_at.replace(tzinfo=None) if (hasattr(call.started_at, "tzinfo") and call.started_at.tzinfo) else call.started_at
             call.duration = int((now - started).total_seconds())
 
-        contact = await db.get(Contact, call.contact_id)
+        contact = None
+        if call.contact_id:
+            contact = await db.get(Contact, call.contact_id)
         if contact:
             # Differentiate between no-answer / unreached vs call cut
             has_tx = call.transcript and len(call.transcript.strip()) > 0
             contact.status = "failed"
             contact.response = "Call Cut / Disconnected" if has_tx else "No Answer / Declined"
 
-        job = await db.get(Job, call.job_id)
+        job = None
+        if call.job_id:
+            job = await db.get(Job, call.job_id)
         if job:
             job.failed_contacts += 1
             # Mark job & campaign complete when all contacts are processed

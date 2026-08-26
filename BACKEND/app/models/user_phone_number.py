@@ -97,6 +97,17 @@ class UserPhoneNumber(Base):
         default=True,
     )
 
+    inbound_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+
+    inbound_agent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("agents.id"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),

@@ -15,9 +15,9 @@ class Call(Base):
         index=True,
     )
 
-    job_id: Mapped[int] = mapped_column(
+    job_id: Mapped[int | None] = mapped_column(
         ForeignKey("jobs.id"),
-        nullable=False,
+        nullable=True,
     )
 
     campaign_id: Mapped[int | None] = mapped_column(
@@ -31,14 +31,47 @@ class Call(Base):
         nullable=True,
     )
 
-    contact_id: Mapped[int] = mapped_column(
+    contact_id: Mapped[int | None] = mapped_column(
         ForeignKey("contacts.id"),
-        nullable=False,
+        nullable=True,
     )
 
     phone: Mapped[str] = mapped_column(
         String,
         nullable=False,
+    )
+
+    direction: Mapped[str] = mapped_column(
+        String,
+        default="outbound",
+    )
+
+    caller_number: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    called_number: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    phone_line_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("user_phone_numbers.id"),
+        nullable=True,
+    )
+
+    tenant_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
+    agent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("agents.id"),
+        nullable=True,
     )
     room_name: Mapped[str | None] = mapped_column(
     String,

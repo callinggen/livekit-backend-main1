@@ -87,6 +87,32 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
+        # Inbound columns migrations
+        for col_name in ["direction", "caller_number", "called_number"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE calls ADD COLUMN {col_name} VARCHAR;"))
+            except Exception:
+                pass
+        for col_name in ["phone_line_id", "tenant_id", "agent_id"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE calls ADD COLUMN {col_name} INTEGER;"))
+            except Exception:
+                pass
+        # Set default direction for existing calls
+        try:
+            await conn.execute(text("UPDATE calls SET direction = 'outbound' WHERE direction IS NULL;"))
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(text("ALTER TABLE user_phone_numbers ADD COLUMN inbound_enabled BOOLEAN DEFAULT 0;"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE user_phone_numbers ADD COLUMN inbound_agent_id INTEGER;"))
+        except Exception:
+            pass
+
 
 
     # Ensure default admin user exists
