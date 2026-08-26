@@ -32,8 +32,8 @@ async def make_livekit_call(
             clean_phone = f"+{clean_phone}"
 
     # Use dynamic SIP Trunk ID if provided, otherwise fallback to env / system trunk
-    if not sip_trunk_id or sip_trunk_id == "ST_3yaCewggPpAs":
-        sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_yZR7oi5aS79a")
+    if not sip_trunk_id or sip_trunk_id in ("ST_3yaCewggPpAs", "ST_yZR7oi5aS79a"):
+        sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_BKJDB3FuTdwT")
         
     # Use dynamic assigned caller ID if provided, otherwise fallback to system caller ID
     if not sip_call_from:
