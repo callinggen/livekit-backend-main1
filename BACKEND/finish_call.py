@@ -372,6 +372,10 @@ async def finish_call(
 
     room_str = room_name
 
+    state = ACTIVE_CALLS.get(room_str)
+    if not state:
+        return "No active call state found."
+
     # ── Guard against duplicate invocations ─────────────────────────────────
     # The LLM can call finish_call a second time while the first is still running
     # (e.g. customer says goodbye again). Ignore the duplicate.
