@@ -849,7 +849,21 @@ async def entrypoint(ctx: JobContext):
         }
 
 
-        print("Session started")
+        # Start session immediately so agent audio track is published to LiveKit room
+        t_session_start = time.monotonic()
+        print(f"[PERF] session_start={t_session_start:.3f}")
+        await session.start(
+            room=ctx.room,
+            agent=DynamicAgent(
+                agent_type=agent_type,
+                custom_script=custom_script,
+                customer_name=customer_name,
+            ),
+        )
+        if ACTIVE_CALLS.get(room_name):
+            ACTIVE_CALLS[room_name]["session"] = session
+
+        print("Session started and audio track published")
 
         # Identify the local agent track to record it as well
         agent_track = None
@@ -935,6 +949,7 @@ async def entrypoint(ctx: JobContext):
                 },
             )
             shutdown_event.set()
+            return
         else:
             print("Waiting for SIP call to become active...")
             try:
@@ -949,23 +964,6 @@ async def entrypoint(ctx: JobContext):
                 )
                 shutdown_event.set()
                 return
-
-            # LATENCY FIX: Start session AFTER call is answered to prevent VAD/STT from processing ringing audio
-            t_session_start = time.monotonic()
-            print(f"[PERF] session_start={t_session_start:.3f}")
-            await session.start(
-                room=ctx.room,
-                agent=DynamicAgent(
-                    agent_type=agent_type,
-                    custom_script=custom_script,
-                    customer_name=customer_name,
-                ),
-            )
-            # Update the session in ACTIVE_CALLS
-            if ACTIVE_CALLS.get(room_name):
-                ACTIVE_CALLS[room_name]["session"] = session
-
-            print("Session started")
             
             # Start Voicemail Detector
             vd_config = campaign_info.get("voicemail_detection") or {"enabled": True, "timeout": 45}
