@@ -50,6 +50,11 @@ async def make_livekit_call(
     elif not clean_sip_from:
         clean_sip_from = "+917971442271"
 
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
+    room_config = RoomConfiguration(
+        agents=[RoomAgentDispatch(agent_name=agent_name)]
+    )
+
     req = CreateSIPParticipantRequest(
         sip_trunk_id=sip_trunk_id,
         sip_call_to=clean_phone,
@@ -58,6 +63,7 @@ async def make_livekit_call(
         participant_identity="customer",
         participant_name="Customer",
         wait_until_answered=False,
+        room_config=room_config,
     )
 
     try:
