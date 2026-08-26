@@ -97,8 +97,8 @@ class CampaignService:
             pass
             
         now = datetime.now(timezone.utc)
-        # If scheduled for the future (beyond a 3-minute grace period), mark scheduled
-        if schedule_dt and schedule_dt > now + timedelta(minutes=3):
+        # If scheduled for the future (beyond a 15-minute grace period), mark scheduled
+        if schedule_dt and schedule_dt > now + timedelta(minutes=15):
             campaign.status = "scheduled"
             await db.commit()
             return None, len(contacts)
