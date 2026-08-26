@@ -265,7 +265,7 @@ def mix_wav_files(file1: str, file2: str, output_file: str):
         print(f"[mixer] Error mixing WAV files: {e}")
 
 
-async def record_track(track: rtc.Track, call_id: int, speaker: str = "customer", answered_event: asyncio.Event = None, disconnected_event: asyncio.Event = None):
+async def record_track(track: rtc.Track, call_id: int, speaker: str = "customer", answered_event: asyncio.Event | None = None, disconnected_event: asyncio.Event | None = None):
     """Record an audio track (customer or agent) into a local WAV file."""
     if answered_event:
         await answered_event.wait()
@@ -365,7 +365,7 @@ class VoicemailDetector:
                     pass
                 transcript_text = "\n".join(transcript_raw[0])
             else:
-                transcript_text = str(transcript_raw)
+                transcript_text = transcript_raw
                 
             if not transcript_text:
                 await asyncio.sleep(1.0)
@@ -403,7 +403,7 @@ class DynamicAgent(Agent):
         )
 
 
-async def _get_campaign_info(call_id: int) -> dict:
+async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
     """
     Look up the campaign and contact for a given call_id so the agent
     can use the correct script, agent type, and customer name.
@@ -427,14 +427,17 @@ async def _get_campaign_info(call_id: int) -> dict:
 
         async with AsyncSessionLocal() as db:
             call = await db.get(Call, call_id)  # re-fetch in this session
+            if not call:
+                return None
             contact = await db.get(Contact, call.contact_id)
 
             # Trace up to campaign via job
             from app.models.job import Job
-            job = await db.get(Job, call.job_id)
-            campaign = await db.get(Campaign, job.campaign_id) if job else None
+            job = await db.get(Job, call.job_id) if call.job_id else None
+            campaign = await db.get(Campaign, job.campaign_id) if job and job.campaign_id else None
 
             voice_profile = "Meera"  # Default fallback
+            agent_obj = None
             if campaign:
                 agent_stmt = select(AgentModel).where(
                     AgentModel.name == campaign.agent,
@@ -590,10 +593,16 @@ async def entrypoint(ctx: JobContext):
 
         # ── Fetch campaign info to drive the agent's behaviour ───────────────────
         campaign_info = await _get_campaign_info(call_id)
-        agent_type    = campaign_info["agent_type"]
-        base_script   = campaign_info["script"]
-        customer_name = campaign_info["customer_name"]
-        metadata      = campaign_info["metadata_fields"] or {}
+        if campaign_info is None:
+            print(f"[FATAL ERROR] call {call_id} campaign info missing on second lookup. Aborting.")
+            await ctx.room.disconnect()
+            return
+        assert campaign_info is not None
+
+        agent_type    = str(campaign_info.get("agent_type", "Voice-E (Tax Agent)"))
+        base_script   = str(campaign_info.get("script", ""))
+        customer_name = str(campaign_info.get("customer_name", ""))
+        metadata      = campaign_info.get("metadata_fields") or {}
         
         # Include customer_name in metadata for uniform replacement
         metadata_dict = {k.lower(): str(v) for k, v in metadata.items()}
@@ -814,6 +823,13 @@ async def entrypoint(ctx: JobContext):
                         break
 
             if customer_answered:
+                call_answered_event.set()
+                state = ACTIVE_CALLS.get(room_name)
+                if state and state.get("answered_at") is None:
+                    state["answered_at"] = time.monotonic()
+                    state["call_phase"] = "greeting"
+                    from backend_client import notify_call_active
+                    _safe_create_task(notify_call_active(room_name), name="notify_call_active", call_id=call_id)
                 print(f"Customer/Inbound participant answered ({customer_identity}) — starting greeting.")
                 break
             await asyncio.sleep(0.5)
@@ -900,7 +916,7 @@ async def entrypoint(ctx: JobContext):
             print(f"session_start={t_session_start:.3f}")
             print(f"generate_reply_start={t_gen_reply:.3f}")
             
-            @session.on("agent_speech_started")
+            @session.on("agent_speech_started")  # type: ignore
             def on_agent_speech_started():
                 t_first_audio = time.monotonic()
                 state = ACTIVE_CALLS.get(room_name)
@@ -908,7 +924,7 @@ async def entrypoint(ctx: JobContext):
                     state["speech_started_at"] = t_first_audio
                 print(f"[PERF] agent_speech_started={t_first_audio:.3f}")
                 
-            @session.on("agent_speech_stopped")
+            @session.on("agent_speech_stopped")  # type: ignore
             def on_agent_speech_stopped():
                 t_complete = time.monotonic()
                 print(f"[PERF] greeting_complete={t_complete:.3f}")
@@ -936,8 +952,8 @@ async def entrypoint(ctx: JobContext):
                 dt = now - last_tick
                 last_tick = now
                 
-                # If we're already finishing or customer hasn't joined, don't time out
-                if getattr(session, "_is_finishing", False) or not customer_joined:
+                # If we're already finishing or customer hasn't answered, don't time out
+                if getattr(session, "_is_finishing", False) or not customer_answered:
                     continue
                     
                 agent_state = str(getattr(session, "agent_state", "")).upper()
