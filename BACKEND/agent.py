@@ -767,7 +767,10 @@ async def entrypoint(ctx: JobContext):
         print(f"[agent] Configured agent voice profile: {db_voice} -> mapped to Sarvam speaker: {speaker_voice}")
 
         session = AgentSession(
-            vad=silero.VAD.load(),
+            vad=silero.VAD.load(
+                min_silence_duration=0.35,
+                speech_threshold=0.5,
+            ),
             stt=sarvam.STT(),
 
             llm=openai.LLM(
@@ -1076,8 +1079,8 @@ async def entrypoint(ctx: JobContext):
                         if not is_ai_busy:
                             silence_timer += dt
                             
-                        if silence_timer >= 10.0:
-                            print("[SILENCE] Customer silent for 10 seconds - ending call")
+                        if silence_timer >= 30.0:
+                            print("[SILENCE] Customer silent for 30 seconds - ending call")
                             request_call_finish(room_name, reason="customer_silence")
                             break
 
