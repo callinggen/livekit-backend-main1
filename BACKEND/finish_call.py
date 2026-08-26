@@ -326,24 +326,19 @@ async def terminate_call_once(
 
 @function_tool(
     description="""
-Call this tool ONLY when the conversation is completely finished.
-MUST BE CALLED IMMEDIATELY IN THESE CASES:
-- When the customer says "not interested", "no thanks", "don't call me", or declines.
-- When an appointment or callback date/time is requested or confirmed.
-- When the customer says goodbye, thank you, or indicates they want to hang up.
+Call this tool ONLY when the call is completely finished and ready to be disconnected.
 
-Calling this tool will automatically hang up the SIP call.
+CRITICAL DISCONNECT TRIGGERS:
+- When the customer explicitly says "not interested", "no thanks", "don't call me", or declines.
+- When an appointment or callback date/time has been confirmed.
+- When the customer explicitly says goodbye or wants to hang up.
 
-CRITICAL RULES:
-- Do not call during the initial greeting.
-- Do not call before the customer responds.
-- Do not call merely because the greeting is complete.
-- Use only after a legitimate conversation-ending condition.
+NEVER CALL THIS TOOL IF:
+- The customer says "hello", "hi", "yes", "speaking", "who is this", or answers the call.
+- The customer is asking a question or engaging in conversation.
+- The call has just started.
 
-Pass any details collected during the conversation:
-- customer_name: the customer's full name
-- appointment_date: the date if an appointment or callback was requested (e.g. "2026-08-07")
-- appointment_time: the time if an appointment or callback was requested (e.g. "05:30 PM")
+Calling this tool will immediately disconnect the phone call.
 """
 )
 async def finish_call(
