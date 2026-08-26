@@ -995,25 +995,24 @@ async def entrypoint(ctx: JobContext):
                         await _handle_voicemail_disconnect(result)
                 _safe_create_task(run_voicemail_detector(), name="run_voicemail_detector", call_id=call_id)
 
-            # Small buffer to let audio pipeline stabilize
-            await asyncio.sleep(0.5)
+            # Allow 1.0s for LiveKit SIP gateway WebRTC audio track subscription to stabilize
+            await asyncio.sleep(1.0)
 
             direction = campaign_info.get("direction", "outbound")
             if direction == "inbound":
                 greeting_instructions = (
                     f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
-                    f"Greet them warmly (e.g., 'Thank you for calling Morning Tax, my name is {agent_type}. How can I help you today?') "
-                    "or follow Step 1 of the script if applicable. Start speaking now."
+                    f"Greet them warmly and introduce yourself as {agent_type} from Morning Tax. Ask how you can help them today."
                 )
             else:
                 greeting_instructions = (
                     f"You are now starting the outbound call. The customer's name is '{customer_name}'. "
-                    f"Greet the customer and speak the initial script line clearly and fluently: '{custom_script[:200]}' "
-                    "Do not improvise or add extra text. Speak smoothly and naturally now."
+                    f"Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
+                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
                     if customer_name.strip()
                     else
-                    f"You are now starting the outbound call. Speak the initial script line clearly and fluently: '{custom_script[:200]}' "
-                    "Do not improvise or add extra text. Speak smoothly and naturally now."
+                    f"You are now starting the outbound call. Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
+                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
                 )
 
             t_gen_reply = time.monotonic()
@@ -1036,16 +1035,8 @@ async def entrypoint(ctx: JobContext):
                 print(f"[PERF] greeting_complete={t_complete:.3f}")
                 
             try:
-                # Extract initial line of campaign script for instant greeting
-                greeting_text = ""
-                if custom_script and custom_script.strip():
-                    lines = [l.strip() for l in custom_script.strip().split("\n") if l.strip()]
-                    greeting_text = lines[0] if lines else ""
-                if not greeting_text:
-                    greeting_text = f"Hello {customer_name}, thank you for taking my call." if customer_name.strip() else "Hello, thank you for taking my call."
-                
-                print(f"[agent] Delivering instant greeting line: '{greeting_text}'")
-                await session.say(greeting_text, allow_interruptions=True)
+                print(f"[agent] Invoking generate_reply with prompt for room {room_name}...")
+                await session.generate_reply(instructions=greeting_instructions)
                 print(f"[PERF] generate_reply_success=true")
                 print("Greeting generation completed")
             except Exception as e:
