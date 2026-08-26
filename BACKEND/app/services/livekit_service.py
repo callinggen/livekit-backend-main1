@@ -57,7 +57,7 @@ async def make_livekit_call(
         room_name=room_name,
         participant_identity="customer",
         participant_name="Customer",
-        wait_until_answered=True,
+        wait_until_answered=False,
     )
 
     try:
