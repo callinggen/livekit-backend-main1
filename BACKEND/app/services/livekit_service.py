@@ -37,9 +37,9 @@ async def make_livekit_call(
     if not sip_trunk_id or sip_trunk_id in _BAD_TRUNKS:
         env_trunk = os.getenv("SIP_TRUNK_ID", "")
         # Also skip known-bad env values
-        sip_trunk_id = env_trunk if env_trunk and env_trunk not in _BAD_TRUNKS else "ST_BKJDB3FuTdwT"
+        sip_trunk_id = env_trunk if env_trunk and env_trunk not in _BAD_TRUNKS else "ST_3iPMqSQPX8z5"
     if not sip_trunk_id:
-        sip_trunk_id = "ST_BKJDB3FuTdwT"
+        sip_trunk_id = "ST_3iPMqSQPX8z5"
         
     # Use dynamic assigned caller ID if provided, otherwise fallback to system caller ID
     if not sip_call_from:
