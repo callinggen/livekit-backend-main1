@@ -427,7 +427,7 @@ class DynamicAgent(Agent):
             try:
                 handle = self.session.say(
                     self._greeting_instructions,
-                    allow_interruptions=False,
+                    allow_interruptions=True,
                 )
                 await handle
                 print("[on_enter] Greeting delivered successfully.")
@@ -440,7 +440,7 @@ class DynamicAgent(Agent):
                 try:
                     await self.session.generate_reply(
                         instructions=self._greeting_instructions,
-                        allow_interruptions=False,
+                        allow_interruptions=True,
                     )
                 except Exception as e2:
                     print(f"[on_enter] generate_reply fallback also failed: {e2}")
@@ -867,8 +867,8 @@ async def entrypoint(ctx: JobContext):
 
         session = AgentSession(
             vad=silero.VAD.load(
-                min_silence_duration=0.5,
-                activation_threshold=0.5,
+                min_silence_duration=0.35,
+                activation_threshold=0.35,
             ),
             stt=sarvam.STT(),
 
