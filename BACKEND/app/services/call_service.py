@@ -31,7 +31,7 @@ def classify_call_end(sip_was_active: bool, disconnect_reason: Optional[str], ou
     if outcome_override == "no_answer":
         outcome_override = None
 
-    if outcome_override in ("appointment_booked", "rescheduled", "not_interested", "agent_no_response", "customer_hangup", "agent_hangup"):
+    if outcome_override in ("appointment_booked", "rescheduled", "not_interested", "customer_no_response", "agent_no_response", "customer_hangup", "agent_hangup"):
         return "completed", outcome_override, None
 
     if disconnect_reason == "customer_disconnect":
