@@ -1260,6 +1260,15 @@ if __name__ == "__main__":
         print("Please stop it before starting a new one to prevent multiple agents in a call.")
         sys.exit(1)
 
+    # Clean up any stale lock files from previous runs
+    import glob
+    import tempfile
+    for lf in glob.glob(os.path.join(tempfile.gettempdir(), "livekit_room_*.lock")):
+        try:
+            os.remove(lf)
+        except Exception:
+            pass
+
     agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
     print(f"[agent] Registering LiveKit agent worker with name: '{agent_name}'")
     cli.run_app(
@@ -1267,6 +1276,7 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             agent_name=agent_name,
             num_idle_processes=2,
-            load_threshold=0.95,
+            load_threshold=float('inf'),
+            load_fnc=lambda: 0.0,
         )
     )
