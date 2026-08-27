@@ -28,11 +28,17 @@ async def create_instance(instance_name: str) -> Dict[str, Any]:
         response.raise_for_status()
         return response.json()
 
-async def get_qr_code(instance_name: str) -> Dict[str, Any]:
+async def get_qr_code(instance_name: str, number: Optional[str] = None) -> Dict[str, Any]:
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
         
-    url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}"
+    if number and number.strip():
+        clean_num = "".join(c for c in number if c.isdigit())
+        if len(clean_num) == 10:
+            clean_num = "91" + clean_num
+        url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}?number={clean_num}"
+    else:
+        url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}"
     
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=get_headers())
@@ -80,7 +86,7 @@ async def get_messages(instance_name: str, remote_jid: str) -> Dict[str, Any]:
         raise ValueError("EVOLUTION_API_URL is not set")
 
     url = f"{EVOLUTION_API_URL}/chat/findMessages/{instance_name}"
-    clean_target = "".join(c for c in str(remote_jid or "") if c.isdigit())
+    clean_target = "".join(c for c in (remote_jid or "") if c.isdigit())
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         payload = {"limit": 1000, "where": {"remoteJid": remote_jid}}

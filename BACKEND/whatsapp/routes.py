@@ -17,9 +17,9 @@ async def create_instance(req: InstanceRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/qr")
-async def get_qr(instance_name: str = Query(...)):
+async def get_qr(instance_name: str = Query(...), number: Optional[str] = Query(None)):
     try:
-        data = await service.get_qr_code(instance_name)
+        data = await service.get_qr_code(instance_name, number=number)
         return {"success": True, "data": data}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
