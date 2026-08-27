@@ -268,6 +268,12 @@ class CallService:
         if outcome in ("customer_hangup", "agent_hangup"):
             disconnect_reason = outcome
 
+        customer_lines = 0
+        if transcript:
+            for line in transcript.strip().splitlines():
+                if line.strip().lower().startswith("user:"):
+                    customer_lines += 1
+
         final_status, final_outcome, final_failure = classify_call_end(
             sip_was_active=call.sip_was_active,
             disconnect_reason=disconnect_reason,
@@ -275,16 +281,24 @@ class CallService:
             failure_reason=failure_reason
         )
 
+        # If zero customer speech was ever detected and duration is brief, this was an unanswered call
+        if customer_lines == 0 and not is_voicemail and not has_valid_appointment:
+            if final_outcome in ("customer_hangup", "answered", "unknown", None) or call.duration < 35:
+                final_status = "ended"
+                final_outcome = "no_answer"
+                call.sip_was_active = False
+
         connected = bool(call.sip_was_active or call.answered_at)
         
         print(f"\n[CLASSIFICATION INVARIANT]")
         print(f"call_id={call_id}")
+        print(f"customer_lines={customer_lines}")
         print(f"connected={connected}")
         print(f"sip_was_active={call.sip_was_active}")
         print(f"answered_at={call.answered_at}")
         print(f"outcome={final_outcome}\n")
 
-        if connected and final_outcome == "no_answer":
+        if connected and final_outcome == "no_answer" and customer_lines > 0:
             print(f"[CRITICAL ERROR] Connected call {call_id} was classified as no_answer. Autocorrecting to 'answered'.")
             final_status = "completed"
             final_outcome = "answered"
@@ -326,15 +340,19 @@ class CallService:
             if is_not_interested:
                 call.summary = "Not Interested"
                 call.category = "COLD"
-            elif is_reschedule:
-                call.summary = "Callback Requested"
-                call.category = "WARM"
+            elif call.outcome == "no_answer":
+                call.summary = "Unanswered Call"
+                call.category = "UNANSWERED"
             else:
                 call.summary = "General Inquiry"
                 call.category = "UNCATEGORIZED"
         else:
-            call.summary = "General Inquiry"
-            call.category = "UNCATEGORIZED"
+            if call.outcome == "no_answer":
+                call.summary = "Unanswered Call"
+                call.category = "UNANSWERED"
+            else:
+                call.summary = "General Inquiry"
+                call.category = "UNCATEGORIZED"
 
         # ── Contact ───────────────────────────────────────────────────
         contact = None
@@ -394,7 +412,7 @@ class CallService:
                         campaign.status = "completed"
 
         # ── BACKEND GUARD ─────────────────────────────────────────────
-        if call.sip_was_active or call.answered_at:
+        if (call.sip_was_active or call.answered_at) and customer_lines > 0:
             if call.outcome == "no_answer":
                 print(f"[FATAL ERROR] Connected Call {call_id} attempted to be marked as no_answer!")
                 raise RuntimeError(f"Invalid classification: connected call {call_id} cannot be no_answer")

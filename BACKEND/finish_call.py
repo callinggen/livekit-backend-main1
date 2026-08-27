@@ -245,20 +245,24 @@ async def terminate_call_once(
     print(f"agent_lines={agent_lines}")
     print(f"total_lines={len(transcript_str.splitlines())}\n")
 
-    # Determine accurate outcome for silence / no response
+    # Determine accurate outcome for silence / no response / unanswered
     if not outcome and sip_was_active:
-        if reason == "customer_silence":
+        if customer_lines == 0 and not customer_has_spoken:
+            outcome = "no_answer"
+            print("-> Reclassifying outcome to: no_answer (no customer speech detected - call was unanswered)")
+        elif reason == "customer_silence":
             if first_audio_received and not customer_has_spoken:
-                # Agent spoke the greeting, but customer remained silent
                 outcome = "customer_no_response"
                 print("-> Reclassifying outcome to: customer_no_response (agent spoke, customer was silent)")
             elif not first_audio_received and customer_has_spoken:
-                # Customer spoke, but agent never delivered audio
                 outcome = "agent_no_response"
                 print("-> Reclassifying outcome to: agent_no_response (customer spoke, agent failed)")
             else:
                 outcome = "customer_no_response"
                 print("-> Reclassifying outcome to: customer_no_response")
+    elif outcome == "customer_hangup" and customer_lines == 0 and not customer_has_spoken:
+        outcome = "no_answer"
+        print("-> Reclassifying customer_hangup to no_answer because customer never spoke or answered")
 
     # ── Step 4: Mix WAV tracks ────────
     if call_id != -1:
