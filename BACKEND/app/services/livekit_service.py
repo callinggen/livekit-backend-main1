@@ -69,14 +69,6 @@ async def make_livekit_call(
     except Exception as room_err:
         print(f"[livekit_service] Room create notice for '{room_name}': {room_err}")
 
-    # Step 2: Explicitly dispatch the agent worker to the room to guarantee agent presence
-    try:
-        disp_req = CreateAgentDispatchRequest(agent_name=agent_name, room=room_name)
-        disp = await lkapi.agent_dispatch.create_dispatch(disp_req)
-        print(f"[livekit_service] Explicit agent dispatch created for room '{room_name}': dispatch_id={disp.id}")
-    except Exception as disp_err:
-        print(f"[livekit_service] Agent dispatch notice for '{room_name}': {disp_err}")
-
     req = CreateSIPParticipantRequest(
         sip_trunk_id=sip_trunk_id,
         sip_call_to=clean_phone,

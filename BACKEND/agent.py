@@ -431,6 +431,10 @@ class DynamicAgent(Agent):
                 )
                 await handle
                 print("[on_enter] Greeting delivered successfully.")
+                if hasattr(self.session, "_transcript_lines"):
+                    lines = getattr(self.session, "_transcript_lines")
+                    if not any(self._greeting_instructions[:30] in l for l in lines):
+                        lines.append(f"assistant: {self._greeting_instructions}")
             except Exception as e:
                 print(f"[on_enter] say() error: {e}. Falling back to generate_reply.")
                 try:
