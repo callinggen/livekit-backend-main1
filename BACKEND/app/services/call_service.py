@@ -491,6 +491,16 @@ class CallService:
                         campaign.status = "incomplete"
                     else:
                         campaign.status = "completed"
+                    # Safety net: mark any remaining pending/dialing contacts as failed
+                    # so campaigns never get stuck in "running" state
+                    from sqlalchemy import select, update
+                    from app.models.contact import Contact as ContactModel
+                    await db.execute(
+                        update(ContactModel)
+                        .where(ContactModel.campaign_id == job.campaign_id)
+                        .where(ContactModel.status.in_(["pending", "dialing"]))
+                        .values(status="failed", response="System Failure")
+                    )
 
         await db.commit()
         return call
