@@ -70,7 +70,7 @@ async def launch_campaign(
 
 @router.get("/campaigns")
 async def list_campaigns(
-    type: str = None,
+    type: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -211,6 +211,15 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
             seen_contacts.add(ct.id)
             unique_results.append((ct, call))
 
+    # Build scheduled_at as a proper UTC ISO string so the browser can convert to local time
+    scheduled_at = None
+    if campaign.schedule_date and campaign.schedule_time:
+        try:
+            # schedule_time is stored as HH:MM or HH:MM:SS in UTC
+            scheduled_at = f"{campaign.schedule_date}T{campaign.schedule_time}Z"
+        except Exception:
+            scheduled_at = None
+
     return {
         "id": str(campaign.id),
         "name": campaign.campaign_name,
@@ -218,6 +227,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "script": campaign.script,
         "schedule_date": campaign.schedule_date,
         "schedule_time": campaign.schedule_time,
+        "scheduled_at": scheduled_at,
         "status": campaign.status,
         "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
         "creditsUsed": credits_used,
@@ -228,8 +238,8 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
             "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
             "failed_contacts": sum(1 for s in call_statuses if s in ("failed", "incomplete")),
             "status": job.status if job else "queued",
-            "started_at": job.started_at.isoformat() if (job and job.started_at) else None,
-            "finished_at": job.finished_at.isoformat() if (job and job.finished_at) else None,
+            "started_at": job.started_at.isoformat() + "Z" if (job and job.started_at) else None,
+            "finished_at": job.finished_at.isoformat() + "Z" if (job and job.finished_at) else None,
         },
         "contacts": [
             {
@@ -243,7 +253,12 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
                 "appointment_time": ct.appointment_time,
                 "transcript": ct.transcript,
                 "duration": call.duration if call else 0,
-                "datetime": call.started_at.strftime("%Y-%m-%d %I:%M %p") if (call and call.started_at) else (campaign.created_at.strftime("%Y-%m-%d %I:%M %p") if (campaign and campaign.created_at) else ""),
+                # Use actual call start time, or scheduled time, or campaign creation time
+                "datetime": (
+                    call.started_at.strftime("%Y-%m-%d %I:%M %p IST")
+                    if (call and call.started_at)
+                    else (scheduled_at or (campaign.created_at.strftime("%Y-%m-%d %I:%M %p IST") if campaign.created_at else ""))
+                ),
                 "credits": call.credits_deducted if call else 0,
                 "metadata_fields": ct.metadata_fields,
             }
