@@ -1273,7 +1273,7 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-outbound-agent")
     print(f"[agent] Registering LiveKit agent worker with name: '{agent_name}'")
     cli.run_app(
         WorkerOptions(

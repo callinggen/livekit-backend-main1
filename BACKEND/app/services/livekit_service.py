@@ -54,7 +54,7 @@ async def make_livekit_call(
     elif not clean_sip_from:
         clean_sip_from = "+917971442271"
 
-    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-outbound-agent")
 
     # Step 1: Pre-create the room with agent dispatch config
     try:
