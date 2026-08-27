@@ -352,22 +352,19 @@ class VoicemailDetector:
             if elapsed > self.timeout:
                 return None
             
-            transcript_raw = _build_transcript(self.session)
-            if not transcript_raw:
+            # _build_transcript always returns a tuple (lines, customer_count, agent_count)
+            transcript_tuple = _build_transcript(self.session)
+            if isinstance(transcript_tuple, tuple):
+                transcript_lines_list = transcript_tuple[0]
+            else:
+                transcript_lines_list = transcript_tuple if transcript_tuple else []
+
+            if not transcript_lines_list:
                 await asyncio.sleep(1.0)
                 continue
-                
-            if isinstance(transcript_raw, tuple):
-                print(f"[VOICEMAIL DETECTOR] call_id={self.session.call_id if hasattr(self.session, 'call_id') else 'unknown'} type(transcript_raw)={type(transcript_raw)} type(transcript_raw[0])={type(transcript_raw[0])}")
-                try:
-                    print(f"[VOICEMAIL DETECTOR] sample_value={transcript_raw[0][0] if transcript_raw[0] else None}")
-                except Exception:
-                    pass
-                transcript_text = "\n".join(transcript_raw[0])
-            else:
-                transcript_text = transcript_raw
-                
-            if not transcript_text:
+
+            transcript_text = "\n".join(transcript_lines_list)
+            if not transcript_text.strip():
                 await asyncio.sleep(1.0)
                 continue
 
@@ -395,12 +392,43 @@ class VoicemailDetector:
 class DynamicAgent(Agent):
     """Agent whose behaviour is fully driven by the campaign configuration."""
 
-    def __init__(self, agent_type: str, custom_script: str, customer_name: str):
+    def __init__(
+        self,
+        agent_type: str,
+        custom_script: str,
+        customer_name: str,
+        greeting_instructions: str = "",
+        call_answered_event: asyncio.Event | None = None,
+    ):
         instructions = build_agent_instructions(agent_type, custom_script, customer_name)
+        self._greeting_instructions = greeting_instructions
+        self._call_answered_event = call_answered_event
         super().__init__(
             instructions=instructions,
             tools=[finish_call],
         )
+
+    async def on_enter(self) -> None:
+        """Deliver the greeting when the agent session is active AND the customer has answered.
+        This is the canonical LiveKit SDK pattern — on_enter() fires when the session starts,
+        and we wait for the SIP call to be answered before generating the greeting.
+        """
+        if self._greeting_instructions:
+            # Wait for SIP call to be answered (customer picks up the phone)
+            if self._call_answered_event is not None:
+                try:
+                    await asyncio.wait_for(self._call_answered_event.wait(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    print("[on_enter] Timeout waiting for call to be answered. Skipping greeting.")
+                    return
+            # Small buffer to ensure WebRTC audio track subscription is live
+            await asyncio.sleep(0.5)
+            print("[on_enter] Delivering greeting via generate_reply()")
+            await self.session.generate_reply(
+                instructions=self._greeting_instructions,
+                allow_interruptions=False,
+            )
+            print("[on_enter] Greeting delivered.")
 
 
 async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
@@ -871,12 +899,33 @@ async def entrypoint(ctx: JobContext):
         # Start session immediately so agent audio track is published to LiveKit room
         t_session_start = time.monotonic()
         print(f"[PERF] session_start={t_session_start:.3f}")
+        direction = campaign_info.get("direction", "outbound")
+        if direction == "inbound":
+            greeting_instructions = (
+                f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
+                f"Greet them warmly and introduce yourself as {agent_type} from Morning Tax. Ask how you can help them today."
+            )
+        else:
+            if customer_name.strip():
+                greeting_instructions = (
+                    f"You are now starting the outbound call. The customer's name is '{customer_name}'. "
+                    f"Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
+                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
+                )
+            else:
+                greeting_instructions = (
+                    f"You are now starting the outbound call. Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
+                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
+                )
+
         await session.start(
             room=ctx.room,
             agent=DynamicAgent(
                 agent_type=agent_type,
                 custom_script=custom_script,
                 customer_name=customer_name,
+                greeting_instructions=greeting_instructions,
+                call_answered_event=call_answered_event,
             ),
         )
         if ACTIVE_CALLS.get(room_name):
@@ -995,54 +1044,9 @@ async def entrypoint(ctx: JobContext):
                         await _handle_voicemail_disconnect(result)
                 _safe_create_task(run_voicemail_detector(), name="run_voicemail_detector", call_id=call_id)
 
-            # Allow 1.0s for LiveKit SIP gateway WebRTC audio track subscription to stabilize
-            await asyncio.sleep(1.0)
-
-            direction = campaign_info.get("direction", "outbound")
-            if direction == "inbound":
-                greeting_instructions = (
-                    f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
-                    f"Greet them warmly and introduce yourself as {agent_type} from Morning Tax. Ask how you can help them today."
-                )
-            else:
-                greeting_instructions = (
-                    f"You are now starting the outbound call. The customer's name is '{customer_name}'. "
-                    f"Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
-                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
-                    if customer_name.strip()
-                    else
-                    f"You are now starting the outbound call. Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
-                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
-                )
-
-            t_gen_reply = time.monotonic()
-            print(f"\n[AI FIRST RESPONSE TRACE]")
+            print(f"\n[GREETING] Customer answered — greeting will be delivered via on_enter().")
             print(f"call_id={call_id}")
             print(f"session_start={t_session_start:.3f}")
-            print(f"generate_reply_start={t_gen_reply:.3f}")
-            
-            @session.on("agent_speech_started")  # type: ignore
-            def on_agent_speech_started():
-                t_first_audio = time.monotonic()
-                state = ACTIVE_CALLS.get(room_name)
-                if state:
-                    state["speech_started_at"] = t_first_audio
-                print(f"[PERF] agent_speech_started={t_first_audio:.3f}")
-                
-            @session.on("agent_speech_stopped")  # type: ignore
-            def on_agent_speech_stopped():
-                t_complete = time.monotonic()
-                print(f"[PERF] greeting_complete={t_complete:.3f}")
-                
-            try:
-                print(f"[agent] Invoking generate_reply with prompt for room {room_name}...")
-                await session.generate_reply(instructions=greeting_instructions)
-                print(f"[PERF] generate_reply_success=true")
-                print("Greeting generation completed")
-            except Exception as e:
-                print(f"[PERF] generate_reply_error=true")
-                print(f"[GREETING] generation FAILED: {e}")
-                raise RuntimeError(f"agent_tool_schema_error: {e}")
 
         # Silence detector
         async def silence_detector_loop():
