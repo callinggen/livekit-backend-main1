@@ -410,8 +410,8 @@ class DynamicAgent(Agent):
 
     async def on_enter(self) -> None:
         """Deliver the greeting when the agent session is active AND the customer has answered.
-        This is the canonical LiveKit SDK pattern — on_enter() fires when the session starts,
-        and we wait for the SIP call to be answered before generating the greeting.
+        Uses session.say() to go straight to TTS — no LLM needed for the opening line.
+        This is faster and more reliable than generate_reply for the initial greeting.
         """
         if self._greeting_instructions:
             # Wait for SIP call to be answered (customer picks up the phone)
@@ -421,14 +421,25 @@ class DynamicAgent(Agent):
                 except asyncio.TimeoutError:
                     print("[on_enter] Timeout waiting for call to be answered. Skipping greeting.")
                     return
-            # Small buffer to ensure WebRTC audio track subscription is live
+            # Small buffer to ensure WebRTC audio track subscription is live on the SIP gateway
             await asyncio.sleep(0.5)
-            print("[on_enter] Delivering greeting via generate_reply()")
-            await self.session.generate_reply(
-                instructions=self._greeting_instructions,
-                allow_interruptions=False,
-            )
-            print("[on_enter] Greeting delivered.")
+            print("[on_enter] Delivering greeting via session.say() (direct TTS, no LLM)")
+            try:
+                handle = self.session.say(
+                    self._greeting_instructions,
+                    allow_interruptions=False,
+                )
+                await handle
+                print("[on_enter] Greeting delivered successfully.")
+            except Exception as e:
+                print(f"[on_enter] say() error: {e}. Falling back to generate_reply.")
+                try:
+                    await self.session.generate_reply(
+                        instructions=self._greeting_instructions,
+                        allow_interruptions=False,
+                    )
+                except Exception as e2:
+                    print(f"[on_enter] generate_reply fallback also failed: {e2}")
 
 
 async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
@@ -896,35 +907,39 @@ async def entrypoint(ctx: JobContext):
         }
 
 
+        # Build the actual greeting text to speak (goes to TTS directly via session.say)
+        direction = campaign_info.get("direction", "outbound")
+        if direction == "inbound":
+            # Inbound: generate a natural greeting via instructions
+            greeting_text = (
+                f"Hello! Thank you for calling Morning Tax. "
+                f"I'm {agent_type}, your AI tax consultant. How can I help you today?"
+            )
+        else:
+            # Outbound: use the first meaningful line of the campaign script as the greeting
+            # Strip any leading newlines and take the first 300 chars
+            script_lines = [l.strip() for l in custom_script.strip().splitlines() if l.strip()]
+            first_line = script_lines[0] if script_lines else custom_script[:250].strip()
+            # Personalize with customer name if available
+            if customer_name.strip() and customer_name.lower() not in first_line.lower():
+                greeting_text = first_line.replace("Hello", f"Hello {customer_name}", 1)
+                if greeting_text == first_line:  # replace didn't match
+                    greeting_text = first_line
+            else:
+                greeting_text = first_line
+
+        print(f"[agent] Greeting text: '{greeting_text[:100]}...'")
+
         # Start session immediately so agent audio track is published to LiveKit room
         t_session_start = time.monotonic()
         print(f"[PERF] session_start={t_session_start:.3f}")
-        direction = campaign_info.get("direction", "outbound")
-        if direction == "inbound":
-            greeting_instructions = (
-                f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
-                f"Greet them warmly and introduce yourself as {agent_type} from Morning Tax. Ask how you can help them today."
-            )
-        else:
-            if customer_name.strip():
-                greeting_instructions = (
-                    f"You are now starting the outbound call. The customer's name is '{customer_name}'. "
-                    f"Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
-                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
-                )
-            else:
-                greeting_instructions = (
-                    f"You are now starting the outbound call. Speak the first line of the campaign script clearly and warmly: '{custom_script[:250]}' "
-                    "Do not add metadata, bullet points, or system notes. Start speaking the greeting now."
-                )
-
         await session.start(
             room=ctx.room,
             agent=DynamicAgent(
                 agent_type=agent_type,
                 custom_script=custom_script,
                 customer_name=customer_name,
-                greeting_instructions=greeting_instructions,
+                greeting_instructions=greeting_text,
                 call_answered_event=call_answered_event,
             ),
         )
