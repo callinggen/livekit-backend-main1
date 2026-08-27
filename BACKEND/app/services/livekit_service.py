@@ -33,9 +33,7 @@ async def make_livekit_call(
 
     # Use dynamic SIP Trunk ID if provided, otherwise fallback to env / system trunk
     if not sip_trunk_id:
-        sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3yaCewggPpAs")
-    if sip_trunk_id == "ST_yZR7oi5aS79a":
-        sip_trunk_id = "ST_3yaCewggPpAs"
+        sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3iPMqSQPX8z5")
         
     # Use dynamic assigned caller ID if provided, otherwise fallback to system caller ID
     if not sip_call_from:
@@ -62,6 +60,20 @@ async def make_livekit_call(
 
     try:
         participant = await lkapi.sip.create_sip_participant(req)
+
+        # Dispatch the agent to the room explicitly
+        try:
+            from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
+            agent_name = os.getenv("LIVEKIT_AGENT_NAME", "inbound-agent")
+            if agent_name:
+                dispatch_req = CreateAgentDispatchRequest(
+                    agent_name=agent_name,
+                    room=room_name,
+                )
+                await lkapi.agent_dispatch.create_dispatch(dispatch_req)
+                print(f"[livekit_service] Successfully dispatched agent '{agent_name}' to room '{room_name}'")
+        except Exception as dispatch_err:
+            print(f"[livekit_service] Warning: Failed to dispatch agent to room '{room_name}': {dispatch_err}")
 
         return {
             "success": True,
