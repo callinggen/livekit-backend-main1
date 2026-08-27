@@ -17,6 +17,10 @@ from app.api.calendar import router as calendar_router
 from app.api.phone_numbers import router as phone_numbers_router
 from app.api.email_campaigns import router as email_campaign_router
 from app.api.payments import router as payment_router
+from app.api.whatsapp_send import router as whatsapp_send_router
+from app.api.whatsapp_materials import router as whatsapp_materials_router
+from app.api.whatsapp_history import router as whatsapp_history_router
+from whatsapp.routes import router as whatsapp_router
 
 
 # Ensure recordings directory exists
@@ -40,6 +44,10 @@ from app.models.notification_state import UserNotificationState
 from app.models.email_campaign import EmailCampaign  # registers email tables
 from app.models.email_contact import EmailContact    # registers email tables
 from app.models.payment import Payment
+from app.models.whatsapp_action import WhatsAppAction
+from app.models.whatsapp_material import WhatsAppMaterial
+from app.models.whatsapp_send_job import WhatsAppSendJob
+from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
 
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
@@ -203,6 +211,10 @@ app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 app.include_router(phone_numbers_router)
 app.include_router(payment_router, prefix="/api")
+app.include_router(whatsapp_router, prefix="/api", tags=["WhatsApp"])
+app.include_router(whatsapp_send_router, prefix="/api", tags=["WhatsApp Send"])
+app.include_router(whatsapp_materials_router, prefix="/api", tags=["WhatsApp Materials"])
+app.include_router(whatsapp_history_router, prefix="/api", tags=["WhatsApp History"])
 
 
 

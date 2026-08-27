@@ -11,4 +11,8 @@ from .demo_lead import DemoLead
 from .contact_form_user import ContactFormUser
 from .user_phone_number import UserPhoneNumber
 from .payment import Payment
+from .whatsapp_action import WhatsAppAction
+from .whatsapp_material import WhatsAppMaterial
+from .whatsapp_send_job import WhatsAppSendJob
+from .whatsapp_send_recipient import WhatsAppSendRecipient
 
