@@ -208,6 +208,9 @@ class QueueService:
         # Every call gets its own LiveKit room
         room_name = f"call-{call.id}"
         call.room_name = room_name
+        # CRITICAL: Mark contact as "dialing" BEFORE committing so the next worker
+        # cycle won't find it as "pending" and dispatch a duplicate call.
+        contact.status = "dialing"
         await db.commit()
 
         print(f"Room Name : {room_name}")

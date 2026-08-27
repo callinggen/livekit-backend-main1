@@ -784,8 +784,13 @@ async def entrypoint(ctx: JobContext):
                     if "sip_disconnected_event" in state:
                         state["sip_disconnected_event"].set()
                     print(f"[SIP END] call_id={call_id} sip_participant={participant.sid} sip_ended_at={state['sip_ended_at']} source=sip_participant_disconnect")
-            
-            _safe_create_task(_handle_unexpected_disconnect("customer hung up"), name="_handle_unexpected_disconnect", call_id=call_id)
+
+                # Only treat as customer hangup if finish_call is NOT already running
+                # (if finishing=True, the agent ended the call — not the customer)
+                if state and not state.get("finishing"):
+                    _safe_create_task(_handle_unexpected_disconnect("customer hung up"), name="_handle_unexpected_disconnect", call_id=call_id)
+                else:
+                    print(f"[SIP END] call_id={call_id} — SIP participant left after agent-initiated hangup. Not treating as customer disconnect.")
 
         # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
         ALLOWED_SARVAM_SPEAKERS = {
