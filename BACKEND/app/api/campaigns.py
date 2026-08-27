@@ -229,7 +229,7 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "schedule_time": campaign.schedule_time,
         "scheduled_at": scheduled_at,
         "status": campaign.status,
-        "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
+        "created_at": (campaign.created_at.isoformat() + "Z") if campaign.created_at else "",
         "creditsUsed": credits_used,
         "upload_source": campaign.upload_source,
         "sheet_name": campaign.sheet_name,

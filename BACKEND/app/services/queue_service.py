@@ -33,6 +33,10 @@ class QueueService:
             print("Job not found")
             return False
 
+        if job.started_at is None:
+            job.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+
         # ── Dynamic user telephony lookup (must happen before concurrency check) ──
         campaign = await db.get(Campaign, job.campaign_id)
         user_phone: UserPhoneNumber | None = None
