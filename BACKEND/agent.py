@@ -921,17 +921,53 @@ async def entrypoint(ctx: JobContext):
                 f"I'm {agent_type}, your AI tax consultant. How can I help you today?"
             )
         else:
-            # Outbound: use the first meaningful line of the campaign script as the greeting
-            # Strip any leading newlines and take the first 300 chars
+            # Outbound: find the first actual spoken greeting line from the script.
+            # Scripts often start with section headers like "AGENT IDENTITY:", "STEP 1 —", etc.
+            # We need to find the first line that is actual speech (not a header/instruction).
             script_lines = [l.strip() for l in custom_script.strip().splitlines() if l.strip()]
-            first_line = script_lines[0] if script_lines else custom_script[:250].strip()
-            # Personalize with customer name if available
-            if customer_name.strip() and customer_name.lower() not in first_line.lower():
-                greeting_text = first_line.replace("Hello", f"Hello {customer_name}", 1)
-                if greeting_text == first_line:  # replace didn't match
-                    greeting_text = first_line
-            else:
-                greeting_text = first_line
+
+            # Priority 1: find a quoted greeting in the script (e.g. "Hi, ..." or 'Hello ...')
+            greeting_text = None
+            for line in script_lines:
+                # Match lines that are or contain a quoted spoken greeting
+                if line.startswith('"') or line.startswith("'"):
+                    greeting_text = line.strip('"').strip("'").strip()
+                    break
+                # Match lines that contain a quoted greeting after a colon (e.g. Greet: "Hi...")
+                quoted = re.search(r'["\u201c]([^"\u201d]{10,200})["\u201d]', line)
+                if quoted and any(w in quoted.group(1).lower() for w in ["hi", "hello", "good morning", "good afternoon", "namaste", "may i speak"]):
+                    greeting_text = quoted.group(1).strip()
+                    break
+
+            # Priority 2: first non-header, non-instruction line
+            if not greeting_text:
+                header_patterns = re.compile(
+                    r'^(AGENT IDENTITY|STEP \d|OBJECTION|CLOSING|GOAL|INSTRUCTIONS?|NOTE|RULES?|GUIDELINES?)',
+                    re.IGNORECASE
+                )
+                for line in script_lines:
+                    if not header_patterns.match(line) and len(line) > 20:
+                        greeting_text = line
+                        break
+
+            # Final fallback: first line regardless
+            if not greeting_text:
+                greeting_text = script_lines[0] if script_lines else custom_script[:250].strip()
+
+            # Personalize with customer name if available and not already present
+            if customer_name.strip() and customer_name.lower() not in greeting_text.lower():
+                personalized = greeting_text.replace("{{customer_name}}", customer_name)
+                if personalized == greeting_text:
+                    # Try to insert name after "Hi" or "Hello"
+                    personalized = re.sub(
+                        r'\b(Hi|Hello|Good morning|Good afternoon),?\s*(may I speak with)?',
+                        lambda m: f"{m.group(1)}, {customer_name}! " if not m.group(2) else m.group(0),
+                        greeting_text, count=1, flags=re.IGNORECASE
+                    )
+                greeting_text = personalized if personalized != greeting_text else greeting_text
+            elif "{{customer_name}}" in greeting_text:
+                greeting_text = greeting_text.replace("{{customer_name}}", customer_name or "there")
+
 
         print(f"[agent] Greeting text: '{greeting_text[:100]}...'")
 
