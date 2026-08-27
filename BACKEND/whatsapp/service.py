@@ -117,6 +117,18 @@ async def get_chats(instance_name: str) -> list:
         response.raise_for_status()
         return response.json()
 
+async def get_profile_picture(instance_name: str, number: str) -> Dict[str, Any]:
+    if not EVOLUTION_API_URL:
+        raise ValueError("EVOLUTION_API_URL is not set")
+        
+    url = f"{EVOLUTION_API_URL}/chat/fetchProfilePictureUrl/{instance_name}"
+    clean_num = "".join(c for c in (number or "") if c.isdigit())
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(url, headers=get_headers(), json={"number": clean_num})
+        response.raise_for_status()
+        return response.json()
+
 async def get_messages(instance_name: str, remote_jid: str) -> Dict[str, Any]:
     """Retrieve messages for a specific remoteJid/chat, filtered strictly to prevent mixing."""
     if not EVOLUTION_API_URL:

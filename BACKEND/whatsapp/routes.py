@@ -81,6 +81,14 @@ async def get_messages(instance_name: str = Query(...), remote_jid: str = Query(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/profile-picture")
+async def get_profile_picture(instance_name: str = Query(...), number: str = Query(...)):
+    try:
+        data = await service.get_profile_picture(instance_name, number)
+        return {"success": True, "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 class SendTextMessageRequest(BaseModel):
     instance_name: str
     number: str
