@@ -162,7 +162,8 @@ async def livekit_webhook(
                             print(f"[webhook] Failed to reject room {room_name}: {e}")
 
     elif event_name == "room_finished":
-        await LiveKitEventService.room_finished(db, room_name)
+        import asyncio
+        asyncio.create_task(LiveKitEventService.room_finished(room_name))
 
     return {"status": "ok"}
 
