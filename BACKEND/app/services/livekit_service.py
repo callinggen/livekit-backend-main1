@@ -61,6 +61,8 @@ async def make_livekit_call(
     from livekit.protocol.room import CreateRoomRequest
     room_req = CreateRoomRequest(
         name=room_name,
+        empty_timeout=300,
+        departure_timeout=30,
         agents=[RoomAgentDispatch(agent_name=agent_name)],
     )
     try:
