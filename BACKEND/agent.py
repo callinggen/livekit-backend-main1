@@ -414,16 +414,16 @@ class DynamicAgent(Agent):
         This is faster and more reliable than generate_reply for the initial greeting.
         """
         if self._greeting_instructions:
-            # Wait for SIP call to be answered (customer picks up the phone)
-            if self._call_answered_event is not None:
+            # Wait for call to be answered (customer picks up the phone or joins)
+            if self._call_answered_event is not None and not self._call_answered_event.is_set():
                 try:
-                    await asyncio.wait_for(self._call_answered_event.wait(), timeout=60.0)
+                    await asyncio.wait_for(self._call_answered_event.wait(), timeout=30.0)
                 except asyncio.TimeoutError:
-                    print("[on_enter] Timeout waiting for call to be answered. Skipping greeting.")
-                    return
+                    print("[on_enter] Timeout waiting for call_answered_event. Delivering greeting now as failsafe.")
+
             # Small buffer to ensure WebRTC audio track subscription is live on the SIP gateway
             await asyncio.sleep(0.5)
-            print("[on_enter] Delivering greeting via session.say() (direct TTS, no LLM)")
+            print(f"[on_enter] Delivering greeting via session.say() (direct TTS, text: '{self._greeting_instructions[:80]}...')")
             try:
                 handle = self.session.say(
                     self._greeting_instructions,
@@ -584,6 +584,23 @@ async def entrypoint(ctx: JobContext):
     call_answered_event = asyncio.Event()
     customer_disconnected_event = asyncio.Event()
 
+    def _mark_call_answered(source: str):
+        if not call_answered_event.is_set():
+            call_answered_event.set()
+            t_ans = time.monotonic()
+            state = ACTIVE_CALLS.get(room_name)
+            if state:
+                if state.get("answered_at") is None:
+                    state["answered_at"] = t_ans
+                    state["call_phase"] = "greeting"
+                    from backend_client import notify_call_active
+                    _safe_create_task(notify_call_active(room_name), name="notify_call_active", call_id=call_id)
+                    print(f"[PERF] sip_active={t_ans:.3f}")
+                    print(f"[PERF] answered_at={t_ans:.3f}")
+                    print(f"[CALL] answered_at set at {state['answered_at']} (source: {source})")
+            else:
+                print(f"[CALL] answered_at triggered before state created (source: {source})")
+
     @ctx.room.on("participant_attributes_changed")
     def on_participant_attributes_changed(changed_attributes: dict, participant: rtc.Participant):
         if getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -591,17 +608,22 @@ async def entrypoint(ctx: JobContext):
             if status:
                 print(f"[SIP] callStatus changed to: {status}")
                 if status == "active":
-                    state = ACTIVE_CALLS.get(room_name)
-                    if state and state.get("answered_at") is None:
-                        from backend_client import notify_call_active
-                        _safe_create_task(notify_call_active(room_name), name="notify_call_active", call_id=call_id)
-                        t_ans = time.monotonic()
-                        state["answered_at"] = t_ans
-                        state["call_phase"] = "greeting"
-                        call_answered_event.set()
-                        print(f"[PERF] sip_active={t_ans:.3f}")
-                        print(f"[PERF] answered_at={t_ans:.3f}")
-                        print(f"[CALL] answered_at set at {state['answered_at']}")
+                    _mark_call_answered("participant_attributes_changed_active")
+
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant: rtc.RemoteParticipant):
+        is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+            participant.identity != ctx.room.local_participant.identity
+        )
+        if is_customer:
+            print(f"[ROOM] Remote participant connected: identity='{participant.identity}' kind={getattr(participant, 'kind', None)}")
+            if getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                status = participant.attributes.get("sip.callStatus")
+                if status == "active":
+                    _mark_call_answered("participant_connected_sip_active")
+            else:
+                # Web / Direct caller
+                _mark_call_answered("participant_connected_direct")
 
     @ctx.room.on("disconnected")
     def on_room_disconnected(*args):
@@ -640,12 +662,25 @@ async def entrypoint(ctx: JobContext):
         is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
             participant.identity != ctx.room.local_participant.identity
         )
-        if track.kind == rtc.TrackKind.KIND_AUDIO and is_customer:
-            asyncio.create_task(record_track(track, call_id))
+        if is_customer:
+            # Subscribed audio track from customer -> call is definitely answered & audio active
+            _mark_call_answered("track_subscribed")
+            if track.kind == rtc.TrackKind.KIND_AUDIO:
+                asyncio.create_task(record_track(track, call_id))
 
     try:
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
+
+        # Scan if remote participant is already in room upon connect
+        for participant in ctx.room.remote_participants.values():
+            is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+                participant.identity != ctx.room.local_participant.identity
+            )
+            if is_customer:
+                status = participant.attributes.get("sip.callStatus")
+                if status == "active" or getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                    _mark_call_answered("existing_participant_connect")
 
         # If it's an inbound call and still call_id == -1, initialize it via backend
         if (room_name.startswith("inbound-call-") or "inbound" in room_name) and call_id == -1:
@@ -881,6 +916,7 @@ async def entrypoint(ctx: JobContext):
             if text and text.strip():
                 clean_t = text.strip()
                 if not any(h in clean_t.lower() for h in ["wave of covid", "second wave", "third wave"]):
+                    _mark_call_answered("user_speech")
                     print(f"[STT] call_id={call_id} customer_track=True speech_start=None speech_end=None transcript_received=True text='{clean_t}'")
                     transcript_lines.append(f"user: {clean_t}")
                     state = ACTIVE_CALLS.get(room_name)
@@ -967,6 +1003,9 @@ async def entrypoint(ctx: JobContext):
                 greeting_text = personalized if personalized != greeting_text else greeting_text
             elif "{{customer_name}}" in greeting_text:
                 greeting_text = greeting_text.replace("{{customer_name}}", customer_name or "there")
+
+        if not greeting_text or not greeting_text.strip():
+            greeting_text = f"Hello {customer_name if customer_name else ''}, this is {agent_type} calling. How can I help you today?".strip()
 
 
         print(f"[agent] Greeting text: '{greeting_text[:100]}...'")
