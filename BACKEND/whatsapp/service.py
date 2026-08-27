@@ -51,10 +51,29 @@ async def get_connection_status(instance_name: str) -> Dict[str, Any]:
         
     url = f"{EVOLUTION_API_URL}/instance/connectionState/{instance_name}"
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(url, headers=get_headers())
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        
+        try:
+            r_inst = await client.get(f"{EVOLUTION_API_URL}/instance/fetchInstances", headers=get_headers())
+            if r_inst.status_code == 200:
+                for inst in r_inst.json():
+                    if inst.get("name") == instance_name:
+                        owner = inst.get("ownerJid") or inst.get("number")
+                        profile_name = inst.get("profileName")
+                        if isinstance(data.get("instance"), dict):
+                            data["instance"]["owner"] = owner
+                            data["instance"]["profileName"] = profile_name
+                        else:
+                            data["owner"] = owner
+                            data["profileName"] = profile_name
+                        break
+        except Exception:
+            pass
+            
+        return data
 
 async def disconnect_instance(instance_name: str) -> Dict[str, Any]:
     if not EVOLUTION_API_URL:
