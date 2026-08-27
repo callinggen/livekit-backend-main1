@@ -5,7 +5,8 @@ load_dotenv()
  
 from livekit import api
 from livekit.protocol.sip import CreateSIPInboundTrunkRequest, SIPInboundTrunkInfo, CreateSIPDispatchRuleRequest, SIPDispatchRule, SIPDispatchRuleIndividual
-from livekit.api import RoomConfiguration, RoomAgentDispatch
+from livekit.protocol.room import RoomConfiguration
+from livekit.protocol.agent_dispatch import RoomAgentDispatch
 
 async def create_inbound_setup():
     url = os.getenv("LIVEKIT_URL", "ws://13.232.26.174:7880")

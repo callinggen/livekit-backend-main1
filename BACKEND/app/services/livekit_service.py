@@ -10,8 +10,8 @@ from livekit.protocol.sip import (
     SIPDispatchRuleIndividual,
     CreateSIPDispatchRuleRequest,
 )
-from livekit.api import RoomAgentDispatch
-from livekit.protocol.room import RoomConfiguration
+from livekit.protocol.agent_dispatch import RoomAgentDispatch, CreateAgentDispatchRequest
+from livekit.protocol.room import RoomConfiguration, CreateRoomRequest
 
 import os
 
@@ -57,18 +57,25 @@ async def make_livekit_call(
     agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
 
     # Step 1: Pre-create the room with agent dispatch config
-    # so the agent auto-joins when the SIP participant connects.
-    from livekit.protocol.room import CreateRoomRequest
-    room_req = CreateRoomRequest(
-        name=room_name,
-        empty_timeout=300,
-        departure_timeout=30,
-        agents=[RoomAgentDispatch(agent_name=agent_name)],
-    )
     try:
+        room_req = CreateRoomRequest(
+            name=room_name,
+            empty_timeout=300,
+            departure_timeout=30,
+            agents=[RoomAgentDispatch(agent_name=agent_name)],
+        )
         await lkapi.room.create_room(room_req)
+        print(f"[livekit_service] Pre-created room '{room_name}' with RoomAgentDispatch(agent_name='{agent_name}')")
     except Exception as room_err:
-        print(f"[livekit_service] Warning: could not pre-create room '{room_name}': {room_err}")
+        print(f"[livekit_service] Room create notice for '{room_name}': {room_err}")
+
+    # Step 2: Explicitly dispatch the agent worker to the room to guarantee agent presence
+    try:
+        disp_req = CreateAgentDispatchRequest(agent_name=agent_name, room=room_name)
+        disp = await lkapi.agent_dispatch.create_dispatch(disp_req)
+        print(f"[livekit_service] Explicit agent dispatch created for room '{room_name}': dispatch_id={disp.id}")
+    except Exception as disp_err:
+        print(f"[livekit_service] Agent dispatch notice for '{room_name}': {disp_err}")
 
     req = CreateSIPParticipantRequest(
         sip_trunk_id=sip_trunk_id,
