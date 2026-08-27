@@ -60,12 +60,30 @@ async def disconnect_instance(instance_name: str) -> Dict[str, Any]:
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
         
-    url = f"{EVOLUTION_API_URL}/instance/logout/{instance_name}"
+    url_logout = f"{EVOLUTION_API_URL}/instance/logout/{instance_name}"
+    url_del = f"{EVOLUTION_API_URL}/instance/delete/{instance_name}"
     
-    async with httpx.AsyncClient() as client:
-        response = await client.delete(url, headers=get_headers())
-        response.raise_for_status()
-        return response.json()
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            await client.delete(url_logout, headers=get_headers())
+        except Exception:
+            pass
+            
+        try:
+            await client.delete(url_del, headers=get_headers())
+        except Exception:
+            pass
+            
+        try:
+            await client.post(f"{EVOLUTION_API_URL}/instance/create", headers=get_headers(), json={
+                "instanceName": instance_name,
+                "qrcode": True,
+                "integration": "WHATSAPP-BAILEYS"
+            })
+        except Exception:
+            pass
+            
+        return {"status": "disconnected"}
 
 async def get_chats(instance_name: str) -> list:
     if not EVOLUTION_API_URL:
