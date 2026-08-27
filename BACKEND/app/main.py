@@ -211,10 +211,10 @@ app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 app.include_router(phone_numbers_router)
 app.include_router(payment_router, prefix="/api")
-app.include_router(whatsapp_router, prefix="/api", tags=["WhatsApp"])
-app.include_router(whatsapp_send_router, prefix="/api", tags=["WhatsApp Send"])
-app.include_router(whatsapp_materials_router, prefix="/api", tags=["WhatsApp Materials"])
-app.include_router(whatsapp_history_router, prefix="/api", tags=["WhatsApp History"])
+app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
+app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
+app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
+app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
 
 
 
