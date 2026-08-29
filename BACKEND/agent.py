@@ -831,39 +831,40 @@ async def entrypoint(ctx: JobContext):
                 else:
                     print(f"[SIP END] call_id={call_id} — SIP participant left after agent-initiated hangup. Not treating as customer disconnect.")
 
-        # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
+        # Dynamic voice selection mapping for Sarvam bulbul:v3 compatible voices
         ALLOWED_SARVAM_SPEAKERS = {
-            "anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh", "aditya",
-            "ritu", "priya", "neha", "rahul", "pooja", "rohan", "simran", "kavya", "amit",
-            "dev", "ishita", "shreya", "ratan", "varun", "manan", "sumit", "roopa", "kabir",
-            "aayan", "shubh", "ashutosh", "advait", "anand", "tanya", "tarun", "sunny",
-            "mani", "gokul", "vijay", "shruti", "suhani", "mohit", "kavitha", "rehan", "soham", "rupali"
+            "shubh", "ritu", "rahul", "pooja", "simran", "kavya", "amit", "ratan", "rohan",
+            "dev", "ishita", "shreya", "manan", "sumit", "priya", "aditya", "kabir", "neha",
+            "varun", "roopa", "aayan", "ashutosh", "advait", "amelia", "sophia", "suhani",
+            "rupali", "tanya", "shruti", "kavitha"
         }
         SARVAM_VOICE_MAPPING = {
-            "meera": "anushka",
-            "meera (morning tax)": "anushka",
-            "raj": "abhilash",
-            "raj (morning tax)": "abhilash",
-            "john (morning tax)": "anushka",
-            "voice-e": "anushka",
-            "voice-e (tax agent)": "anushka",
-            "manisha": "manisha",
-            "karun": "karun",
-            "vidya": "vidya",
-            "hitesh": "hitesh",
-            "female 1": "anushka",
-            "female 2": "anushka",
-            "male 1": "abhilash",
-            "male 2": "abhilash",
-            "nova (elevenlabs)": "anushka",
-            "alex": "abhilash",
-            "james": "hitesh",
-            "sarah": "vidya",
+            "meera": "shreya",
+            "meera (morning tax)": "shreya",
+            "raj": "aditya",
+            "raj (morning tax)": "aditya",
+            "john (morning tax)": "aditya",
+            "voice-e": "shreya",
+            "voice-e (tax agent)": "shreya",
+            "manisha": "kavya",
+            "karun": "rahul",
+            "vidya": "priya",
+            "hitesh": "aditya",
+            "female 1": "shreya",
+            "female 2": "pooja",
+            "male 1": "aditya",
+            "male 2": "rahul",
+            "nova (elevenlabs)": "shreya",
+            "alex": "aditya",
+            "james": "aditya",
+            "sarah": "simran",
+            "anushka": "shreya",
+            "abhilash": "aditya",
         }
         raw_db_voice = str(campaign_info.get("voice", "Meera")).strip()
         mapped_speaker = SARVAM_VOICE_MAPPING.get(raw_db_voice.lower(), raw_db_voice.lower())
-        speaker_voice = mapped_speaker if mapped_speaker in ALLOWED_SARVAM_SPEAKERS else "anushka"
-        print(f"[agent] Configured agent voice profile: '{raw_db_voice}' -> mapped to Sarvam speaker: '{speaker_voice}'")
+        speaker_voice = mapped_speaker if mapped_speaker in ALLOWED_SARVAM_SPEAKERS else "shreya"
+        print(f"[agent] Configured agent voice profile: '{raw_db_voice}' -> mapped to Sarvam bulbul:v3 speaker: '{speaker_voice}'")
 
         session = AgentSession(
             vad=silero.VAD.load(
@@ -879,7 +880,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
-                model="bulbul:v2",
+                model="bulbul:v3",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
@@ -1008,9 +1009,20 @@ async def entrypoint(ctx: JobContext):
             elif "{{customer_name}}" in greeting_text:
                 greeting_text = greeting_text.replace("{{customer_name}}", customer_name or "there")
 
-        if not greeting_text or not greeting_text.strip():
-            greeting_text = f"Hello {customer_name if customer_name else ''}, this is {agent_type} calling. How can I help you today?".strip()
+        # Check if greeting_text looks like system prompt/instructions rather than spoken dialogue
+        system_instruction_indicators = [
+            "you are", "your goal", "your role", "act as", "professional and courteous",
+            "campaign:", "prompt:", "rules:", "instructions:", "step 1", "step 2",
+            "guidelines:", "context:", "system prompt"
+        ]
+        is_system_prompt = any(indicator in (greeting_text or "").lower() for indicator in system_instruction_indicators)
 
+        if not greeting_text or not greeting_text.strip() or is_system_prompt or len(greeting_text) > 180:
+            clean_name = (customer_name or "").strip()
+            if clean_name:
+                greeting_text = f"Hello, may I speak with {clean_name}?"
+            else:
+                greeting_text = f"Hello! This is {agent_type} calling. How are you today?"
 
         print(f"[agent] Greeting text: '{greeting_text[:100]}...'")
 
