@@ -51,8 +51,9 @@ async def livekit_webhook(
     event_data = None
     if lk_key and lk_secret and auth_header:
         try:
-            from livekit.api import WebhookReceiver
-            receiver = WebhookReceiver()
+            from livekit.api import WebhookReceiver, TokenVerifier
+            verifier = TokenVerifier(lk_key, lk_secret)
+            receiver = WebhookReceiver(verifier)
             event = receiver.receive(body_str, auth_header)
             event_data = {
                 "event": event.event,
@@ -66,25 +67,28 @@ async def livekit_webhook(
         except Exception as sig_err:
             print(f"[webhook] Webhook signature verification failed: {sig_err}. Parsing as raw JSON.")
             
-    if not event_data:
+    if not event_data or not isinstance(event_data, dict):
         import json
         try:
-            event_data = json.loads(body_str)
+            parsed = json.loads(body_str)
+            event_data = parsed if isinstance(parsed, dict) else {}
         except Exception as e:
             print(f"[webhook] Failed to parse webhook payload: {e}")
             return {"error": "Invalid JSON"}
 
     event_name = event_data.get("event")
-    room_name = event_data.get("room", {}).get("name")
+    room_dict = event_data.get("room")
+    room_name = room_dict.get("name") if isinstance(room_dict, dict) else None
     
     print(f"[webhook] Received event '{event_name}' for room '{room_name}'")
     
     if event_name == "participant_joined":
-        part = event_data.get("participant", {})
-        if part:
-            attributes = part.get("attributes", {})
-            caller_number = attributes.get("sip.caller")
-            called_number = attributes.get("sip.called")
+        part = event_data.get("participant")
+        if isinstance(part, dict):
+            attributes = part.get("attributes")
+            attrs_dict = attributes if isinstance(attributes, dict) else {}
+            caller_number = attrs_dict.get("sip.caller")
+            called_number = attrs_dict.get("sip.called")
             participant_sid = part.get("sid")
             
             # If both are present, this is a SIP participant!
@@ -100,13 +104,13 @@ async def livekit_webhook(
                 
                 if existing_call:
                     existing_call.status = "in_progress"
-                    if not existing_call.livekit_participant_id:
-                        existing_call.livekit_participant_id = participant_sid
+                    if not existing_call.livekit_participant_id and participant_sid:
+                        existing_call.livekit_participant_id = str(participant_sid)
                     await db.commit()
                     print(f"[webhook] Outbound call {existing_call.id} participant joined")
                 else:
                     # Inbound call! Find phone line mapping
-                    print(f"[webhook] Inbound SIP call matching called number: {called_number} (clean: {clean_allowed if 'clean_allowed' in locals() else clean_called})")
+                    print(f"[webhook] Inbound SIP call matching called number: {called_number} (clean: {clean_called})")
                     
                     pn_stmt = select(UserPhoneNumber).where(UserPhoneNumber.is_active == True)
                     pn_res = await db.execute(pn_stmt)
@@ -271,13 +275,14 @@ async def inbound_init(
                 if agent_obj:
                     agent_name = agent_obj.name
 
+            now_utc = datetime.now(timezone.utc)
             campaign = Campaign(
                 user_id=tenant_id,
                 campaign_name="Inbound Calls Campaign",
                 agent=agent_name,
                 script="Thank you for calling Morning Tax. How can I help you?",
-                schedule_date=datetime.utcnow().strftime("%Y-%m-%d"),
-                schedule_time=datetime.utcnow().strftime("%H:%M"),
+                schedule_date=now_utc.strftime("%Y-%m-%d"),
+                schedule_time=now_utc.strftime("%H:%M"),
                 status="active",
             )
             db.add(campaign)
@@ -450,6 +455,7 @@ async def list_calls(
                 Call.tenant_id == current_user.id
             )
         )
+        .where(or_(Campaign.campaign_name != "Website Demo Requests", Campaign.campaign_name.is_(None)))
         .order_by(Call.id.desc())
     )
     rows = result.all()

@@ -15,4 +15,5 @@ from .whatsapp_action import WhatsAppAction
 from .whatsapp_material import WhatsAppMaterial
 from .whatsapp_send_job import WhatsAppSendJob
 from .whatsapp_send_recipient import WhatsAppSendRecipient
+from .blocked_slot import BlockedSlot
 

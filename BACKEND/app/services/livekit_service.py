@@ -26,7 +26,9 @@ async def make_livekit_call(
     
     # Sanitize the destination phone number
     clean_phone = "".join(c for c in phone if c.isdigit() or c == "+")
-    if not clean_phone.startswith("+"):
+    if clean_phone.startswith("0") and len(clean_phone) == 11:
+        clean_phone = f"+91{clean_phone[1:]}"
+    elif not clean_phone.startswith("+"):
         if len(clean_phone) == 10:
             clean_phone = f"+91{clean_phone}"
         else:
