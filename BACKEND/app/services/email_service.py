@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-import resend
+import importlib
 
 from app.services import email_templates
 
@@ -119,8 +119,9 @@ class EmailService:
             params["reply_to"] = reply_to
 
         try:
-            resend.api_key = self.api_key
-            response = resend.Emails.send(params)
+            resend_mod = importlib.import_module("resend")
+            resend_mod.api_key = self.api_key
+            response = resend_mod.Emails.send(params)
             print(f"[EmailService] Email sent successfully via Resend to {to_email}. Response: {response}")
             return response
         except Exception as e:
