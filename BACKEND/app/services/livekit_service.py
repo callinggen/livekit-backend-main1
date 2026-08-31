@@ -21,11 +21,16 @@ async def make_livekit_call(
     sip_trunk_id: str | None = None,
     sip_call_from: str | None = None,
 ):
-    lkapi = api.LiveKitAPI()
+    url = os.getenv("LIVEKIT_URL", "ws://13.232.26.174:7880")
+    key = os.getenv("LIVEKIT_API_KEY", "devkey")
+    secret = os.getenv("LIVEKIT_API_SECRET", "devsecret123456789012345678901234567890")
+    lkapi = api.LiveKitAPI(url=url, api_key=key, api_secret=secret)
     
     # Sanitize the destination phone number
     clean_phone = "".join(c for c in phone if c.isdigit() or c == "+")
-    if not clean_phone.startswith("+"):
+    if clean_phone.startswith("0") and len(clean_phone) == 11:
+        clean_phone = f"+91{clean_phone[1:]}"
+    elif not clean_phone.startswith("+"):
         if len(clean_phone) == 10:
             clean_phone = f"+91{clean_phone}"
         else:

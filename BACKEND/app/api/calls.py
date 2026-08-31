@@ -451,6 +451,7 @@ async def list_calls(
                 Call.tenant_id == current_user.id
             )
         )
+        .where(Campaign.campaign_name != "Website Demo Requests")
         .order_by(Call.id.desc())
     )
     rows = result.all()

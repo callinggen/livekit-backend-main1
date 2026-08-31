@@ -11,4 +11,8 @@ from .demo_lead import DemoLead
 from .contact_form_user import ContactFormUser
 from .user_phone_number import UserPhoneNumber
 from .payment import Payment
-
+from .blocked_slot import BlockedSlot
+from .email_campaign import EmailCampaign
+from .email_contact import EmailContact
+from .email_template import EmailMarketingTemplate
+from .custom_domain import CustomEmailDomain

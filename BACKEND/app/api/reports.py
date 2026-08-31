@@ -93,7 +93,7 @@ async def generate_report(
                 base_url="https://api.deepseek.com/v1"
             )
             response = await client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model="deepseek-chat",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=800,
                 temperature=0.1
@@ -126,7 +126,7 @@ async def generate_report(
             title=f"AI Performance Report ({start_date} to {end_date})",
             start_date=start_date,
             end_date=end_date,
-            content=report_content,
+            content=report_text,
             stats=stats_data,
             generated_at=datetime.utcnow()
         )
@@ -135,7 +135,7 @@ async def generate_report(
         await db.refresh(db_report)
 
         return {
-            "report": report_content,
+            "report": report_text,
             "stats": stats_data,
             "id": db_report.id
         }

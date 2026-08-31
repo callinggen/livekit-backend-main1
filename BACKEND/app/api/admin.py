@@ -12,6 +12,8 @@ from app.models.campaign import Campaign
 from app.models.call import Call
 from app.models.agent import Agent
 from app.models.user_phone_number import UserPhoneNumber
+from app.models.contact_form_user import ContactFormUser
+from app.models.blocked_slot import BlockedSlot
 
 from app.schemas.auth import UserCreateRequest
 from app.core.security import get_password_hash
@@ -21,6 +23,15 @@ import secrets
 from typing import List, Optional
 from pydantic import BaseModel
 from app.schemas.agent import AgentCreate
+
+class BookingStatusUpdateRequest(BaseModel):
+    status: str # "upcoming", "completed" (demo given), "no_show", "cancelled", etc.
+    admin_notes: str | None = None
+
+class BlockSlotRequest(BaseModel):
+    blocked_date: str # YYYY-MM-DD
+    slot_time: str | None = None # HH:MM or None for entire day
+    reason: str | None = None
 
 router = APIRouter()
 
@@ -234,6 +245,114 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
         }
         for u in users
     ]
+
+
+@router.get("/contact-users")
+async def get_contact_form_users(db: AsyncSession = Depends(get_db)):
+    """Return list of all landing page appointment bookings."""
+    res = await db.execute(select(ContactFormUser).order_by(ContactFormUser.created_at.desc()))
+    users = res.scalars().all()
+    return [
+        {
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+            "phone": u.phone,
+            "company": u.company or "N/A",
+            "industry": u.industry or "N/A",
+            "appointment_time": u.appointment_time.isoformat() if u.appointment_time else None,
+            "status": u.status or "booked",
+            "admin_notes": getattr(u, "admin_notes", None) or "",
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u in users
+    ]
+
+
+@router.put("/contact-users/{booking_id}/status")
+async def update_booking_status(
+    booking_id: int,
+    req: BookingStatusUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update appointment status (e.g. 'completed' / Demo Given, 'no_show', 'cancelled') and admin notes."""
+    stmt = select(ContactFormUser).where(ContactFormUser.id == booking_id)
+    res = await db.execute(stmt)
+    booking = res.scalars().first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    booking.status = req.status
+    if req.admin_notes is not None:
+        booking.admin_notes = req.admin_notes
+
+    await db.commit()
+    await db.refresh(booking)
+
+    return {
+        "success": True,
+        "message": f"Booking #{booking_id} status updated to '{booking.status}'",
+        "booking": {
+            "id": booking.id,
+            "status": booking.status,
+            "admin_notes": booking.admin_notes
+        }
+    }
+
+
+@router.get("/blocked-slots")
+async def get_blocked_slots(db: AsyncSession = Depends(get_db)):
+    """Return all admin-blocked dates and slots."""
+    res = await db.execute(select(BlockedSlot).order_by(BlockedSlot.blocked_date.asc(), BlockedSlot.slot_time.asc()))
+    blocks = res.scalars().all()
+    return [
+        {
+            "id": b.id,
+            "blocked_date": b.blocked_date,
+            "slot_time": b.slot_time,
+            "reason": b.reason or "Unavailable",
+            "created_at": b.created_at.isoformat() if b.created_at else None
+        }
+        for b in blocks
+    ]
+
+
+@router.post("/blocked-slots", status_code=status.HTTP_201_CREATED)
+async def block_slot(req: BlockSlotRequest, db: AsyncSession = Depends(get_db)):
+    """Block a date or specific time slot from public availability."""
+    new_block = BlockedSlot(
+        blocked_date=req.blocked_date,
+        slot_time=req.slot_time,
+        reason=req.reason or "Unavailable"
+    )
+    db.add(new_block)
+    await db.commit()
+    await db.refresh(new_block)
+
+    return {
+        "success": True,
+        "message": f"Blocked date {req.blocked_date}" + (f" slot {req.slot_time}" if req.slot_time else " (entire day)"),
+        "blocked_slot": {
+            "id": new_block.id,
+            "blocked_date": new_block.blocked_date,
+            "slot_time": new_block.slot_time,
+            "reason": new_block.reason
+        }
+    }
+
+
+@router.delete("/blocked-slots/{block_id}")
+async def unblock_slot(block_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove a date/slot block from un-availability list."""
+    stmt = select(BlockedSlot).where(BlockedSlot.id == block_id)
+    res = await db.execute(stmt)
+    block = res.scalars().first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block entry not found")
+
+    await db.delete(block)
+    await db.commit()
+    return {"success": True, "message": f"Unblocked slot #{block_id}"}
 
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
