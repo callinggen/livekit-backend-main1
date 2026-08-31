@@ -19,7 +19,7 @@ class EmailService:
     def is_configured(self):
         return bool(self.smtp_host and self.smtp_user and self.smtp_password)
 
-    def _send_email(self, to_email: str, subject: str, body: str, is_html: bool = False):
+    def _send_email_sync(self, to_email: str, subject: str, body: str, is_html: bool = False):
         if not to_email:
             print("[EmailService] No recipient email specified, skipping.")
             return
@@ -31,7 +31,6 @@ class EmailService:
             print(f"Subject: {subject}")
             print(f"Format: {'HTML' if is_html else 'PLAIN'}")
             print("="*50 + "\n")
-            # In development/test mode when SMTP isn't set, log cleanly without breaking application flow
             return
 
         msg = MIMEMultipart("alternative")
@@ -43,21 +42,23 @@ class EmailService:
         msg.attach(MIMEText(body, subtype, 'utf-8'))
 
         try:
-            server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10)
+            server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=5)
             server.starttls()
             server.login(self.smtp_user, self.smtp_password)
             server.send_message(msg)
             server.quit()
             print(f"[EmailService] Email sent successfully to {to_email}")
-        except smtplib.SMTPException as e:
-            print(f"[EmailService] SMTP Error sending email to {to_email}: {e}")
-            raise Exception(f"Failed to send email. SMTP Error: {e}")
-        except TimeoutError:
-            print(f"[EmailService] Timeout sending email to {to_email}")
-            raise Exception("Failed to send email. The connection timed out.")
         except Exception as e:
-            print(f"[EmailService] Unexpected Error sending email to {to_email}: {e}")
-            raise Exception(f"An unexpected error occurred while sending the email: {e}")
+            print(f"[EmailService] Error sending email to {to_email}: {e}")
+
+    def _send_email(self, to_email: str, subject: str, body: str, is_html: bool = False):
+        import threading
+        thread = threading.Thread(
+            target=self._send_email_sync,
+            args=(to_email, subject, body, is_html),
+            daemon=True
+        )
+        thread.start()
 
     # --- Credit Notifications ---
     def send_low_credit_email(self, to_email: str, full_name: str, company_name: str, remaining_credits: int, plan_name: str = "Standard"):

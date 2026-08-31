@@ -165,30 +165,46 @@ DATE & CALLBACK RESOLUTION RULES:
         else ""
     )
 
-    whatsapp_permission_clause = """
-POST-CALL WHATSAPP BROCHURE & MATERIAL PERMISSION PROTOCOL:
-- WhatsApp Follow-Up Automation is ENABLED for this campaign.
-- When the customer says they are busy / don't have time right now:
-  * First ask for a callback / appointment time.
-  * Then ask for permission to send the brochure or details on WhatsApp:
-    "Also, would it be okay if I send our brochure and information on WhatsApp so you can review it at your convenience?"
-- If the customer shows interest, agreement, or before concluding:
-  * Ask for permission: "May I share our brochure / details with you on WhatsApp after this call?"
-- If the customer says "YES", "SURE", "OKAY", "SEND IT", or agrees:
-  * Acknowledge naturally ("Great, I'll send that over to your WhatsApp right away.") and call `finish_call` when concluding.
-- If the customer says "NO", "DON'T SEND", "NOT INTERESTED", or declines WhatsApp:
-  * Respect their preference ("No problem at all!"), do NOT ask again, and call `finish_call`.
-""" if whatsapp_enabled else ""
+    if whatsapp_enabled:
+        whatsapp_protocol = """
+================================================================================
+WHATSAPP BROCHURES & AUTOMATION PROTOCOL (ENABLED FOR THIS CAMPAIGN):
+================================================================================
+1. IN-CALL REQUESTS:
+   - If the customer asks for brochures, pricing, catalogue, or details on WhatsApp at any point:
+     Invoke `send_whatsapp_info(action="SEND_BROCHURE")` immediately during the call.
+     Confirm verbally: "I have just sent our brochure directly to your WhatsApp number!"
+
+2. BEFORE HANGING UP / BEFORE CALLING finish_call:
+   - When an appointment or callback date/time is scheduled, or before concluding the conversation:
+     DO NOT call `finish_call` immediately! First ask the customer:
+     "Would it be okay if I send our brochure and information on WhatsApp so you can review it?"
+   - If the customer says "YES", "SURE", "OKAY", "YEAH", "SEND IT", or agrees:
+     Invoke `send_whatsapp_info(action="SEND_BROCHURE")`, say: "Great! I've sent that over to your WhatsApp. Thank you and have a wonderful day!", and THEN invoke `finish_call`.
+   - If the customer says "NO", "DON'T SEND", "NOT NEEDED", or declines:
+     Say: "No problem at all! Thank you and have a wonderful day!", and invoke `finish_call`.
+
+3. TOOL CALL INVOCATION:
+   - Use `send_whatsapp_info` when dispatching WhatsApp information.
+   - Use `finish_call` ONLY after the conversation and WhatsApp protocol have concluded.
+================================================================================
+"""
+    else:
+        whatsapp_protocol = """
+================================================================================
+WHATSAPP AUTOMATION IS DISABLED FOR THIS CAMPAIGN:
+- Do NOT offer to send WhatsApp messages or brochures.
+- Do NOT ask for WhatsApp permission.
+- If the customer asks, say: "I don't have WhatsApp sharing enabled on this line, but our team can follow up via email."
+================================================================================
+"""
 
     return f"""{base}
 {name_clause}
 
 {date_context}
 
-CRITICAL MANDATORY TOOL CALL RULE:
-You have access to a tool named `finish_call`.
-Whenever the customer says goodbye, declines, says not interested, confirms an appointment, or indicates the conversation is over:
-You MUST call the `finish_call` tool immediately! Do NOT reply with text when concluding — invoke the `finish_call` tool instead.
+{whatsapp_protocol}
 
 RULES:
 - Keep every response under 2 sentences.
@@ -198,18 +214,15 @@ RULES:
 - Follow the script verbatim — NEVER hallucinate, invent unverified claims, or discuss topics outside the script.
 - Follow the custom script below faithfully.
 
-WHATSAPP ACTION TOOL:
-You have access to a tool named `send_whatsapp_info`.
-If the customer asks to receive information on WhatsApp (e.g. "send brochure", "send pricing", "send website", "send booking link", "send contact details"):
-Call `send_whatsapp_info` with the matching action (e.g. action="SEND_BROCHURE", "SEND_PRICING", "SEND_WEBSITE", etc.) and naturally confirm to the customer.
-{whatsapp_permission_clause}
 CAMPAIGN-SPECIFIC SCRIPT:
 {custom_script}
 
 {DATE_TIME_VALIDATION_RULES}
 
-REMINDER ON HANGUP:
-Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
+CRITICAL MANDATORY TOOL CALL RULE:
+You have access to a tool named `finish_call`.
+Whenever the conversation has completely concluded (goodbye exchanged, or refusal/rejection finalized):
+Invoke the `finish_call` tool with:
   - customer_name: the customer's name
   - appointment_date: the confirmed future date (formatted as YYYY-MM-DD, e.g. "{today_date}")
   - appointment_time: the confirmed time (with AM/PM, if booked)
@@ -388,9 +401,12 @@ class DynamicAgent(Agent):
 
     def __init__(self, agent_type: str, custom_script: str, customer_name: str, whatsapp_enabled: bool = False):
         instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
+        agent_tools = [finish_call]
+        if whatsapp_enabled:
+            agent_tools.append(send_whatsapp_info)
         super().__init__(
             instructions=instructions,
-            tools=[finish_call, send_whatsapp_info],
+            tools=agent_tools,
         )
 
 
@@ -417,8 +433,15 @@ async def _get_campaign_info(call_id: int) -> dict:
             voice_profile = "Meera"  # Default fallback
             whatsapp_enabled = False
             if campaign:
-                if campaign.whatsapp_automation and isinstance(campaign.whatsapp_automation, dict):
-                    whatsapp_enabled = bool(campaign.whatsapp_automation.get("enabled", False))
+                wa_config = campaign.whatsapp_automation
+                if isinstance(wa_config, str):
+                    try:
+                        import json
+                        wa_config = json.loads(wa_config)
+                    except Exception:
+                        wa_config = {}
+                if isinstance(wa_config, dict):
+                    whatsapp_enabled = bool(wa_config.get("enabled", False))
 
                 agent_stmt = select(AgentModel).where(
                     AgentModel.name == campaign.agent,
@@ -781,34 +804,35 @@ async def entrypoint(ctx: JobContext):
                     _handle_unexpected_disconnect("customer hung up")
                 )
 
-        # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
+        # Dynamic voice selection mapping for Sarvam bulbul v3 compatible voices
         SARVAM_VOICE_MAPPING = {
-            "Meera": "anushka",
-            "Raj": "abhilash",
-            "Manisha": "manisha",
-            "Karun": "karun",
-            "Vidya": "vidya",
-            "Hitesh": "hitesh",
-            "Female 1": "anushka",
-            "Female 2": "anushka",
-            "Male 1": "abhilash",
-            "Male 2": "abhilash",
-            "Nova (ElevenLabs)": "anushka",
+            "Meera": "shreya",
+            "Raj": "rahul",
+            "Manisha": "priya",
+            "Karun": "kabir",
+            "Vidya": "kavya",
+            "Hitesh": "aditya",
+            "Female 1": "shreya",
+            "Female 2": "priya",
+            "Male 1": "rahul",
+            "Male 2": "aditya",
+            "Nova (ElevenLabs)": "shreya",
         }
         db_voice = campaign_info.get("voice", "Meera")
-        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")
+        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "shreya")
         print(f"[agent] Configured agent voice profile: {db_voice} -> mapped to Sarvam speaker: {speaker_voice}")
 
         session = AgentSession(
             vad=silero.VAD.load(
-                min_speech_duration=0.25,
-                min_silence_duration=0.6,
+                min_speech_duration=0.15,
+                min_silence_duration=0.35,
                 prefix_padding_duration=0.1,
             ),
             stt=sarvam.STT(
                 model="saaras:v3",
                 language="en-IN",
                 mode="transcribe",
+                high_vad_sensitivity=True,
             ),
 
             llm=openai.LLM(
@@ -819,9 +843,10 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
-                model="bulbul:v2",
+                model="bulbul:v3",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
+                max_chunk_length=80,
             ),
         )
 
@@ -945,18 +970,12 @@ async def entrypoint(ctx: JobContext):
             # Immediately speak the opening greeting as soon as the call connects
             clean_name = customer_name.strip() if customer_name else ""
             if clean_name and clean_name.lower() not in ("unknown", ""):
-                greeting_instructions = (
-                    f"The call is now connected. Immediately speak this greeting right now: "
-                    f"'Hi, may I speak with {clean_name}?'"
-                )
+                greeting_text = f"Hi, may I speak with {clean_name}?"
             else:
-                greeting_instructions = (
-                    "The call is now connected. Immediately speak this greeting right now: "
-                    "'Hi, good day! Am I speaking with the concerned person?'"
-                )
+                greeting_text = "Hi, good day! Am I speaking with the concerned person?"
 
-            print(f"[agent] Triggering immediate opening greeting: {greeting_instructions}")
-            await session.generate_reply(instructions=greeting_instructions)
+            print(f"[agent] Speaking immediate opening greeting: '{greeting_text}'")
+            await session.say(greeting_text, allow_interruptions=False, add_to_chat_ctx=True)
             print("[agent] Opening greeting dispatched successfully")
 
         # Keep the entrypoint alive until the room is deleted.

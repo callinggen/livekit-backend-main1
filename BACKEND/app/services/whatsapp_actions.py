@@ -105,6 +105,13 @@ class WhatsAppActionService:
             contact = await db.get(Contact, resolved_contact_id) if resolved_contact_id else None
 
             resolved_campaign_id = campaign_id or call.campaign_id
+            if not resolved_campaign_id and contact:
+                resolved_campaign_id = contact.campaign_id
+            if not resolved_campaign_id and call.job_id:
+                from app.models.job import Job
+                job_obj = await db.get(Job, call.job_id)
+                if job_obj:
+                    resolved_campaign_id = job_obj.campaign_id
             campaign = await db.get(Campaign, resolved_campaign_id) if resolved_campaign_id else None
 
             raw_phone = phone or (contact.phone if contact else call.phone)

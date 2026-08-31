@@ -8,6 +8,7 @@ from app.database import AsyncSessionLocal
 from app.models.call import Call
 from app.models.contact import Contact
 from app.models.campaign import Campaign
+from app.models.job import Job
 from app.models.user import User
 from app.models.whatsapp_material import WhatsAppMaterial
 from app.models.whatsapp_send_job import WhatsAppSendJob
@@ -56,7 +57,17 @@ class WhatsAppAutomationService:
                 return None
 
             campaign_id = call.campaign_id
+            if not campaign_id and call.job_id:
+                job = await db.get(Job, call.job_id)
+                if job:
+                    campaign_id = job.campaign_id
+            if not campaign_id and call.contact_id:
+                contact_obj = await db.get(Contact, call.contact_id)
+                if contact_obj:
+                    campaign_id = contact_obj.campaign_id
+
             if not campaign_id:
+                print(f"[WhatsAppAutomation] Could not resolve campaign_id for Call {call_id}.")
                 return None
 
             campaign = await db.get(Campaign, campaign_id)
@@ -65,7 +76,13 @@ class WhatsAppAutomationService:
 
             # 1. Check if WhatsApp Automation is enabled on this campaign
             automation_config = campaign.whatsapp_automation or {}
-            if not automation_config.get("enabled", False):
+            if isinstance(automation_config, str):
+                try:
+                    import json
+                    automation_config = json.loads(automation_config)
+                except Exception:
+                    automation_config = {}
+            if not isinstance(automation_config, dict) or not automation_config.get("enabled", False):
                 # Automation is OFF (default) -> do nothing
                 return None
 

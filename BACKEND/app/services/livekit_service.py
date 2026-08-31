@@ -1,5 +1,5 @@
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 from livekit import api
 from livekit.protocol.sip import CreateSIPParticipantRequest
@@ -12,6 +12,7 @@ async def make_livekit_call(
     phone: str,
     room_name: str,
 ):
+    load_dotenv(override=True)
     lkapi = api.LiveKitAPI()
     
     # Sanitize phone number to standard E.164 format
@@ -30,7 +31,7 @@ async def make_livekit_call(
         # Fallback to India +91 if likely an Indian number
         clean_phone = f"+91{raw_digits}" if len(raw_digits) <= 10 else f"+{raw_digits}"
 
-    sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3yaCewggPpAs")
+    sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3iPMqSQPX8z5")
     sip_call_from = os.getenv("SIP_CALL_FROM", "+917971442271")
     agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen_shreya")
 
