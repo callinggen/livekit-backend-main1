@@ -156,11 +156,13 @@ async def terminate_call_once(
     session = state.get("session")
     if session:
         setattr(session, "_is_finishing", True)
-
-    try:
-        call_id = int(room_name.rsplit("-", 1)[-1])
-    except (ValueError, IndexError):
-        call_id = -1
+ 
+    call_id = state.get("call_id", -1) if state else -1
+    if call_id == -1 or call_id is None:
+        try:
+            call_id = int(room_name.rsplit("-", 1)[-1])
+        except (ValueError, IndexError):
+            call_id = -1
         
     ans_at = state.get("answered_at")
     sip_was_active = ans_at is not None
