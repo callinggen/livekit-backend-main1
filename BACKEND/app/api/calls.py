@@ -441,7 +441,6 @@ async def list_calls(
     """
     from app.models.agent import Agent
     result = await db.execute(
-<<<<<<< Updated upstream
         select(Call, Contact, Campaign, Agent)
         .outerjoin(Contact, Call.contact_id == Contact.id)
         .outerjoin(Campaign, Contact.campaign_id == Campaign.id)

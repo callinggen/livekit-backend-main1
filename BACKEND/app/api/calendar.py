@@ -3,17 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from datetime import datetime, timedelta, timezone
 import os
-import smtplib
-from dotenv import load_dotenv
-load_dotenv()
-
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from pydantic import BaseModel
-
 from app.database import get_db
 from app.models.contact_form_user import ContactFormUser
 from app.models.blocked_slot import BlockedSlot
+from app.services.email_service import email_service
+
 
 router = APIRouter(prefix="/api/calendar", tags=["Calendar"])
 
@@ -131,63 +126,15 @@ async def create_google_calendar_event(booking: BookSlotRequest):
 
 
 # -------------------------------------------------------------------
-# RESEND-STYLE BEAUTIFUL HTML EMAIL TEMPLATES
+# RESEND-POWERED HTML EMAIL TEMPLATES
 # -------------------------------------------------------------------
-def generate_ics_invite(
-    summary: str,
-    description: str,
-    start_dt: datetime,
-    end_dt: datetime,
-    organizer_email: str,
-    attendee_email: str,
-    attendee_name: str,
-    admin_email: str,
-    meeting_link: str = "https://meet.google.com/gen-calling-demo"
-) -> str:
-    """Generates standard iCalendar (.ics) format string for Google Calendar / Outlook auto-invite."""
-    fmt = "%Y%m%dT%H%M%SZ"
-    start_utc = start_dt.astimezone(timezone.utc).strftime(fmt)
-    end_utc = end_dt.astimezone(timezone.utc).strftime(fmt)
-    now_utc = datetime.now(timezone.utc).strftime(fmt)
-    uid = f"callinggen-{int(start_dt.timestamp())}-{abs(hash(attendee_email))}@callinggen.in"
-
-    return (
-        "BEGIN:VCALENDAR\r\n"
-        "VERSION:2.0\r\n"
-        "PRODID:-//CallingGen AI//Calendar Booking//EN\r\n"
-        "CALSCALE:GREGORIAN\r\n"
-        "METHOD:REQUEST\r\n"
-        "BEGIN:VEVENT\r\n"
-        f"UID:{uid}\r\n"
-        f"DTSTAMP:{now_utc}\r\n"
-        f"DTSTART:{start_utc}\r\n"
-        f"DTEND:{end_utc}\r\n"
-        f"SUMMARY:{summary}\r\n"
-        f"DESCRIPTION:{description}\\nMeeting Link: {meeting_link}\r\n"
-        f"LOCATION:Google Meet Video Call ({meeting_link})\r\n"
-        f"ORGANIZER;CN=CallingGen AI:mailto:{organizer_email}\r\n"
-        f"ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN={attendee_name}:mailto:{attendee_email}\r\n"
-        f"ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=CallingGen Admin:mailto:{admin_email}\r\n"
-        "STATUS:CONFIRMED\r\n"
-        "SEQUENCE:0\r\n"
-        "END:VEVENT\r\n"
-        "END:VCALENDAR\r\n"
-    )
-
 async def send_email_notifications(booking: BookSlotRequest):
     """
-    Sends premium Resend-styled HTML email confirmations to Customer & Admin (saisathwik@genxreality.in) with iCalendar Google Invite attachment.
+    Sends premium HTML email confirmations to Customer & Admin via Resend / EmailService.
     """
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USERNAME") or os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
     admin_email = os.getenv("ADMIN_EMAIL", "saisathwik@genxreality.in")
     meeting_link = os.getenv("MEETING_LINK", "https://meet.google.com/hfi-jick-ijc")
-
-    if not smtp_user or not smtp_pass:
-        print(f"[EMAIL NOTIFICATION] Skipped: SMTP_USERNAME or SMTP_PASSWORD not configured in .env.")
-        return
+    support_email = os.getenv("SUPPORT_EMAIL", "support@callinggen.in")
 
     try:
         dt_obj = datetime.fromisoformat(booking.appointment_time)
@@ -199,14 +146,7 @@ async def send_email_notifications(booking: BookSlotRequest):
     readable_date = dt_obj.strftime("%A, %B %d, %Y")
     readable_time = dt_obj.strftime("%I:%M %p IST")
 
-    # 1. Customer Confirmation Email (Resend Style + iCalendar Invite)
-    cust_msg = MIMEMultipart("mixed")
-    cust_msg["Subject"] = f"Confirmed: CallingGen Demo Session on {readable_date}"
-    cust_msg["From"] = f"CallingGen <{smtp_user}>"
-    cust_msg["To"] = booking.email
-
-    alt_part = MIMEMultipart("alternative")
-
+    # 1. Customer Confirmation Email
     cust_html = f"""
     <!DOCTYPE html>
     <html>
@@ -294,7 +234,7 @@ async def send_email_notifications(booking: BookSlotRequest):
           <!-- Footer -->
           <tr>
             <td style="padding: 24px 40px; background-color: #F1F5F9; border-top: 1px solid #E2E8F0; text-align: center; font-size: 13px; color: #64748B;">
-              Need to reschedule? Reply directly to this email or contact support at <a href="mailto:{admin_email}" style="color: #4F6BFF; text-decoration: none;">{admin_email}</a>.<br/>
+              Need to reschedule? Reply directly to this email or contact support at <a href="mailto:{support_email}" style="color: #4F6BFF; text-decoration: none;">{support_email}</a>.<br/>
               <span style="display: inline-block; margin-top: 8px;">© {datetime.now().year} CallingGen AI. All rights reserved.</span>
             </td>
           </tr>
@@ -302,36 +242,8 @@ async def send_email_notifications(booking: BookSlotRequest):
       </body>
     </html>
     """
-    alt_part.attach(MIMEText(cust_html, "html"))
-    cust_msg.attach(alt_part)
 
-    # Attach Google Calendar / Outlook .ics Event Invite
-    try:
-        ics_text = generate_ics_invite(
-            summary=f"CallingGen Demo - {booking.name}",
-            description=f"1-on-1 Personalized CallingGen Voice AI Demo Consultation\\nClient: {booking.name}\\nCompany: {booking.company}\\nPhone: {booking.phone}",
-            start_dt=dt_obj,
-            end_dt=dt_obj + timedelta(hours=1),
-            organizer_email=smtp_user,
-            attendee_email=booking.email,
-            attendee_name=booking.name,
-            admin_email=admin_email,
-            meeting_link=meeting_link
-        )
-        ics_part = MIMEText(ics_text, "calendar; method=REQUEST")
-        ics_part.add_header("Content-Disposition", "inline; filename=invite.ics")
-        cust_msg.attach(ics_part)
-    except Exception as ics_err:
-        print(f"[ICS ATTACHMENT ERROR] {ics_err}")
-
-    # 2. Admin Notification Email (Resend Dashboard Alert Style with Google Calendar Invite)
-    admin_msg = MIMEMultipart("mixed")
-    admin_msg["Subject"] = f"🔥 New Demo Booking: {booking.name} ({booking.company})"
-    admin_msg["From"] = f"CallingGen Alerts <{smtp_user}>"
-    admin_msg["To"] = admin_email
-
-    admin_alt = MIMEMultipart("alternative")
-
+    # 2. Admin Notification Email
     admin_html = f"""
     <!DOCTYPE html>
     <html>
@@ -386,39 +298,32 @@ async def send_email_notifications(booking: BookSlotRequest):
       </body>
     </html>
     """
-    admin_alt.attach(MIMEText(admin_html, "html"))
-    admin_msg.attach(admin_alt)
 
+    # Send Customer Confirmation via Resend
     try:
-        ics_text = generate_ics_invite(
-            summary=f"CallingGen Demo - {booking.name}",
-            description=f"1-on-1 Personalized CallingGen Voice AI Demo Consultation\\nClient: {booking.name}\\nCompany: {booking.company}\\nPhone: {booking.phone}",
-            start_dt=dt_obj,
-            end_dt=dt_obj + timedelta(hours=1),
-            organizer_email=smtp_user,
-            attendee_email=booking.email,
-            attendee_name=booking.name,
-            admin_email=admin_email,
-            meeting_link=meeting_link
+        email_service._send_email(
+            to_email=booking.email,
+            subject=f"Confirmed: CallingGen Demo Session on {readable_date}",
+            body=cust_html,
+            is_html=True,
         )
-        ics_part = MIMEText(ics_text, "calendar; method=REQUEST")
-        ics_part.add_header("Content-Disposition", "inline; filename=invite.ics")
-        admin_msg.attach(ics_part)
-    except Exception:
-        pass
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10.0) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, booking.email, cust_msg.as_string())
-            if admin_email:
-                server.sendmail(smtp_user, admin_email, admin_msg.as_string())
-
-        print(f"[EMAIL SUCCESS] Confirmation email + Google Calendar invite sent to {booking.email} and admin notification to {admin_email}")
-
+        print(f"[CALENDAR EMAIL] Confirmation sent to customer: {booking.email}")
     except Exception as e:
-        print(f"[EMAIL ERROR] Failed to send email notifications: {e}")
+        print(f"[CALENDAR EMAIL ERROR] Failed to send customer confirmation: {e}")
+
+    # Send Admin Alert via Resend
+    if admin_email:
+        try:
+            email_service._send_email(
+                to_email=admin_email,
+                subject=f"🔥 New Demo Booking: {booking.name} ({booking.company})",
+                body=admin_html,
+                is_html=True,
+            )
+            print(f"[CALENDAR EMAIL] Notification sent to admin: {admin_email}")
+        except Exception as e:
+            print(f"[CALENDAR EMAIL ERROR] Failed to send admin notification: {e}")
+
 
 
 # -------------------------------------------------------------------
