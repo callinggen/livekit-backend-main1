@@ -1,6 +1,6 @@
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
