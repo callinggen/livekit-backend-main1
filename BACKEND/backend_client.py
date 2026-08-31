@@ -17,7 +17,28 @@ async def notify_call_active(room_name: str) -> bool:
     try:
         call_id = int(room_name.rsplit("-", 1)[-1])
     except (ValueError, IndexError):
-        print(f"[backend_client] Could not parse call_id from room name: {room_name}")
+        call_id = -1
+
+    if call_id == -1:
+        from app.database import AsyncSessionLocal
+        from app.models.call import Call
+        from sqlalchemy import select
+        
+        # Retry up to 5 times (1s interval) to allow the webhook thread to finish creating the row
+        for _ in range(5):
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(select(Call).where(Call.room_name == room_name))
+                    call = result.scalars().first()
+                    if call:
+                        call_id = call.id
+                        break
+            except Exception as db_err:
+                print(f"[backend_client] Database lookup failed in notify_call_active: {db_err}")
+            await asyncio.sleep(1.0)
+
+    if call_id == -1:
+        print(f"[backend_client] Could not parse or find call_id from room name: {room_name}")
         return False
 
     backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")

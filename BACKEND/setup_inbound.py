@@ -33,7 +33,7 @@ async def create_inbound_setup():
         )
         trunk_req = CreateSIPInboundTrunkRequest(trunk=trunk_info)
         trunk = await lkapi.sip.create_inbound_trunk(trunk_req)
-        print(f"✅ Inbound Trunk Created: ID = {trunk.sip_trunk_id}")
+        print(f"SUCCESS: Inbound Trunk Created: ID = {trunk.sip_trunk_id}")
      
         # 2. Create SIP Dispatch Rule
         rule = SIPDispatchRule(
@@ -52,7 +52,7 @@ async def create_inbound_setup():
             trunk_ids=[trunk.sip_trunk_id]
         )
         dispatch = await lkapi.sip.create_dispatch_rule(dispatch_req)
-        print(f"✅ Dispatch Rule Created: ID = {dispatch.sip_dispatch_rule_id}")
+        print(f"SUCCESS: Dispatch Rule Created: ID = {dispatch.sip_dispatch_rule_id}")
     finally:
         await lkapi.aclose()
  
