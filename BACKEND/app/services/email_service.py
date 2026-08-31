@@ -63,7 +63,8 @@ class EmailService:
         return os.getenv("RESEND_TEMPLATE_BOOKING", "").strip()
 
     def is_configured(self):
-        return bool(self.api_key)
+        k = self.api_key
+        return bool(k and not k.startswith("re_your_") and k != "re_your_api_key_here")
 
     def _send_email(
         self,
