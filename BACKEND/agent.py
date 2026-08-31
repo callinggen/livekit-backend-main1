@@ -409,12 +409,21 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
     can use the correct script, agent type, and customer name.
     Returns a dict with keys: agent_type, script, customer_name, voice.
     """
+    if call_id == -1 or call_id is None:
+        return {
+            "agent_type": "Voice-E (Tax Agent)",
+            "script": "",
+            "customer_name": "",
+            "metadata_fields": {},
+            "voice": "Meera",
+            "direction": "inbound",
+        }
     try:
         async with AsyncSessionLocal() as db:
             call = await db.get(Call, call_id)
             if call is None:
                 print(f"[agent] Warning: call {call_id} not found in DB")
-                return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera"}
+                return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "direction": "inbound"}
 
             # Inbound call routing logic
             if call.direction == "inbound":
@@ -503,16 +512,19 @@ async def entrypoint(ctx: JobContext):
     
     # ── Resolve call_id by room name from DB or fallback to parsing room name ──
     call_id = -1
-    try:
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Call).where(Call.room_name == room_name)
-            )
-            call = result.scalars().first()
-            if call:
-                call_id = call.id
-    except Exception as e:
-        print(f"[agent] DB lookup error for room_name '{room_name}': {e}")
+    for attempt in range(10):
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(Call).where(Call.room_name == room_name)
+                )
+                call = result.scalars().first()
+                if call:
+                    call_id = call.id
+                    break
+        except Exception as e:
+            print(f"[agent] DB lookup error for room_name '{room_name}' (attempt {attempt+1}): {e}")
+        await asyncio.sleep(0.5)
 
     if call_id == -1:
         try:
@@ -748,19 +760,19 @@ async def entrypoint(ctx: JobContext):
             
             _safe_create_task(_handle_unexpected_disconnect("customer hung up"), name="_handle_unexpected_disconnect", call_id=call_id)
 
-        # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
+        # Dynamic voice selection mapping for Sarvam bulbul v3 compatible voices
         SARVAM_VOICE_MAPPING = {
-            "Meera": "anushka",
-            "Raj": "abhilash",
-            "Manisha": "manisha",
-            "Karun": "karun",
-            "Vidya": "vidya",
-            "Hitesh": "hitesh",
-            "Female 1": "anushka",
-            "Female 2": "anushka",
-            "Male 1": "abhilash",
-            "Male 2": "abhilash",
-            "Nova (ElevenLabs)": "anushka",
+            "Meera": "ritu",
+            "Raj": "amit",
+            "Manisha": "neha",
+            "Karun": "dev",
+            "Vidya": "kavya",
+            "Hitesh": "rohan",
+            "Female 1": "ritu",
+            "Female 2": "shreya",
+            "Male 1": "amit",
+            "Male 2": "dev",
+            "Nova (ElevenLabs)": "ritu",
         }
         db_voice = campaign_info.get("voice", "Meera")
         speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")
@@ -777,7 +789,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
-                model="bulbul:v2",
+                model="bulbul:v3",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
@@ -981,7 +993,9 @@ async def entrypoint(ctx: JobContext):
             # Small buffer to let audio pipeline stabilize
             await asyncio.sleep(0.5)
 
-            direction = campaign_info.get("direction", "outbound")
+            direction = campaign_info.get("direction")
+            if not direction:
+                direction = "inbound" if (room_name.startswith("inbound-call-") or "inbound" in room_name) else "outbound"
             if direction == "inbound":
                 greeting_instructions = (
                     f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
