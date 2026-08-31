@@ -3,7 +3,6 @@ import os
 import importlib
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple
-from dotenv import load_dotenv
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,8 +47,6 @@ class CustomDomainService:
             raise ValueError(f"Domain '{domain_name}' is already added to your account.")
 
         # 2. Call Resend Domains API to register domain
-        resend_mod = importlib.import_module("resend")
-        resend_mod.api_key = email_service.api_key
         resend_domain_id = None
         dns_records: List[Dict[str, Any]] = []
         resend_status = "pending"
@@ -61,6 +58,9 @@ class CustomDomainService:
             dns_records = cls._generate_standard_fallback_records(domain_name, region)
         else:
             try:
+                resend_mod: Any = importlib.import_module("resend")
+                setattr(resend_mod, "api_key", email_service.api_key)
+                
                 # Call Resend Domains API
                 params: Dict[str, Any] = {"name": domain_name, "region": region}
                 resp = resend_mod.Domains.create(params)
@@ -145,7 +145,7 @@ class CustomDomainService:
         updated_records = []
         all_dns_matched = True
 
-        dns_resolver = importlib.import_module("dns.resolver")
+        dns_resolver: Any = importlib.import_module("dns.resolver")
         resolver = dns_resolver.Resolver()
         resolver.nameservers = ["8.8.8.8", "1.1.1.1", "8.8.4.4"]
         resolver.timeout = 3.0
@@ -180,8 +180,9 @@ class CustomDomainService:
             and not domain_obj.resend_domain_id.startswith("restricted_")
         ):
             try:
-                resend_mod = importlib.import_module("resend")
-        resend_mod.api_key = email_service.api_key
+                resend_mod: Any = importlib.import_module("resend")
+                setattr(resend_mod, "api_key", email_service.api_key)
+                
                 # Trigger Resend verification
                 try:
                     resend_mod.Domains.verify(domain_obj.resend_domain_id)
@@ -241,7 +242,6 @@ class CustomDomainService:
                 answers = resolver.resolve(host, "TXT")
                 observed_list = []
                 for rdata in answers:
-                    # rdata.strings is a tuple of byte chunks
                     txt_content = b"".join(rdata.strings).decode("utf-8", errors="ignore").strip()
                     observed_list.append(txt_content)
                     clean_observed = txt_content.strip('"').strip("'").strip().lower()
@@ -305,7 +305,7 @@ class CustomDomainService:
             {
                 "record": "SPF",
                 "type": "TXT",
-                "name": domain_name,
+                "name": f"bounces.{domain_name}",
                 "value": "v=spf1 include:resend.com ~all",
                 "ttl": "Auto",
                 "status": "pending",
@@ -316,7 +316,7 @@ class CustomDomainService:
                 "record": "Return-Path",
                 "type": "MX",
                 "name": f"bounces.{domain_name}",
-                "value": f"feedback-smtp.{region}.amazonses.com",
+                "value": "feedback-smtp.us-east-1.amazonses.com",
                 "priority": 10,
                 "ttl": "Auto",
                 "status": "pending",
