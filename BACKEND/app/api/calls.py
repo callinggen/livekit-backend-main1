@@ -159,14 +159,15 @@ async def livekit_webhook(
                     else:
                         print(f"[webhook] Rejected inbound call: Phone line not configured or inbound disabled")
                         try:
-                            lkapi = lk_api.LiveKitAPI()
-                            await lkapi.room.delete_room(lk_api.DeleteRoomRequest(room=room_name))
-                            await lkapi.aclose()
+                            if room_name:
+                                lkapi = lk_api.LiveKitAPI()
+                                await lkapi.room.delete_room(lk_api.DeleteRoomRequest(room=str(room_name)))
+                                await lkapi.aclose()
                         except Exception as e:
                             print(f"[webhook] Failed to reject room {room_name}: {e}")
 
-    elif event_name == "room_finished":
-        await LiveKitEventService.room_finished(db, room_name)
+    elif event_name == "room_finished" and room_name:
+        await LiveKitEventService.room_finished(db, str(room_name))
 
     return {"status": "ok"}
 

@@ -46,7 +46,10 @@ async def create_google_calendar_event(booking: BookSlotRequest):
 
     try:
         import json
-        from googleapiclient.discovery import build
+        import importlib
+        build = importlib.import_module("googleapiclient.discovery").build
+        service_account = importlib.import_module("google.oauth2.service_account")
+        Credentials = getattr(service_account, "Credentials")
 
         SCOPES = ['https://www.googleapis.com/auth/calendar']
         
@@ -54,10 +57,10 @@ async def create_google_calendar_event(booking: BookSlotRequest):
             creds_data = json.load(f)
 
         if "type" in creds_data and creds_data["type"] == "service_account":
-            from google.oauth2.service_account import Credentials
             creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
         elif "web" in creds_data or "installed" in creds_data:
-            from google.oauth2.credentials import Credentials as UserCredentials
+            user_creds_mod = importlib.import_module("google.oauth2.credentials")
+            UserCredentials = getattr(user_creds_mod, "Credentials")
             token_path = os.path.join(os.path.dirname(__file__), "..", "..", "token.json")
             creds = None
             if os.path.exists(token_path):
@@ -67,7 +70,6 @@ async def create_google_calendar_event(booking: BookSlotRequest):
                 print(f"  To authorize Google Calendar once, run: python generate_token.py")
                 return
         else:
-            from google.oauth2.service_account import Credentials
             creds = Credentials.from_service_account_file(creds_file, scopes=SCOPES)
 
         service = build('calendar', 'v3', credentials=creds)
