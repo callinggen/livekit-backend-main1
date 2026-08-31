@@ -171,8 +171,8 @@ async def lifespan(app: FastAPI):
 
         # Seed default marketing email templates if not already present
         try:
-            from app.services.default_marketing_templates import seed_default_templates
-            await seed_default_templates(db)
+            from app.api.email_templates import ensure_default_templates_seeded
+            await ensure_default_templates_seeded(db)
         except Exception as seed_err:
             print(f"[STARTUP] Could not seed default email templates: {seed_err}")
 
