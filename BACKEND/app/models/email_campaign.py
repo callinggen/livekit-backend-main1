@@ -19,6 +19,7 @@ class EmailCampaign(Base):
     subject: Mapped[str] = mapped_column(String, nullable=False)
     html_body: Mapped[str] = mapped_column(Text, nullable=False)
     from_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    from_email: Mapped[str | None] = mapped_column(String, nullable=True)
     reply_to: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Status: draft | scheduled | running | completed | failed

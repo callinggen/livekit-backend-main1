@@ -14,8 +14,10 @@ from app.api.reports import router as report_router
 from app.api.agents import router as agents_router
 from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
-from app.api.phone_numbers import router as phone_numbers_router
 from app.api.email_campaigns import router as email_campaign_router
+from app.api.email_templates import router as email_template_router
+from app.api.custom_domains import router as custom_domain_router
+from app.api.phone_numbers import router as phone_numbers_router
 from app.api.payments import router as payment_router
 from app.api.whatsapp_send import router as whatsapp_send_router
 from app.api.whatsapp_materials import router as whatsapp_materials_router
@@ -43,6 +45,8 @@ from app.models.password_reset import PasswordReset
 from app.models.notification_state import UserNotificationState
 from app.models.email_campaign import EmailCampaign  # registers email tables
 from app.models.email_contact import EmailContact    # registers email tables
+from app.models.email_template import EmailMarketingTemplate  # registers template table
+from app.models.custom_domain import CustomEmailDomain        # registers custom domain table
 from app.models.payment import Payment
 from app.models.whatsapp_action import WhatsAppAction
 from app.models.whatsapp_material import WhatsAppMaterial
@@ -136,6 +140,21 @@ async def lifespan(app: FastAPI):
 
 
 
+        # Email Campaign columns auto-migrations
+        for col_name, col_type in [
+            ("from_name", "VARCHAR"),
+            ("from_email", "VARCHAR"),
+            ("reply_to", "VARCHAR"),
+            ("schedule_date", "VARCHAR"),
+            ("schedule_time", "VARCHAR"),
+            ("total_sent", "INTEGER DEFAULT 0"),
+            ("total_failed", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                await conn.execute(text(f"ALTER TABLE email_campaigns ADD COLUMN {col_name} {col_type};"))
+            except Exception:
+                pass
+
     # Ensure default admin user exists
     async with AsyncSessionLocal() as db:
         res = await db.execute(select(User).where(User.email == "admin@example.com"))
@@ -149,6 +168,13 @@ async def lifespan(app: FastAPI):
             )
             db.add(admin_user)
             await db.commit()
+
+        # Seed default marketing email templates if not already present
+        try:
+            from app.services.default_marketing_templates import seed_default_templates
+            await seed_default_templates(db)
+        except Exception as seed_err:
+            print(f"[STARTUP] Could not seed default email templates: {seed_err}")
 
     # Startup: Start lightweight scheduler
     task = asyncio.create_task(schedule_poller())
@@ -205,6 +231,8 @@ app.include_router(demo_router, prefix="/api")
 app.include_router(calendar_router, tags=["Calendar"])
 app.include_router(campaign_router, prefix="/api", tags=["Campaigns"])
 app.include_router(email_campaign_router, prefix="/api", tags=["Email Campaigns"])
+app.include_router(email_template_router, prefix="/api", tags=["Email Templates"])
+app.include_router(custom_domain_router, prefix="/api", tags=["Custom Sending Domains"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])

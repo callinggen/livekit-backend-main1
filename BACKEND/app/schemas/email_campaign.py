@@ -12,6 +12,7 @@ class EmailCampaignCreate(BaseModel):
     subject: str
     html_body: str
     from_name: Optional[str] = None
+    from_email: Optional[str] = None
     reply_to: Optional[str] = None
     schedule_date: Optional[str] = None   # ISO datetime string or None for immediate
     schedule_time: Optional[str] = None

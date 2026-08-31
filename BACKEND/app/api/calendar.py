@@ -360,18 +360,32 @@ async def send_email_notifications(booking: BookSlotRequest):
     except Exception:
         pass
 
+    # Send Customer Confirmation via EmailService (Resend / Fallback)
     try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10.0) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, booking.email, cust_msg.as_string())
-            if admin_email:
-                server.sendmail(smtp_user, admin_email, admin_msg.as_string())
-
-        print(f"[EMAIL SUCCESS] Confirmation email + Google Calendar invite sent to {booking.email} and admin notification to {admin_email}")
-
+        from app.services.email_service import email_service
+        email_service._send_email(
+            to_email=booking.email,
+            subject=f"Confirmed: CallingGen Demo Session on {readable_date}",
+            body=cust_html,
+            is_html=True,
+        )
+        print(f"[CALENDAR EMAIL] Confirmation sent to customer: {booking.email}")
     except Exception as e:
-        print(f"[EMAIL ERROR] Failed to send email notifications: {e}")
+        print(f"[CALENDAR EMAIL ERROR] Failed to send customer confirmation: {e}")
+
+    # Send Admin Alert via EmailService (Resend / Fallback)
+    if admin_email:
+        try:
+            from app.services.email_service import email_service
+            email_service._send_email(
+                to_email=admin_email,
+                subject=f"🔥 New Demo Booking: {booking.name} ({booking.company})",
+                body=admin_html,
+                is_html=True,
+            )
+            print(f"[CALENDAR EMAIL] Notification sent to admin: {admin_email}")
+        except Exception as e:
+            print(f"[CALENDAR EMAIL ERROR] Failed to send admin notification: {e}")
 
 
 # -------------------------------------------------------------------

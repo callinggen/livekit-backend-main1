@@ -38,10 +38,10 @@ def validate_password_policy(password: str):
 async def login(
     login_data: LoginRequest, db: AsyncSession = Depends(get_db)
 ):
-    identifier = login_data.identifier
+    identifier = login_data.identifier.strip() if login_data.identifier else ""
     
-    # Try fetching by email first
-    stmt = select(User).where(User.email == identifier)
+    # Try fetching by email first (case-insensitive)
+    stmt = select(User).where(func.lower(User.email) == identifier.lower())
     result = await db.execute(stmt)
     user = result.scalars().first()
     
