@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Integer, String, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -59,7 +59,7 @@ class Campaign(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
     )
     
     voicemail_detection: Mapped[dict | None] = mapped_column(
