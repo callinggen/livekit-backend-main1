@@ -200,6 +200,7 @@ class QueueService:
 
         call = Call(
             job_id=job.id,
+            campaign_id=job.campaign_id,
             contact_id=contact.id,
             phone=phone_to_dial,
             status="dialing",

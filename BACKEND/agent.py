@@ -103,6 +103,7 @@ def build_agent_instructions(
     agent_type: str,
     custom_script: str,
     customer_name: str,
+    whatsapp_enabled: bool = False,
 ) -> str:
     """
     Compose the full system prompt for the agent from:
@@ -111,6 +112,7 @@ def build_agent_instructions(
     - the campaign-specific custom script
     - the pre-known customer name
     - mandatory date/time validation rules
+    - conditional post-call WhatsApp permission protocol (if whatsapp_enabled is True)
     """
     from datetime import datetime, timezone, timedelta
 
@@ -152,6 +154,31 @@ DATE & CALLBACK RESOLUTION RULES:
 - If the customer specifies a date in the past relative to Today ({today_date}), politely inform them: "I'm sorry, that date has already passed. Could you please provide a future date?"
 """
 
+    if whatsapp_enabled:
+        whatsapp_protocol = """
+WHATSAPP BROCHURES & AUTOMATION PROTOCOL (ENABLED FOR THIS CAMPAIGN):
+- You have access to the `send_whatsapp_info` tool.
+- If the customer asks for brochures, pricing, catalogue, or details on WhatsApp at any point:
+  Invoke `send_whatsapp_info(action="SEND_BROCHURE")` immediately during the call.
+  Confirm verbally: "I have just sent our brochure directly to your WhatsApp number!"
+- CRITICAL WRAP-UP REQUIREMENT:
+  Before concluding the call or scheduling an appointment, ALWAYS ask the customer for WhatsApp permission:
+  "Would it be okay if I send our brochure and information on WhatsApp so you can review it?"
+  * If YES / sure / okay:
+    Invoke `send_whatsapp_info(action="SEND_BROCHURE")`, say: "Great! I've sent that over to your WhatsApp. Thank you and have a wonderful day!", and THEN invoke `finish_call`.
+  * If NO / not needed / decline:
+    Say: "No problem at all! Thank you and have a great day!", and invoke `finish_call`.
+- Use `send_whatsapp_info` when dispatching WhatsApp information.
+- Use `finish_call` ONLY after the conversation and WhatsApp protocol have concluded.
+"""
+    else:
+        whatsapp_protocol = """
+WHATSAPP AUTOMATION IS DISABLED FOR THIS CAMPAIGN:
+- Do NOT offer to send WhatsApp messages or brochures.
+- Do NOT ask for WhatsApp permission.
+- If the customer asks, say: "I don't have WhatsApp sharing enabled on this line, but our team can follow up via email."
+"""
+
     if agent_type in AGENT_BASE_PROMPTS:
         base = AGENT_BASE_PROMPTS[agent_type]
     else:
@@ -184,6 +211,8 @@ CAMPAIGN-SPECIFIC SCRIPT:
 {custom_script}
 
 {DATE_TIME_VALIDATION_RULES}
+
+{whatsapp_protocol}
 
 REMINDER ON HANGUP:
 Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
@@ -399,13 +428,21 @@ class DynamicAgent(Agent):
         customer_name: str,
         greeting_instructions: str = "",
         call_answered_event: asyncio.Event | None = None,
+        whatsapp_enabled: bool = False,
     ):
-        instructions = build_agent_instructions(agent_type, custom_script, customer_name)
+        instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
         self._greeting_instructions = greeting_instructions
         self._call_answered_event = call_answered_event
+        tools = [finish_call]
+        if whatsapp_enabled:
+            try:
+                from whatsapp_tool import send_whatsapp_info
+                tools.append(send_whatsapp_info)
+            except Exception as tool_err:
+                print(f"[agent] Could not load whatsapp_tool: {tool_err}")
         super().__init__(
             instructions=instructions,
-            tools=[finish_call],
+            tools=tools,
         )
 
     async def on_enter(self) -> None:
@@ -519,6 +556,18 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                     elif "Voice-E" in campaign.agent:
                         voice_profile = "Meera" # Female voice
 
+            whatsapp_enabled = False
+            if campaign and campaign.whatsapp_automation:
+                wa_config = campaign.whatsapp_automation
+                if isinstance(wa_config, str):
+                    try:
+                        import json
+                        wa_config = json.loads(wa_config)
+                    except Exception:
+                        wa_config = {}
+                if isinstance(wa_config, dict):
+                    whatsapp_enabled = bool(wa_config.get("enabled", False))
+
             return {
                 "job_id": job.id if job else None,
                 "campaign_id": campaign.id if campaign else None,
@@ -529,11 +578,13 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                 "metadata_fields": contact.metadata_fields if contact else {},
                 "voicemail_detection": campaign.voicemail_detection if campaign else None,
                 "voice": voice_profile,
+                "whatsapp_enabled": whatsapp_enabled,
+                "whatsapp_automation": campaign.whatsapp_automation if campaign else None,
                 "direction": "outbound",
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "direction": "outbound"}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False, "direction": "outbound"}
 
 
 async def entrypoint(ctx: JobContext):
@@ -1037,6 +1088,7 @@ async def entrypoint(ctx: JobContext):
                 customer_name=customer_name,
                 greeting_instructions=greeting_text,
                 call_answered_event=call_answered_event,
+                whatsapp_enabled=campaign_info.get("whatsapp_enabled", False),
             ),
         )
         if ACTIVE_CALLS.get(room_name):
