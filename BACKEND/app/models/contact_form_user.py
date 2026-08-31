@@ -13,4 +13,5 @@ class ContactFormUser(Base):
     industry = Column(String)
     appointment_time = Column(DateTime)
     status = Column(String, default="booked")
+    admin_notes = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

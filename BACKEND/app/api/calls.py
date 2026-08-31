@@ -441,6 +441,7 @@ async def list_calls(
     """
     from app.models.agent import Agent
     result = await db.execute(
+<<<<<<< Updated upstream
         select(Call, Contact, Campaign, Agent)
         .outerjoin(Contact, Call.contact_id == Contact.id)
         .outerjoin(Campaign, Contact.campaign_id == Campaign.id)
@@ -451,6 +452,7 @@ async def list_calls(
                 Call.tenant_id == current_user.id
             )
         )
+        .where(Campaign.campaign_name != "Website Demo Requests")
         .order_by(Call.id.desc())
     )
     rows = result.all()

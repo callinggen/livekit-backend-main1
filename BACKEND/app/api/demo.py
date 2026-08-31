@@ -215,7 +215,120 @@ async def get_demo_leads(db: AsyncSession = Depends(get_db)):
         print(f"Error fetching demo leads: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch leads")
 
+class LeadStatusUpdateRequest(BaseModel):
+    status: str
+
+@router.post("/leads/{lead_id}/trigger-call")
+async def trigger_call_for_existing_lead(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """Triggers an instant AI voice call to an existing test user lead."""
+    res = await db.execute(select(DemoLead).where(DemoLead.id == lead_id))
+    lead = res.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Demo lead not found")
+
+    lead.status = "calling"
+    await db.commit()
+    await db.refresh(lead)
+
+    background_tasks.add_task(
+        trigger_outbound_call_task_async,
+        lead.id,
+        lead.name,
+        lead.company or "Not Provided",
+        lead.phone,
+        lead.industry or "General"
+    )
+
+    return {
+        "success": True,
+        "lead_id": lead.id,
+        "message": f"AI Call initiated to {lead.name} ({lead.phone})"
+    }
+
+@router.put("/leads/{lead_id}/status")
+async def update_lead_status(
+    lead_id: int,
+    req: LeadStatusUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Updates the status of a demo lead (e.g., 'completed', 'pending', 'failed', 'no_answer')."""
+    res = await db.execute(select(DemoLead).where(DemoLead.id == lead_id))
+    lead = res.scalars().first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Demo lead not found")
+
+    lead.status = req.status
+    await db.commit()
+    await db.refresh(lead)
+
+    return {
+        "success": True,
+        "lead_id": lead.id,
+        "status": lead.status
+    }
+
 from app.api.calls import _to_ist, _fmt_duration, _parse_transcript
+
+@router.get("/lead/{lead_id}/details")
+async def get_demo_lead_details(lead_id: int, db: AsyncSession = Depends(get_db)):
+    """Fetch complete call details, transcript, recording, and status for a demo lead."""
+    try:
+        res = await db.execute(select(DemoLead).where(DemoLead.id == lead_id))
+        lead = res.scalars().first()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Demo lead not found")
+
+        call_record = None
+        if lead.call_id:
+            call_res = await db.execute(select(Call).where(Call.id == lead.call_id))
+            call_record = call_res.scalars().first()
+
+        if not call_record:
+            # Fallback: Find most recent Call by phone number
+            call_res = await db.execute(
+                select(Call).where(Call.phone == lead.phone).order_by(Call.started_at.desc())
+            )
+            call_record = call_res.scalars().first()
+
+        transcript_list = []
+        recording_url = ""
+        call_status = lead.status or "pending"
+        duration_str = "—"
+        summary_text = ""
+        created_time = _to_ist(lead.created_at) if lead.created_at else "—"
+
+        if call_record:
+            call_status = call_record.status or lead.status
+            transcript_list = _parse_transcript(call_record.transcript)
+            recording_url = call_record.recording_url or ""
+            summary_text = call_record.summary or ""
+            duration_str = _fmt_duration(call_record.duration or 0) if call_record.duration else "—"
+            if call_record.started_at:
+                created_time = _to_ist(call_record.started_at)
+
+        return {
+            "id": lead.id,
+            "call_id": lead.call_id or (call_record.id if call_record else None),
+            "name": lead.name,
+            "company": lead.company or "Not Provided",
+            "email": lead.email,
+            "phone": lead.phone,
+            "industry": lead.industry,
+            "status": call_status,
+            "datetime": created_time,
+            "duration": duration_str,
+            "summary": summary_text or "No call summary recorded yet.",
+            "recording_url": recording_url,
+            "transcript": transcript_list
+        }
+    except Exception as e:
+        print(f"Error fetching lead details for lead {lead_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch lead details")
+
 
 @router.get("/call/{call_id}")
 async def get_demo_call(call_id: int, db: AsyncSession = Depends(get_db)):

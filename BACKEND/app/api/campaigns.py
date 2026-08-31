@@ -78,7 +78,7 @@ async def list_campaigns(
     Return all campaigns for the current user with aggregated stats pulled from their latest job.
     Used by the Campaigns page table.
     """
-    query = select(Campaign).where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
+    query = select(Campaign).where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None))).where(Campaign.campaign_name != "Website Demo Requests")
     
     if type == "pending":
         query = query.where(Campaign.campaign_type == "pending")
