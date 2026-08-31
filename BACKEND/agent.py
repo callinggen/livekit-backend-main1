@@ -433,7 +433,7 @@ class DynamicAgent(Agent):
         instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
         self._greeting_instructions = greeting_instructions
         self._call_answered_event = call_answered_event
-        tools = [finish_call]
+        tools: list[Any] = [finish_call]
         if whatsapp_enabled:
             try:
                 from whatsapp_tool import send_whatsapp_info

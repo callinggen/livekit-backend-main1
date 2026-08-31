@@ -20,7 +20,7 @@ from whatsapp.config import EVOLUTION_INSTANCE_NAME
 
 def normalize_whatsapp_phone(raw_phone: str) -> str:
     """Normalize phone number to international WhatsApp format (e.g. 917656807447)."""
-    clean = "".join(c for c in str(raw_phone or "") if c.isdigit())
+    clean = "".join(c for c in (raw_phone or "") if c.isdigit())
     if len(clean) == 10:
         clean = "91" + clean
     return clean
@@ -35,7 +35,7 @@ def resolve_personalization(text: str, variables: Dict[str, str]) -> str:
         return ""
     result = text
     for key, val in variables.items():
-        result = result.replace(f"{{{{{key}}}}}", str(val or ""))
+        result = result.replace(f"{{{{{key}}}}}", val or "")
     return result
 
 
@@ -144,7 +144,8 @@ class WhatsAppAutomationService:
                 if has_4d_filters:
                     # 1. Call Type check (Outbound / Inbound)
                     if ct_filters and "all types" not in ct_filters and "all" not in ct_filters:
-                        call_type = (call.call_type or "outbound").lower()
+                        raw_ct = getattr(call, "call_type", None) or getattr(call, "direction", "outbound")
+                        call_type = (raw_ct or "outbound").lower()
                         if not any(f in call_type for f in ct_filters):
                             match = False
 

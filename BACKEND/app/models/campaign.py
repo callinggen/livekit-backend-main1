@@ -67,6 +67,11 @@ class Campaign(Base):
         nullable=True,
     )
 
+    whatsapp_automation: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
     upload_source: Mapped[str | None] = mapped_column(
         String,
         nullable=True,
