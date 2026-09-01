@@ -10,28 +10,34 @@ def get_headers() -> Dict[str, str]:
         "Content-Type": "application/json"
     }
 
-async def create_instance(instance_name: str) -> Dict[str, Any]:
+async def create_instance(instance_name: str, number: Optional[str] = None) -> Dict[str, Any]:
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
         
     url = f"{EVOLUTION_API_URL}/instance/create"
-    payload = {
+    payload: Dict[str, Any] = {
         "instanceName": instance_name,
         "qrcode": True,
         "integration": "WHATSAPP-BAILEYS"
     }
-    
-    async with httpx.AsyncClient() as client:
+    if number and number.strip():
+        clean_num = "".join(c for c in number if c.isdigit())
+        if len(clean_num) == 10:
+            clean_num = "91" + clean_num
+        payload["number"] = clean_num
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, json=payload, headers=get_headers())
-        # If it already exists, Evolution API might return 400 or a specific error.
-        # We pass the raw response up to the router to handle.
-        response.raise_for_status()
-        return response.json()
+        if response.status_code in (200, 201):
+            return response.json()
+        return response.json() if response.status_code < 500 else {}
+
 
 async def get_qr_code(instance_name: str, number: Optional[str] = None) -> Dict[str, Any]:
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
         
+    clean_num = None
     if number and number.strip():
         clean_num = "".join(c for c in number if c.isdigit())
         if len(clean_num) == 10:
@@ -40,10 +46,42 @@ async def get_qr_code(instance_name: str, number: Optional[str] = None) -> Dict[
     else:
         url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}"
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.get(url, headers=get_headers())
-        response.raise_for_status()
-        return response.json()
+        data: Dict[str, Any] = response.json() if response.status_code == 200 else {}
+
+        # If user requested pairing code with phone number but instance returned null pairingCode:
+        if clean_num and not data.get("pairingCode"):
+            # Recreate with number so Baileys generates a fresh pairing code
+            try:
+                await client.delete(f"{EVOLUTION_API_URL}/instance/delete/{instance_name}", headers=get_headers())
+            except Exception:
+                pass
+            create_payload = {
+                "instanceName": instance_name,
+                "qrcode": True,
+                "number": clean_num,
+                "integration": "WHATSAPP-BAILEYS"
+            }
+            create_res = await client.post(f"{EVOLUTION_API_URL}/instance/create", json=create_payload, headers=get_headers())
+            if create_res.status_code in (200, 201):
+                c_data = create_res.json()
+                if c_data.get("pairingCode"):
+                    return c_data
+                if c_data.get("qrcode", {}).get("pairingCode"):
+                    c_data["pairingCode"] = c_data["qrcode"]["pairingCode"]
+                    return c_data
+
+            # Re-fetch connect with number
+            conn_res = await client.get(f"{EVOLUTION_API_URL}/instance/connect/{instance_name}?number={clean_num}", headers=get_headers())
+            if conn_res.status_code == 200:
+                data = conn_res.json()
+
+        # Normalize pairingCode from nested qrcode if present
+        if not data.get("pairingCode") and data.get("qrcode", {}).get("pairingCode"):
+            data["pairingCode"] = data["qrcode"]["pairingCode"]
+
+        return data
 
 async def get_connection_status(instance_name: str) -> Dict[str, Any]:
     if not EVOLUTION_API_URL:
