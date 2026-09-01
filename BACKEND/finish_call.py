@@ -415,22 +415,27 @@ async def finish_call(
         goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
 
     try:
-        # ── Step 1: Speak the goodbye phrase via TTS ──────────────────────
-        try:
-            print(f"Speaking goodbye: '{goodbye_phrase}'")
-            speech = session.say(goodbye_phrase, allow_interruptions=False)
-            if speech:
-                try:
-                    await asyncio.wait_for(speech, timeout=8.0)
-                except Exception:
-                    pass
-            # Calculate dynamic audio playback buffer based on character count (approx 10 chars/sec + 1.5s overhead)
-            play_buffer = max(5.0, min(9.0, len(goodbye_phrase) * 0.11 + 1.5))
-            print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming to complete on SIP line...")
-            await asyncio.sleep(play_buffer)
-            print("Goodbye spoken successfully.")
-        except Exception as e:
-            print(f"Warning – could not speak goodbye (non-fatal): {e}")
+    try:
+        # ── Step 1: Speak the goodbye phrase via TTS ONLY IF NOT ALREADY SPOKEN ──
+        already_said_goodbye = any(g in lower_t for g in ["goodbye", "have a great day", "have a wonderful day", "bye!", "take care", "have a nice day"])
+        if not already_said_goodbye:
+            try:
+                print(f"Speaking goodbye: '{goodbye_phrase}'")
+                speech = session.say(goodbye_phrase, allow_interruptions=False)
+                if speech:
+                    try:
+                        await asyncio.wait_for(speech, timeout=6.0)
+                    except Exception:
+                        pass
+                play_buffer = max(2.5, min(5.0, len(goodbye_phrase) * 0.08 + 1.0))
+                print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming...")
+                await asyncio.sleep(play_buffer)
+                print("Goodbye spoken successfully.")
+            except Exception as e:
+                print(f"Warning – could not speak goodbye (non-fatal): {e}")
+        else:
+            print("Assistant already spoke goodbye during conversation turn. Waiting 1.8s for SIP audio buffer...")
+            await asyncio.sleep(1.8)
 
         # ── Step 2: Build transcript (after goodbye is in history) ────────
         res_end = _build_transcript(session)
@@ -488,7 +493,7 @@ async def finish_call(
         # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
         if call_id != -1:
             try:
-                await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
+                await asyncio.sleep(1.0)  # give recorder time to flush & close
                 from agent import mix_wav_files
                 mix_wav_files(
                     f"recordings/call_{call_id}_customer.wav",
@@ -534,19 +539,5 @@ async def finish_call(
 
         # Remove active call state
         ACTIVE_CALLS.pop(room_str, None)
-    res = request_call_finish(
-        room_name=room_name,
-        reason="llm_tool",
-        customer_name=customer_name,
-        appointment_date=appointment_date,
-        appointment_time=appointment_time,
-    )
-
-    if isinstance(res, str):
-        return res
-
-    state = ACTIVE_CALLS.get(room_name)
-    if state:
-        state["call_phase"] = "finishing"
 
     return "Call ended successfully."

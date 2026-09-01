@@ -963,6 +963,24 @@ async def entrypoint(ctx: JobContext):
                         # ONLY append agent lines here. User lines come from STT below to avoid dupes/misses.
                         if role == "assistant":
                             transcript_lines.append(f"{role}: {clean_t}")
+
+                            # Auto-hangup safety net: If assistant spoke a terminal goodbye, schedule auto-hangup
+                            lower_agent_msg = clean_t.lower()
+                            terminal_goodbye_cues = [
+                                "goodbye", "good bye", "have a great day", "have a wonderful day",
+                                "have a nice day", "take care", "bye bye", "bye!"
+                            ]
+                            if any(cue in lower_agent_msg for cue in terminal_goodbye_cues):
+                                state = ACTIVE_CALLS.get(room_name)
+                                if state and state.get("call_phase") != "greeting" and not state.get("finishing"):
+                                    async def _auto_goodbye_hangup():
+                                        # Wait 4 seconds to let TTS stream out to the customer
+                                        await asyncio.sleep(4.0)
+                                        st = ACTIVE_CALLS.get(room_name)
+                                        if st and not st.get("finishing"):
+                                            print(f"[AUTO HANGUP TRIGGERED] Assistant said goodbye in message: '{clean_t[:60]}...' -> Hanging up call.")
+                                            request_call_finish(room_name, reason="assistant_goodbye_auto_hangup")
+                                    _safe_create_task(_auto_goodbye_hangup(), name="_auto_goodbye_hangup", call_id=call_id)
             except Exception:
                 pass
 
