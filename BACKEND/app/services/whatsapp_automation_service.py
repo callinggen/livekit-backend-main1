@@ -198,46 +198,50 @@ class WhatsAppAutomationService:
                             match = False
 
                 else:
-                    # Legacy single category & values evaluation
+                    # Legacy single category & values evaluation, or empty filters (match all completed calls)
                     trigger_type = (rule.get("trigger_type") or rule.get("category") or "").strip().lower()
                     raw_values = rule.get("values") or [rule.get("trigger_value") or rule.get("value")]
                     trigger_vals = [str(v).strip().lower() for v in raw_values if v]
 
-                    match = False
-                    for trigger_val in trigger_vals:
-                        if trigger_type in ("ai_classification", "classification"):
-                            if trigger_val in ("hot", "hot lead") and is_hot:
+                    if not trigger_type and not trigger_vals:
+                        # Empty rule filters -> Match all calls by default
+                        match = True
+                    else:
+                        match = False
+                        for trigger_val in trigger_vals:
+                            if trigger_type in ("ai_classification", "classification"):
+                                if trigger_val in ("hot", "hot lead") and is_hot:
+                                    match = True
+                                elif trigger_val in ("warm", "warm lead") and is_warm:
+                                    match = True
+                                elif trigger_val in ("cold", "cold lead") and is_cold:
+                                    match = True
+                                elif trigger_val == "interested" and is_interested:
+                                    match = True
+                                elif trigger_val in ("not interested", "declined") and is_not_interested:
+                                    match = True
+                            elif trigger_type in ("response", "call_response"):
+                                if trigger_val in ("answered", "completed") and is_answered:
+                                    match = True
+                                elif trigger_val in ("not answered", "no answer", "missed") and is_not_answered:
+                                    match = True
+                                elif trigger_val in ("appointment", "appointment booked") and is_appointment:
+                                    match = True
+                                elif trigger_val in ("callback", "rescheduled") and is_callback:
+                                    match = True
+                                elif trigger_val in ("declined", "not interested") and is_not_interested:
+                                    match = True
+                                elif trigger_val in ("cut", "cut/disconnected", "disconnected") and is_cut:
+                                    match = True
+                            elif trigger_type == "status":
+                                if trigger_val == "completed" and call_status == "completed":
+                                    match = True
+                                elif trigger_val in ("failed", "unreached") and call_status in ("failed", "incomplete"):
+                                    match = True
+                            elif trigger_type == "all" or trigger_val == "any":
                                 match = True
-                            elif trigger_val in ("warm", "warm lead") and is_warm:
-                                match = True
-                            elif trigger_val in ("cold", "cold lead") and is_cold:
-                                match = True
-                            elif trigger_val == "interested" and is_interested:
-                                match = True
-                            elif trigger_val in ("not interested", "declined") and is_not_interested:
-                                match = True
-                        elif trigger_type in ("response", "call_response"):
-                            if trigger_val in ("answered", "completed") and is_answered:
-                                match = True
-                            elif trigger_val in ("not answered", "no answer", "missed") and is_not_answered:
-                                match = True
-                            elif trigger_val in ("appointment", "appointment booked") and is_appointment:
-                                match = True
-                            elif trigger_val in ("callback", "rescheduled") and is_callback:
-                                match = True
-                            elif trigger_val in ("declined", "not interested") and is_not_interested:
-                                match = True
-                            elif trigger_val in ("cut", "cut/disconnected", "disconnected") and is_cut:
-                                match = True
-                        elif trigger_type == "status":
-                            if trigger_val == "completed" and call_status == "completed":
-                                match = True
-                            elif trigger_val in ("failed", "unreached") and call_status in ("failed", "incomplete"):
-                                match = True
-                        elif trigger_type == "all" or trigger_val == "any":
-                            match = True
-                        if match:
-                            break
+                            if match:
+                                break
 
                 if match:
                     # Permission / Consent check for promotional attachments & materials
