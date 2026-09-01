@@ -519,3 +519,18 @@ async def list_calls(
             "sip_was_active": call.sip_was_active,
         })
     return calls
+
+
+@router.post("/calls/{call_id}/whatsapp-action")
+async def trigger_call_whatsapp_action(
+    call_id: int,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Trigger in-call WhatsApp delivery (e.g. SEND_BROCHURE) requested by the AI during a live call.
+    """
+    action = payload.get("action", "SEND_BROCHURE")
+    from app.services.whatsapp_automation_service import WhatsAppAutomationService
+    result = await WhatsAppAutomationService.trigger_in_call_action(call_id, action)
+    return result or {"success": True, "action": action}

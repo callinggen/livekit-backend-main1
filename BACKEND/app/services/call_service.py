@@ -142,6 +142,13 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
                         bg_call.category = clean_cat
                 await bg_db.commit()
                 print(f"[CallService] Background AI classification updated for Call {call_id}: summary='{bg_call.summary}', category='{bg_call.category}'")
+
+                # Trigger campaign WhatsApp automation rules now that classification is finalized
+                try:
+                    from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                    await WhatsAppAutomationService.process_call_automation(call_id)
+                except Exception as wa_err:
+                    print(f"[CallService] WhatsApp automation error after AI classification for Call {call_id}: {wa_err}")
     except Exception as e:
         print(f"[CallService] Background DeepSeek analysis error (non-fatal): {e}")
 
@@ -433,12 +440,18 @@ class CallService:
         print(f"Job ID {call.job_id} Completed Contacts -> {job.completed_contacts if job else 0}")
         print("-" * 50)
 
-        # ── Spawn DeepSeek Analysis in Background (Non-blocking) ──────
+        # ── Spawn DeepSeek Analysis & WhatsApp Automation (Non-blocking) ──────
+        import asyncio
         if transcript and len(transcript.strip()) > 20:
-            import asyncio
             asyncio.create_task(
                 _analyze_and_update_summary(call.id, transcript, business_outcome, is_not_interested)
             )
+        else:
+            try:
+                from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                asyncio.create_task(WhatsAppAutomationService.process_call_automation(call.id))
+            except Exception as wa_err:
+                print(f"[CallService] Error dispatching WhatsApp automation for Call {call.id}: {wa_err}")
 
         return call
 
@@ -521,4 +534,13 @@ class CallService:
                     )
 
         await db.commit()
+
+        # Trigger WhatsApp automation rules for failed/unanswered call
+        try:
+            import asyncio
+            from app.services.whatsapp_automation_service import WhatsAppAutomationService
+            asyncio.create_task(WhatsAppAutomationService.process_call_automation(call_id))
+        except Exception as wa_err:
+            print(f"[CallService] Error dispatching WhatsApp automation for failed Call {call_id}: {wa_err}")
+
         return call
