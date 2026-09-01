@@ -415,7 +415,6 @@ async def finish_call(
         goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
 
     try:
-    try:
         # ── Step 1: Speak the goodbye phrase via TTS ONLY IF NOT ALREADY SPOKEN ──
         already_said_goodbye = any(g in lower_t for g in ["goodbye", "have a great day", "have a wonderful day", "bye!", "take care", "have a nice day"])
         if not already_said_goodbye:
