@@ -180,3 +180,8 @@ async def setup_inbound_sip(phone_number: str):
     except Exception as e:
         print(f"[livekit_service] Error provisioning LiveKit inbound SIP for {phone_number}: {e}")
         return False
+
+
+def get_inbound_sip_trunk_id() -> str:
+    """Return the authoritative inbound SIP trunk ID."""
+    return os.getenv("SIP_INBOUND_TRUNK_ID") or os.getenv("INBOUND_SIP_TRUNK_ID") or "ST_j856Hob6eAWi"
