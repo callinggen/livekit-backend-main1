@@ -125,6 +125,8 @@ class CampaignService:
             campaign_type="normal",
             upload_source=data.upload_source,
             sheet_name=data.sheet_name,
+            voicemail_detection=getattr(data, "voicemail_detection", None),
+            whatsapp_automation=getattr(data, "whatsapp_automation", None),
         )
 
 
@@ -168,6 +170,8 @@ class CampaignService:
                 parent_campaign_id=campaign.id,
                 upload_source=data.upload_source,
                 sheet_name=data.sheet_name,
+                voicemail_detection=getattr(data, "voicemail_detection", None),
+                whatsapp_automation=getattr(data, "whatsapp_automation", None),
             )
             db.add(pending_campaign)
             await db.flush()

@@ -20,4 +20,7 @@ class CampaignCreate(BaseModel):
     upload_source: str | None = None
     sheet_name: str | None = None
 
+    voicemail_detection: dict | None = None
+    whatsapp_automation: dict | None = None
+
     contacts: List[ContactCreate]
