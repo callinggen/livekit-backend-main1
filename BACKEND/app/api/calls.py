@@ -122,10 +122,22 @@ async def livekit_webhook(
                         if line_clean in clean_called or clean_called in line_clean:
                             matched_line = line
                             break
+                    
+                    if not matched_line and all_lines:
+                        # Fallback to default primary phone line
+                        matched_line = all_lines[0]
                             
-                    if matched_line and matched_line.inbound_enabled:
-                        tenant_id = matched_line.user_id
+                    if matched_line:
+                        tenant_id = matched_line.user_id or 1
                         agent_id = matched_line.inbound_agent_id
+                        
+                        if not agent_id:
+                            from app.models.agent import Agent as AgentModel
+                            agent_res = await db.execute(
+                                select(AgentModel).where(AgentModel.user_id == tenant_id).limit(1)
+                            )
+                            found_agent = agent_res.scalars().first()
+                            agent_id = found_agent.id if found_agent else 6
                         
                         clean_caller = "".join(c for c in caller_number if c.isdigit())
                         contact_stmt = select(Contact)
@@ -144,7 +156,7 @@ async def livekit_webhook(
                             caller_number=caller_number,
                             called_number=called_number,
                             phone=caller_number,
-                            phone_line_id=matched_line.id,
+                            phone_line_id=matched_line.id if matched_line else None,
                             tenant_id=tenant_id,
                             agent_id=agent_id,
                             room_name=room_name,
@@ -157,14 +169,21 @@ async def livekit_webhook(
                         await db.commit()
                         print(f"[webhook] Created Inbound Call record {new_call.id} for tenant {tenant_id}, agent {agent_id}")
                     else:
-                        print(f"[webhook] Rejected inbound call: Phone line not configured or inbound disabled")
-                        try:
-                            if room_name:
-                                lkapi = lk_api.LiveKitAPI()
-                                await lkapi.room.delete_room(lk_api.DeleteRoomRequest(room=str(room_name)))
-                                await lkapi.aclose()
-                        except Exception as e:
-                            print(f"[webhook] Failed to reject room {room_name}: {e}")
+                        print(f"[webhook] Notice: No phone lines in DB, accepting inbound call with default agent 6")
+                        new_call = Call(
+                            direction="inbound",
+                            caller_number=caller_number,
+                            called_number=called_number,
+                            phone=caller_number,
+                            tenant_id=1,
+                            agent_id=6,
+                            room_name=room_name,
+                            status="in_progress",
+                            livekit_participant_id=participant_sid,
+                            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                        )
+                        db.add(new_call)
+                        await db.commit()
 
     elif event_name == "room_finished" and room_name:
         await LiveKitEventService.room_finished(db, str(room_name))
