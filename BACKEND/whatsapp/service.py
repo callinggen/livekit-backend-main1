@@ -42,40 +42,57 @@ async def get_qr_code(instance_name: str, number: Optional[str] = None) -> Dict[
         clean_num = "".join(c for c in number if c.isdigit())
         if len(clean_num) == 10:
             clean_num = "91" + clean_num
-        url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}?number={clean_num}"
-    else:
-        url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}"
-    
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(url, headers=get_headers())
-        data: Dict[str, Any] = response.json() if response.status_code == 200 else {}
 
-        # If user requested pairing code with phone number but instance returned null pairingCode:
-        if clean_num and not data.get("pairingCode"):
-            # Recreate with number so Baileys generates a fresh pairing code
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        # For pairing code: we must first logout & delete the existing session
+        # (if it's connected), then create a fresh one with the phone number.
+        if clean_num:
+            # 1. Logout the current session
+            try:
+                await client.delete(f"{EVOLUTION_API_URL}/instance/logout/{instance_name}", headers=get_headers())
+            except Exception:
+                pass
+            # 2. Delete the instance entirely
             try:
                 await client.delete(f"{EVOLUTION_API_URL}/instance/delete/{instance_name}", headers=get_headers())
             except Exception:
                 pass
+            # 3. Re-create with phone number to get a pairing code
             create_payload = {
                 "instanceName": instance_name,
                 "qrcode": True,
                 "number": clean_num,
                 "integration": "WHATSAPP-BAILEYS"
             }
-            create_res = await client.post(f"{EVOLUTION_API_URL}/instance/create", json=create_payload, headers=get_headers())
+            create_res = await client.post(
+                f"{EVOLUTION_API_URL}/instance/create",
+                json=create_payload,
+                headers=get_headers(),
+            )
             if create_res.status_code in (200, 201):
                 c_data = create_res.json()
-                if c_data.get("pairingCode"):
-                    return c_data
+                # Normalize pairing code location
                 if c_data.get("qrcode", {}).get("pairingCode"):
                     c_data["pairingCode"] = c_data["qrcode"]["pairingCode"]
+                if c_data.get("pairingCode"):
                     return c_data
 
-            # Re-fetch connect with number
-            conn_res = await client.get(f"{EVOLUTION_API_URL}/instance/connect/{instance_name}?number={clean_num}", headers=get_headers())
+            # 4. Fallback: fetch connect endpoint with number
+            conn_res = await client.get(
+                f"{EVOLUTION_API_URL}/instance/connect/{instance_name}?number={clean_num}",
+                headers=get_headers(),
+            )
             if conn_res.status_code == 200:
                 data = conn_res.json()
+                if data.get("qrcode", {}).get("pairingCode"):
+                    data["pairingCode"] = data["qrcode"]["pairingCode"]
+                return data
+            return {"error": "Could not generate pairing code", "pairingCode": None}
+
+        # QR code path (no phone number)
+        url = f"{EVOLUTION_API_URL}/instance/connect/{instance_name}"
+        response = await client.get(url, headers=get_headers())
+        data: Dict[str, Any] = response.json() if response.status_code == 200 else {}
 
         # Normalize pairingCode from nested qrcode if present
         if not data.get("pairingCode") and data.get("qrcode", {}).get("pairingCode"):
@@ -91,7 +108,16 @@ async def get_connection_status(instance_name: str) -> Dict[str, Any]:
     
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(url, headers=get_headers())
-        response.raise_for_status()
+        
+        # If instance doesn't exist (404) or unauthorized – treat as disconnected
+        if response.status_code in (404, 401):
+            return {"instance": {"instanceName": instance_name, "state": "close"}}
+        
+        try:
+            response.raise_for_status()
+        except Exception:
+            return {"instance": {"instanceName": instance_name, "state": "close"}}
+        
         data = response.json()
         
         try:
@@ -121,24 +147,21 @@ async def disconnect_instance(instance_name: str) -> Dict[str, Any]:
     url_del = f"{EVOLUTION_API_URL}/instance/delete/{instance_name}"
     
     async with httpx.AsyncClient(timeout=15.0) as client:
+        # 1. Logout the WhatsApp session
         try:
             await client.delete(url_logout, headers=get_headers())
         except Exception:
             pass
             
+        # 2. Delete the instance so it does NOT re-appear as connected
         try:
             await client.delete(url_del, headers=get_headers())
         except Exception:
             pass
-            
-        try:
-            await client.post(f"{EVOLUTION_API_URL}/instance/create", headers=get_headers(), json={
-                "instanceName": instance_name,
-                "qrcode": True,
-                "integration": "WHATSAPP-BAILEYS"
-            })
-        except Exception:
-            pass
+
+        # NOTE: Do NOT re-create the instance here.
+        # Re-creating immediately would cause the state to show as "open" again.
+        # The frontend will create a fresh instance when the user explicitly initiates a new connection.
             
         return {"status": "disconnected"}
 
