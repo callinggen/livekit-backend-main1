@@ -30,6 +30,7 @@ from app.models.contact import Contact
 from app.models.campaign import Campaign
 from app.models.agent import Agent as AgentModel
 
+load_dotenv(os.path.join(os.path.dirname(__file__), "app", ".env"), override=True)
 load_dotenv(override=True)
 
 # ── Safe Async Task Wrapper ────────────────────────────────────────────────
