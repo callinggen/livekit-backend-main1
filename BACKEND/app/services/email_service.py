@@ -83,18 +83,9 @@ class EmailService:
             return
 
         if not self.is_configured():
-            print("\n" + "="*50)
-            print("RESEND NOT CONFIGURED (RESEND_API_KEY missing in .env)")
-            print(f"To: {to_email}")
-            print(f"Subject: {subject}")
-            if template_id:
-                print(f"Resend Template ID: {template_id}")
-                print(f"Variables: {template_variables}")
-            else:
-                print(f"Format: {'HTML' if is_html else 'PLAIN'}")
-            print("="*50 + "\n")
-            # In development/test mode when Resend isn't set, log cleanly without breaking application flow
-            return
+            err_msg = "Resend API Key is not configured in server environment (RESEND_API_KEY in .env). Please set a valid Resend API key."
+            print(f"\n[EmailService] ERROR: {err_msg}\n")
+            raise RuntimeError(err_msg)
 
         sender = from_override or self.from_email
 
