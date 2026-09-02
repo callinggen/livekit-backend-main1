@@ -22,9 +22,9 @@ from app.api.email_templates import router as email_template_router
 from app.api.custom_domains import router as custom_domain_router
 from app.api.payments import router as payment_router
 
-
-# Ensure recordings directory exists
+# Ensure recordings and uploads directories exist
 os.makedirs("recordings", exist_ok=True)
+os.makedirs(os.path.join("uploads", "materials"), exist_ok=True)
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -62,12 +62,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
                 
-        for col_name in ["campaign_type", "parent_campaign_id"]:
+        for col_name in ["campaign_type", "parent_campaign_id", "whatsapp_automation"]:
             try:
                 if col_name == "campaign_type":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN campaign_type VARCHAR DEFAULT 'normal';"))
                 elif col_name == "parent_campaign_id":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN parent_campaign_id INTEGER;"))
+                elif col_name == "whatsapp_automation":
+                    await conn.execute(text("ALTER TABLE campaigns ADD COLUMN whatsapp_automation JSON;"))
             except Exception:
                 pass
 
@@ -204,6 +206,7 @@ app = FastAPI(
 )
 
 app.mount("/api/recordings", StaticFiles(directory="recordings"), name="recordings")
+app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -229,6 +232,19 @@ app.include_router(phone_numbers_router)
 app.include_router(payment_router, prefix="/api")
 
 
+
+from whatsapp.routes import router as whatsapp_router
+app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
+app.include_router(whatsapp_router, prefix="/whatsapp", tags=["WhatsApp"])
+
+from app.api.whatsapp_materials import router as whatsapp_materials_router
+app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
+
+from app.api.whatsapp_send import router as whatsapp_send_router
+app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
+
+from app.api.whatsapp_history import router as whatsapp_history_router
+app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
 
 
 @app.get("/")

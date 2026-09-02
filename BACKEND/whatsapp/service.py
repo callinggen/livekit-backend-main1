@@ -74,16 +74,92 @@ async def get_chats(instance_name: str) -> list:
         response.raise_for_status()
         return response.json()
 
-async def get_messages(instance_name: str, remote_jid: str) -> dict:
+async def get_messages(instance_name: str, remote_jid: str) -> Dict[str, Any]:
+    """Retrieve messages for a specific remoteJid/chat, filtered strictly to prevent mixing."""
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
-        
+
     url = f"{EVOLUTION_API_URL}/chat/findMessages/{instance_name}"
-    
-    async with httpx.AsyncClient() as client:
-        # We request a higher limit since Evolution API sometimes ignores the where clause
-        # and returns a mixed feed, which we filter on the frontend.
-        payload = {"limit": 500, "where": {"remoteJid": remote_jid}}
+    clean_target = "".join(c for c in str(remote_jid or "") if c.isdigit())
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        payload = {"limit": 1000, "where": {"remoteJid": remote_jid}}
+        response = await client.post(url, headers=get_headers(), json=payload)
+        response.raise_for_status()
+        raw_data = response.json()
+
+        records = (
+            raw_data.get("messages", {}).get("records", [])
+            if isinstance(raw_data, dict)
+            else (raw_data if isinstance(raw_data, list) else [])
+        )
+
+        filtered_records = []
+        for r in records:
+            if not isinstance(r, dict):
+                continue
+            key = r.get("key", {})
+            r_jid = str(key.get("remoteJid") or "")
+            r_alt = str(key.get("remoteJidAlt") or "")
+            r_part = str(key.get("participant") or "")
+
+            # Strict isolation to this chat
+            if (
+                r_jid == remote_jid
+                or (clean_target and len(clean_target) >= 7 and clean_target in r_jid)
+                or (r_alt and (r_alt == remote_jid or (clean_target and len(clean_target) >= 7 and clean_target in r_alt)))
+                or (r_part and (r_part == remote_jid or (clean_target and len(clean_target) >= 7 and clean_target in r_part)))
+            ):
+                filtered_records.append(r)
+
+        return {"messages": {"records": filtered_records}, "total": len(filtered_records)}
+
+
+async def send_text_message(instance_name: str, number: str, text: str) -> Dict[str, Any]:
+    """Send a plain text message via Evolution API."""
+    if not EVOLUTION_API_URL:
+        raise ValueError("EVOLUTION_API_URL is not set")
+
+    clean_number = "".join(c for c in number if c.isdigit())
+    url = f"{EVOLUTION_API_URL}/message/sendText/{instance_name}"
+    payload = {
+        "number": clean_number,
+        "text": text,
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+
+async def send_media_message(
+    instance_name: str,
+    number: str,
+    media_url: str,
+    media_type: str = "document",
+    mimetype: str = "application/pdf",
+    caption: Optional[str] = None,
+    file_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Send media (document/image/pdf) via Evolution API."""
+    if not EVOLUTION_API_URL:
+        raise ValueError("EVOLUTION_API_URL is not set")
+
+    clean_number = "".join(c for c in number if c.isdigit())
+    url = f"{EVOLUTION_API_URL}/message/sendMedia/{instance_name}"
+    payload: Dict[str, Any] = {
+        "number": clean_number,
+        "mediatype": media_type,
+        "mimetype": mimetype,
+        "media": media_url,
+    }
+    if caption:
+        payload["caption"] = caption
+    if file_name:
+        payload["fileName"] = file_name
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.post(url, headers=get_headers(), json=payload)
         response.raise_for_status()
         return response.json()

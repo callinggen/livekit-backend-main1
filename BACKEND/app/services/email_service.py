@@ -126,7 +126,6 @@ class EmailService:
             print(f"[EmailService] Error sending email via Resend to {to_email}: {e}")
             raise Exception(f"Failed to send email via Resend: {e}")
 
-
     # --- Credit Notifications ---
     def send_low_credit_email(self, to_email: str, full_name: str, company_name: str, remaining_credits: int, plan_name: str = "Standard"):
         subject = f"Low Credit Warning: {remaining_credits} credits remaining"

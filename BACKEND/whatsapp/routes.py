@@ -79,3 +79,19 @@ async def get_messages(instance_name: str = Query(...), remote_jid: str = Query(
         return {"success": True, "data": data}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class SendTextMessageRequest(BaseModel):
+    instance_name: str
+    number: str
+    text: str
+
+
+@router.post("/send-text")
+async def send_text(req: SendTextMessageRequest):
+    try:
+        data = await service.send_text_message(req.instance_name, req.number, req.text)
+        return {"success": True, "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

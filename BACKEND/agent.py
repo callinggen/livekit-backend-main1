@@ -9,7 +9,12 @@ import sys
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
+<<<<<<< HEAD
 from finish_call import finish_call, _build_transcript, request_call_finish
+=======
+from finish_call import finish_call, _build_transcript
+from whatsapp_tool import send_whatsapp_info
+>>>>>>> origin/Whatsapp
 
 from livekit import api, rtc
 from livekit.agents import (
@@ -88,8 +93,19 @@ TIME & APPOINTMENT VALIDATION RULES:
 - If the customer mentions a time without AM or PM (e.g. "3 o'clock" or "10:30"), ask: "Is that AM or PM?"
 - When calling finish_call, pass appointment_date in YYYY-MM-DD format (e.g. "2026-07-29") and appointment_time with AM/PM (e.g. "02:00 PM").
 
+HANDLING BUSY CUSTOMERS / "NO TIME RIGHT NOW":
+- If you ask "Do you have a minute?" / "Is now a good time?" or if the customer says "No", "I'm busy", "Not right now", "In a meeting", or has no time to talk:
+  * DO NOT say "Thank you for your time" and hang up immediately!
+  * Instead, offer to schedule a callback / appointment:
+    "No problem at all! Would you like to schedule a quick fifteen minute consultation or callback at a convenient time for you?"
+  * If WhatsApp Automation is enabled, you may also offer to send information over WhatsApp (see WhatsApp rules below).
+
+SPEECH & PRONUNCIATION RULES:
+- Always pronounce time durations in clean words (e.g. say "fifteen minute consultation" rather than "15-minute").
+- Speak in a warm, calm, and conversational tone to ensure completely smooth, natural delivery without vocal glitching.
+
 CALL TERMINATION & FINISH_CALL RULES:
-- IF THE CUSTOMER SAYS "NOT INTERESTED", "NO THANKS", "DON'T CALL ME", "NOT REQUIRED", OR DECLINES:
+- IF THE CUSTOMER EXPLICITLY SAYS "NOT INTERESTED", "NO THANKS, NOT REQUIRED", "DON'T CALL ME", OR REJECTS ANY APPOINTMENT/SERVICE:
   1. Say: "No problem at all. Thank you for your time, and have a great day!"
   2. IMMEDIATELY CALL THE `finish_call` TOOL! NEVER CONTINUE ASKING QUESTIONS OR PROLONG THE CALL AFTER DECLINE.
 - IF THE CUSTOMER SAYS "GOODBYE", "BYE", "THANK YOU", OR INDICATES HANGUP:
@@ -104,6 +120,7 @@ def build_agent_instructions(
     agent_type: str,
     custom_script: str,
     customer_name: str,
+    whatsapp_enabled: bool = False,
 ) -> str:
     """
     Compose the full system prompt for the agent from:
@@ -112,6 +129,7 @@ def build_agent_instructions(
     - the campaign-specific custom script
     - the pre-known customer name
     - mandatory date/time validation rules
+    - conditional post-call WhatsApp permission protocol (if whatsapp_enabled is True)
     """
     from datetime import datetime, timezone, timedelta
 
@@ -164,21 +182,60 @@ DATE & CALLBACK RESOLUTION RULES:
         else ""
     )
 
+    if whatsapp_enabled:
+        whatsapp_protocol = """
+================================================================================
+WHATSAPP BROCHURES & AUTOMATION PROTOCOL (ENABLED FOR THIS CAMPAIGN):
+================================================================================
+1. IN-CALL REQUESTS:
+   - If the customer asks for brochures, pricing, catalogue, or details on WhatsApp at any point:
+     Invoke `send_whatsapp_info(action="SEND_BROCHURE")` immediately during the call.
+     Confirm verbally: "I have just sent our brochure directly to your WhatsApp number!"
+
+2. BEFORE HANGING UP / BEFORE CALLING finish_call:
+   - When an appointment or callback date/time is scheduled, or before concluding the conversation:
+     DO NOT call `finish_call` immediately! First ask the customer:
+     "Would it be okay if I send our brochure and information on WhatsApp so you can review it?"
+   - If the customer says "YES", "SURE", "OKAY", "YEAH", "SEND IT", or agrees:
+     Invoke `send_whatsapp_info(action="SEND_BROCHURE")`, say: "Great! I've sent that over to your WhatsApp. Thank you and have a wonderful day!", and THEN invoke `finish_call`.
+   - If the customer says "NO", "DON'T SEND", "NOT NEEDED", or declines:
+     Say: "No problem at all! Thank you and have a wonderful day!", and invoke `finish_call`.
+
+3. TOOL CALL INVOCATION:
+   - Use `send_whatsapp_info` when dispatching WhatsApp information.
+   - Use `finish_call` ONLY after the conversation and WhatsApp protocol have concluded.
+================================================================================
+"""
+    else:
+        whatsapp_protocol = """
+================================================================================
+WHATSAPP AUTOMATION IS DISABLED FOR THIS CAMPAIGN:
+- Do NOT offer to send WhatsApp messages or brochures.
+- Do NOT ask for WhatsApp permission.
+- If the customer asks, say: "I don't have WhatsApp sharing enabled on this line, but our team can follow up via email."
+================================================================================
+"""
+
     return f"""{base}
 {name_clause}
 
 {date_context}
 
+<<<<<<< HEAD
 CRITICAL MANDATORY TOOL CALL RULE:
 You have access to a tool named `finish_call`.
 Whenever the customer says goodbye, declines, says not interested, confirms an appointment, or indicates the conversation is over:
 You MUST reply with a polite concluding message (e.g., "Thank you, your appointment is confirmed. Goodbye.") AND invoke the `finish_call` tool AT THE SAME TIME.
+=======
+{whatsapp_protocol}
+>>>>>>> origin/Whatsapp
 
 RULES:
 - Keep every response under 2 sentences.
 - Be polite and professional.
-- Do not hallucinate or invent details.
-- Do not discuss unrelated topics.
+- Do not repeat questions or greeting lines you have already spoken.
+- If the customer confirms (e.g. "Yes", "Speaking", "Hello"), do NOT ask to speak with them again — proceed directly to the introduction.
+- Follow the script verbatim — NEVER hallucinate, invent unverified claims, or discuss topics outside the script.
 - Follow the custom script below faithfully.
 
 CAMPAIGN-SPECIFIC SCRIPT:
@@ -186,8 +243,10 @@ CAMPAIGN-SPECIFIC SCRIPT:
 
 {DATE_TIME_VALIDATION_RULES}
 
-REMINDER ON HANGUP:
-Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
+CRITICAL MANDATORY TOOL CALL RULE:
+You have access to a tool named `finish_call`.
+Whenever the conversation has completely concluded (goodbye exchanged, or refusal/rejection finalized):
+Invoke the `finish_call` tool with:
   - customer_name: the customer's name
   - appointment_date: the confirmed future date (formatted as YYYY-MM-DD, e.g. "{today_date}")
   - appointment_time: the confirmed time (with AM/PM, if booked)
@@ -311,11 +370,20 @@ async def record_track(track: rtc.Track, call_id: int, speaker: str = "customer"
                 wav_file.setsampwidth(2)  # 16-bit PCM is 2 bytes
                 wav_file.setframerate(frame.sample_rate)
             wav_file.writeframes(frame.data)
+    except asyncio.CancelledError:
+        pass
     except Exception as e:
         print(f"[recorder] Error recording {speaker} for call {call_id}: {e}")
     finally:
         if wav_file:
-            wav_file.close()
+            try:
+                wav_file.close()
+            except Exception:
+                pass
+        try:
+            await audio_stream.aclose()
+        except Exception:
+            pass
         print(f"[recorder] Finished recording {speaker} track for call {call_id}")
 
 
@@ -348,6 +416,7 @@ class VoicemailDetector:
         If timeout is reached or human interaction confident, return None.
         """
         start_time = asyncio.get_event_loop().time()
+<<<<<<< HEAD
         while True:
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > self.timeout:
@@ -388,19 +457,51 @@ class VoicemailDetector:
                         "confidence": 99.0,
                         "credits_charged": False
                     }
+=======
+        try:
+            while True:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed > self.timeout:
+                    return None
+                
+                transcript = _build_transcript(self.session)
+                if not transcript:
+                    await asyncio.sleep(1.0)
+                    continue
+>>>>>>> origin/Whatsapp
                     
-            await asyncio.sleep(1.0)
+                lower_transcript = transcript.lower()
+                
+                # Stop detecting if it looks like a real conversation (multiple turns)
+                if transcript.count('\n') >= 8:
+                    return None
+                    
+                for phrase in self.trigger_phrases:
+                    if phrase in lower_transcript:
+                        return {
+                            "type": "voicemail",
+                            "trigger": phrase,
+                            "confidence": 99.0,
+                            "credits_charged": False
+                        }
+                        
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            pass
 
 
 
 class DynamicAgent(Agent):
     """Agent whose behaviour is fully driven by the campaign configuration."""
 
-    def __init__(self, agent_type: str, custom_script: str, customer_name: str):
-        instructions = build_agent_instructions(agent_type, custom_script, customer_name)
+    def __init__(self, agent_type: str, custom_script: str, customer_name: str, whatsapp_enabled: bool = False):
+        instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
+        agent_tools = [finish_call]
+        if whatsapp_enabled:
+            agent_tools.append(send_whatsapp_info)
         super().__init__(
             instructions=instructions,
-            tools=[finish_call],
+            tools=agent_tools,
         )
 
 
@@ -408,7 +509,7 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
     """
     Look up the campaign/agent and contact for a given call_id so the agent
     can use the correct script, agent type, and customer name.
-    Returns a dict with keys: agent_type, script, customer_name, voice.
+    Returns a dict with keys: agent_type, script, customer_name, voice, whatsapp_enabled.
     """
     if call_id == -1 or call_id is None:
         return {
@@ -424,7 +525,11 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
             call = await db.get(Call, call_id)
             if call is None:
                 print(f"[agent] Warning: call {call_id} not found in DB")
+<<<<<<< HEAD
                 return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "direction": "inbound"}
+=======
+                return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False}
+>>>>>>> origin/Whatsapp
 
             # Inbound call routing logic
             if call.direction == "inbound":
@@ -465,8 +570,22 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
             campaign = await db.get(Campaign, job.campaign_id) if job else None
 
             voice_profile = "Meera"  # Default fallback
+<<<<<<< HEAD
             agent_obj = None
+=======
+            whatsapp_enabled = False
+>>>>>>> origin/Whatsapp
             if campaign:
+                wa_config = campaign.whatsapp_automation
+                if isinstance(wa_config, str):
+                    try:
+                        import json
+                        wa_config = json.loads(wa_config)
+                    except Exception:
+                        wa_config = {}
+                if isinstance(wa_config, dict):
+                    whatsapp_enabled = bool(wa_config.get("enabled", False))
+
                 agent_stmt = select(AgentModel).where(
                     AgentModel.name == campaign.agent,
                     AgentModel.user_id == campaign.user_id
@@ -496,11 +615,20 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                 "metadata_fields": contact.metadata_fields if contact else {},
                 "voicemail_detection": campaign.voicemail_detection if campaign else None,
                 "voice": voice_profile,
+<<<<<<< HEAD
                 "direction": "outbound",
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
         return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "direction": "outbound"}
+=======
+                "whatsapp_enabled": whatsapp_enabled,
+                "whatsapp_automation": campaign.whatsapp_automation if campaign else None,
+            }
+    except Exception as e:
+        print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False}
+>>>>>>> origin/Whatsapp
 
 
 async def entrypoint(ctx: JobContext):
@@ -555,6 +683,7 @@ async def entrypoint(ctx: JobContext):
 
     # Register event listeners BEFORE connecting to ensure we don't miss early events
     shutdown_event = asyncio.Event()
+<<<<<<< HEAD
     call_answered_event = asyncio.Event()
     customer_disconnected_event = asyncio.Event()
 
@@ -576,6 +705,17 @@ async def entrypoint(ctx: JobContext):
                         print(f"[PERF] sip_active={t_ans:.3f}")
                         print(f"[PERF] answered_at={t_ans:.3f}")
                         print(f"[CALL] answered_at set at {state['answered_at']}")
+=======
+    background_tasks: list[asyncio.Task] = []
+
+    async def _cancel_background_tasks():
+        for t in background_tasks:
+            if not t.done():
+                t.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        background_tasks.clear()
+>>>>>>> origin/Whatsapp
 
     @ctx.room.on("disconnected")
     def on_room_disconnected(*args):
@@ -609,18 +749,74 @@ async def entrypoint(ctx: JobContext):
         shutdown_event.set()
 
 
+    async def _evict_unauthorized_participant(identity: str):
+        if identity == "customer" or identity == ctx.room.local_participant.identity:
+            return
+        try:
+            print(f"[agent] Shield: Evicting unauthorized participant '{identity}' from room '{ctx.room.name}'...")
+            lk_url = os.getenv("LIVEKIT_URL")
+            lk_key = os.getenv("LIVEKIT_API_KEY")
+            lk_secret = os.getenv("LIVEKIT_API_SECRET")
+            lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret) if lk_url else api.LiveKitAPI()
+            try:
+                await lkapi.room.remove_participant(
+                    api.RoomParticipantIdentity(room=ctx.room.name, identity=identity)
+                )
+                print(f"[agent] Successfully kicked unauthorized participant '{identity}' from room '{ctx.room.name}'!")
+            finally:
+                await lkapi.aclose()
+        except Exception as err:
+            print(f"[agent] Notice during participant eviction: {err}")
+
+    @ctx.room.on("participant_connected")
+    def on_participant_connected_shield(p: rtc.RemoteParticipant):
+        if p.identity != "customer":
+            print(f"[agent] Rogue participant detected on join: '{p.identity}'. Evicting immediately!")
+            asyncio.create_task(_evict_unauthorized_participant(p.identity))
+
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication: rtc.TrackPublication, participant: rtc.RemoteParticipant):
+<<<<<<< HEAD
         is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
             participant.identity != ctx.room.local_participant.identity
         )
         if track.kind == rtc.TrackKind.KIND_AUDIO and is_customer:
             asyncio.create_task(record_track(track, call_id))
+=======
+        if participant.identity != "customer":
+            print(f"[agent] Muting/ignoring audio track from rogue participant '{participant.identity}'")
+            try:
+                publication.set_subscribed(False)
+            except Exception:
+                pass
+            return
+        if track.kind == rtc.TrackKind.KIND_AUDIO:
+            t = asyncio.create_task(record_track(track, call_id))
+            background_tasks.append(t)
+
+    # Cross-process atomic file lock per room BEFORE connecting to guarantee strictly 1 agent process enters the room
+    import tempfile
+    lock_file_path = os.path.join(tempfile.gettempdir(), f"livekit_room_{ctx.room.name}.lock")
+    try:
+        if os.path.exists(lock_file_path):
+            # If lock is older than 2 minutes, consider it stale from a dead process
+            if time.time() - os.path.getmtime(lock_file_path) > 120:
+                try:
+                    os.remove(lock_file_path)
+                except Exception:
+                    pass
+        lock_fd = os.open(lock_file_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(lock_fd)
+    except FileExistsError:
+        print(f"[agent] Atomic lock file '{lock_file_path}' exists! Another agent process is handling room '{ctx.room.name}'. Rejecting duplicate job BEFORE connect.")
+        return
+>>>>>>> origin/Whatsapp
 
     try:
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
 
+<<<<<<< HEAD
         # If it's an inbound call and still call_id == -1, initialize it via backend
         if (room_name.startswith("inbound-call-") or "inbound" in room_name) and call_id == -1:
             print("[agent] Inbound room detected. Pre-initializing call via backend...")
@@ -672,6 +868,13 @@ async def entrypoint(ctx: JobContext):
         except FileExistsError:
             print(f"[agent] Atomic lock file '{lock_file_path}' exists! Another agent process is handling room '{ctx.room.name}'. Exiting duplicate process immediately.")
             return
+=======
+        # Evict any rogue/unauthorized agent participants that entered before us
+        for p in list(ctx.room.remote_participants.values()):
+            if p.identity != "customer":
+                print(f"[agent] Detected pre-existing rogue participant '{p.identity}'. Evicting immediately!")
+                asyncio.create_task(_evict_unauthorized_participant(p.identity))
+>>>>>>> origin/Whatsapp
 
         # Scan for already subscribed audio tracks from pre-existing customer participant
         for participant in ctx.room.remote_participants.values():
@@ -682,7 +885,12 @@ async def entrypoint(ctx: JobContext):
                 for publication in participant.track_publications.values():
                     if publication.subscribed and publication.track and publication.track.kind == rtc.TrackKind.KIND_AUDIO:
                         print(f"[recorder] Found pre-existing subscribed customer audio track: {publication.track.sid}")
+<<<<<<< HEAD
                         _safe_create_task(record_track(publication.track, call_id, speaker="customer", answered_event=call_answered_event, disconnected_event=customer_disconnected_event), name="record_track_customer_sub", call_id=call_id)
+=======
+                        t = asyncio.create_task(record_track(publication.track, call_id))
+                        background_tasks.append(t)
+>>>>>>> origin/Whatsapp
 
         # ── Fetch campaign info to drive the agent's behaviour ───────────────────
         campaign_info = await _get_campaign_info(call_id)
@@ -720,8 +928,59 @@ async def entrypoint(ctx: JobContext):
                 return
             print("Voicemail detected. Disconnecting immediately to avoid credits.")
             
+<<<<<<< HEAD
             customer_disconnected_event.set()
             request_call_finish(room_name, reason="voicemail", is_voicemail=True, detection_metadata=metadata)
+=======
+            # 1. Notify backend immediately so it isn't cancelled by room deletion
+            session = state.get("session")
+            transcript = _build_transcript(session) if session else ""
+            
+            try:
+                await notify_call_complete(
+                    room_name,
+                    payload={
+                        "transcript": transcript or None,
+                        "customer_name": None,
+                        "appointment_date": None,
+                        "appointment_time": None,
+                        "recording_url": f"/api/recordings/call_{call_id}.wav",
+                        "is_voicemail": True,
+                        "detection_metadata": metadata,
+                    },
+                )
+            except Exception as notify_err:
+                print(f"Warning - notify failed: {notify_err}")
+
+            # 2. Delete room immediately to drop the SIP call instantly (zero latency)
+            try:
+                lkapi = api.LiveKitAPI()
+                try:
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                finally:
+                    await lkapi.aclose()
+            except Exception as e:
+                print(f"Warning - room deletion error: {e}")
+                
+            # 3. Close session
+            if session:
+                try:
+                    await asyncio.wait_for(session.aclose(), timeout=3.0)
+                except: pass
+                
+            # 4. Cancel background audio/voicemail tasks so file handles are released
+            await _cancel_background_tasks()
+            await asyncio.sleep(0.5)
+            
+            if call_id != -1:
+                try:
+                    mix_wav_files(
+                        f"recordings/call_{call_id}_customer.wav",
+                        f"recordings/call_{call_id}_agent.wav",
+                        f"recordings/call_{call_id}.wav"
+                    )
+                except Exception: pass
+>>>>>>> origin/Whatsapp
 
         async def _handle_room_disconnect():
             """
@@ -733,19 +992,134 @@ async def entrypoint(ctx: JobContext):
             if state is None or state.get("finishing"):
                 return  # finish_call already handled cleanup
 
+<<<<<<< HEAD
             customer_disconnected_event.set()
             print(f"[agent] Room disconnected unexpectedly — saving transcript and notifying backend.")
             request_call_finish(room_name, reason="sip_disconnect", failure_reason="livekit_connection_error")
+=======
+            print(
+                f"[agent] Room disconnected unexpectedly — saving transcript and notifying backend."
+            )
+
+            session = state.get("session")
+            transcript = _build_transcript(session) if session else ""
+
+            # Cancel background tasks so audio writers flush and close handles
+            await _cancel_background_tasks()
+            await asyncio.sleep(0.5)
+
+            # Mix WAV tracks
+            if call_id != -1:
+                try:
+                    mix_wav_files(
+                        f"recordings/call_{call_id}_customer.wav",
+                        f"recordings/call_{call_id}_agent.wav",
+                        f"recordings/call_{call_id}.wav"
+                    )
+                except Exception as mix_err:
+                    print(f"Warning – mixing audio failed: {mix_err}")
+
+            try:
+                await notify_call_complete(
+                    room_name,
+                    payload={
+                        "transcript": transcript or None,
+                        "customer_name": None,
+                        "appointment_date": None,
+                        "appointment_time": None,
+                        "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+                    },
+                )
+            except Exception as e:
+                print(f"Warning – backend notify error: {e}")
+
+            # Close session cleanly
+            if session:
+                try:
+                    await asyncio.wait_for(session.aclose(), timeout=5.0)
+                except Exception:
+                    pass
+>>>>>>> origin/Whatsapp
 
         async def _handle_unexpected_disconnect(reason: str):
             state = ACTIVE_CALLS.get(room_name)
             if state is None or state.get("finishing"):
                 print(f"Customer disconnected ({reason}) but finish_call already in progress.")
                 return
+<<<<<<< HEAD
                 
             customer_disconnected_event.set()
             print(f"Customer disconnected before finish_call ran ({reason}). Notifying backend.")
             request_call_finish(room_name, reason="customer_disconnect", outcome="customer_hangup")
+=======
+
+            # If finish_call already completed, ACTIVE_CALLS entry is gone.
+            state = ACTIVE_CALLS.pop(room_name, None)
+            if state is None:
+                return
+
+            print(
+                f"Customer disconnected before finish_call ran ({reason}). "
+                f"Notifying backend so the campaign can continue."
+            )
+
+            # Try to save a partial transcript even for unexpected disconnects.
+            session = state.get("session")
+            transcript = _build_transcript(session) if session else ""
+
+            # Cancel background tasks so audio writers flush and close handles
+            await _cancel_background_tasks()
+            await asyncio.sleep(0.5)
+
+            # Mix WAV tracks
+            if call_id != -1:
+                try:
+                    mix_wav_files(
+                        f"recordings/call_{call_id}_customer.wav",
+                        f"recordings/call_{call_id}_agent.wav",
+                        f"recordings/call_{call_id}.wav"
+                    )
+                except Exception as mix_err:
+                    print(f"Warning – mixing audio failed: {mix_err}")
+
+            # 1. ALWAYS notify backend FIRST
+            try:
+                await notify_call_complete(
+                    room_name,
+                    payload={
+                        "transcript": transcript or None,
+                        "customer_name": None,
+                        "appointment_date": None,
+                        "appointment_time": None,
+                        "recording_url": f"/api/recordings/call_{call_id}.wav",
+                    },
+                )
+            except Exception as e:
+                print(f"Warning – notify_call_complete error in disconnect handler: {e}")
+
+            # 2. Close the agent session cleanly
+            if session:
+                try:
+                    print("Closing AgentSession...")
+                    await asyncio.wait_for(session.aclose(), timeout=3.0)
+                    print("AgentSession closed.")
+                except Exception as e:
+                    print(f"Warning – session.aclose() error: {e}")
+
+            # Delete the LiveKit room to hang up any remaining SIP leg
+            try:
+                lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+                lk_key = os.getenv("LIVEKIT_API_KEY")
+                lk_secret = os.getenv("LIVEKIT_API_SECRET")
+                lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret) if lk_url else api.LiveKitAPI()
+                try:
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                    print("Room deleted successfully.")
+                finally:
+                    await lkapi.aclose()
+            except Exception as e:
+                print(f"Warning – room deletion error: {e}")
+>>>>>>> origin/Whatsapp
 
 
         @ctx.room.on("participant_disconnected")
@@ -763,6 +1137,7 @@ async def entrypoint(ctx: JobContext):
 
         # Dynamic voice selection mapping for Sarvam bulbul v3 compatible voices
         SARVAM_VOICE_MAPPING = {
+<<<<<<< HEAD
             "Meera": "ritu",
             "Raj": "amit",
             "Manisha": "neha",
@@ -774,29 +1149,77 @@ async def entrypoint(ctx: JobContext):
             "Male 1": "amit",
             "Male 2": "dev",
             "Nova (ElevenLabs)": "ritu",
+=======
+            "Meera": "shreya",
+            "Raj": "rahul",
+            "Manisha": "priya",
+            "Karun": "kabir",
+            "Vidya": "kavya",
+            "Hitesh": "aditya",
+            "Female 1": "shreya",
+            "Female 2": "priya",
+            "Male 1": "rahul",
+            "Male 2": "aditya",
+            "Nova (ElevenLabs)": "shreya",
+>>>>>>> origin/Whatsapp
         }
         db_voice = campaign_info.get("voice", "Meera")
-        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")
+        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "shreya")
         print(f"[agent] Configured agent voice profile: {db_voice} -> mapped to Sarvam speaker: {speaker_voice}")
 
         session = AgentSession(
-            vad=silero.VAD.load(),
-            stt=sarvam.STT(),
+            vad=silero.VAD.load(
+                min_speech_duration=0.15,
+                min_silence_duration=0.35,
+                prefix_padding_duration=0.1,
+            ),
+            stt=sarvam.STT(
+                model="saaras:v3",
+                language="en-IN",
+                mode="transcribe",
+                high_vad_sensitivity=True,
+            ),
 
             llm=openai.LLM(
                 model="deepseek-chat",
                 api_key=os.getenv("DEEPSEEK_API_KEY") or "",
                 base_url="https://api.deepseek.com/v1",
+                temperature=0.2,
             ),
 
             tts=sarvam.TTS(
                 model="bulbul:v3",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
+                max_chunk_length=80,
             ),
         )
 
+<<<<<<< HEAD
 
+=======
+        await session.start(
+            room=ctx.room,
+            agent=DynamicAgent(
+                agent_type=agent_type,
+                custom_script=custom_script,
+                customer_name=customer_name,
+                whatsapp_enabled=campaign_info.get("whatsapp_enabled", False),
+            ),
+        )
+
+        # Start Voicemail Detector
+        vd_config = campaign_info.get("voicemail_detection") or {"enabled": True, "timeout": 45}
+        if vd_config.get("enabled"):
+            async def run_voicemail_detector():
+                detector = VoicemailDetector(session, timeout_seconds=vd_config.get("timeout", 45))
+                result = await detector.run()
+                if result:
+                    print(f"Voicemail detected! {result}")
+                    await _handle_voicemail_disconnect(result)
+            vd_task = asyncio.create_task(run_voicemail_detector())
+            background_tasks.append(vd_task)
+>>>>>>> origin/Whatsapp
 
         # Real-time transcript buffer for continuous failsafe preservation
         transcript_lines: list[str] = []
@@ -876,12 +1299,18 @@ async def entrypoint(ctx: JobContext):
             await asyncio.sleep(0.1)
 
         if agent_track:
+<<<<<<< HEAD
             _safe_create_task(record_track(agent_track, call_id, speaker="agent", answered_event=call_answered_event, disconnected_event=customer_disconnected_event), name="record_track_agent", call_id=call_id)
+=======
+            agent_rec_task = asyncio.create_task(record_track(agent_track, call_id, speaker="agent"))
+            background_tasks.append(agent_rec_task)
+>>>>>>> origin/Whatsapp
         else:
             print("[agent] Warning: local agent audio track not found for recording")
 
         print(f"Registered active call: {ctx.room.name}")
 
+<<<<<<< HEAD
         # Register track_subscribed listener to start recording customer track and detect audio readiness
         customer_audio_ready = asyncio.Event()
 
@@ -935,6 +1364,38 @@ async def entrypoint(ctx: JobContext):
 
         if not customer_answered:
             print("Timeout: customer never answered. Notifying backend and exiting.")
+=======
+        # Wait for the customer / inbound SIP participant to join the room using event-driven detection
+        print("Waiting for customer/inbound participant to join...")
+        customer_joined_event = asyncio.Event()
+
+        # Check if customer already has subscribed audio tracks
+        for p in ctx.room.remote_participants.values():
+            if p.identity == "customer":
+                for pub in p.track_publications.values():
+                    if pub.track and pub.track.kind == rtc.TrackKind.KIND_AUDIO:
+                        customer_joined_event.set()
+                        break
+
+        @ctx.room.on("track_subscribed")
+        def _on_track_sub(track: rtc.Track, pub: rtc.TrackPublication, p: rtc.RemoteParticipant):
+            if p.identity == "customer" and track.kind == rtc.TrackKind.KIND_AUDIO:
+                print(f"[agent] Customer audio track subscribed: {p.identity} - call answered!")
+                customer_joined_event.set()
+
+        @ctx.room.on("participant_connected")
+        def _on_cust_connected(p: rtc.RemoteParticipant):
+            print(f"Participant connected: {p.identity}")
+            if p.identity == "customer":
+                # Give a short moment for track publication
+                asyncio.create_task(asyncio.sleep(0.5)).add_done_callback(lambda _: customer_joined_event.set())
+
+        try:
+            await asyncio.wait_for(customer_joined_event.wait(), timeout=60.0)
+            print("Customer/Inbound participant connected — starting greeting immediately.")
+        except asyncio.TimeoutError:
+            print("Timeout: customer never joined. Notifying backend and exiting.")
+>>>>>>> origin/Whatsapp
             ACTIVE_CALLS.pop(room_name, None)
             await notify_call_complete(
                 room_name,
@@ -949,6 +1410,7 @@ async def entrypoint(ctx: JobContext):
             )
             shutdown_event.set()
         else:
+<<<<<<< HEAD
             print("Waiting for SIP call to become active...")
             try:
                 # Wait up to 60 seconds for the call to be answered
@@ -1100,6 +1562,18 @@ async def entrypoint(ctx: JobContext):
 
         if call_answered_event.is_set():
             _safe_create_task(silence_detector_loop(), name="silence_detector_loop", call_id=call_id)
+=======
+            # Immediately speak the opening greeting as soon as the call connects
+            clean_name = customer_name.strip() if customer_name else ""
+            if clean_name and clean_name.lower() not in ("unknown", ""):
+                greeting_text = f"Hi, may I speak with {clean_name}?"
+            else:
+                greeting_text = "Hi, good day! Am I speaking with the concerned person?"
+
+            print(f"[agent] Speaking immediate opening greeting: '{greeting_text}'")
+            await session.say(greeting_text, allow_interruptions=False, add_to_chat_ctx=True)
+            print("[agent] Opening greeting dispatched successfully")
+>>>>>>> origin/Whatsapp
 
         # Keep the entrypoint alive until the room is deleted.
         # finish_call deletes the LiveKit room → LiveKit fires the
@@ -1124,6 +1598,12 @@ async def entrypoint(ctx: JobContext):
         raise e
 
     finally:
+        # Cancel and wait for all background tasks (audio recorders, voicemail detector)
+        try:
+            await _cancel_background_tasks()
+        except Exception:
+            pass
+
         state = ACTIVE_CALLS.get(ctx.room.name)
         if state and state.get("finishing"):
             print(f"[{ctx.room.name}] Agent shutting down, but finish_call is running. Waiting up to 10s...")
@@ -1136,7 +1616,7 @@ async def entrypoint(ctx: JobContext):
                 print(f"[{ctx.room.name}] Timeout waiting for finish_call. Force shutting down.")
         else:
             # Give any pending disconnect callbacks time to finish saving transcripts
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
         # Safety cleanup in case finish_call never ran or timed out.
         ACTIVE_CALLS.pop(ctx.room.name, None)
@@ -1160,7 +1640,7 @@ if __name__ == "__main__":
         print("Please stop it before starting a new one to prevent multiple agents in a call.")
         sys.exit(1)
 
-    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen_shreya")
     print(f"[agent] Registering LiveKit agent worker with name: '{agent_name}'")
     cli.run_app(
         WorkerOptions(

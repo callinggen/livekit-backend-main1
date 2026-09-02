@@ -125,6 +125,7 @@ class CampaignService:
             campaign_type="normal",
             upload_source=data.upload_source,
             sheet_name=data.sheet_name,
+            whatsapp_automation=data.whatsapp_automation,
         )
 
 

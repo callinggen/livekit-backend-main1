@@ -16,3 +16,7 @@ from .email_campaign import EmailCampaign
 from .email_contact import EmailContact
 from .email_template import EmailMarketingTemplate
 from .custom_domain import CustomEmailDomain
+from .whatsapp_action import WhatsAppAction
+from .whatsapp_material import WhatsAppMaterial
+from .whatsapp_send_job import WhatsAppSendJob
+from .whatsapp_send_recipient import WhatsAppSendRecipient

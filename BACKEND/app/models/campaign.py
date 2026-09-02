@@ -76,6 +76,11 @@ class Campaign(Base):
         String,
         nullable=True,
     )
+
+    whatsapp_automation: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,  # {"enabled": bool, "rules": [...]}
+    )
     
     campaign_type: Mapped[str] = mapped_column(
         String,

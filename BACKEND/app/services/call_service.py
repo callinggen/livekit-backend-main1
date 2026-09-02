@@ -142,6 +142,13 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
                         bg_call.category = clean_cat
                 await bg_db.commit()
                 print(f"[CallService] Background AI classification updated for Call {call_id}: summary='{bg_call.summary}', category='{bg_call.category}'")
+
+                # Asynchronously evaluate Campaign WhatsApp Automation (non-blocking)
+                try:
+                    from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                    asyncio.create_task(WhatsAppAutomationService.process_call_automation(call_id))
+                except Exception as auto_err:
+                    print(f"[CallService] Non-fatal WhatsApp automation trigger error: {auto_err}")
     except Exception as e:
         print(f"[CallService] Background DeepSeek analysis error (non-fatal): {e}")
 
@@ -177,12 +184,12 @@ class CallService:
             print(f"[CallService] Call {call_id} NOT FOUND in DB")
             return None
 
-        # Store previous status to handle watchdog race condition stats
         was_failed = (call.status == "failed")
 
-        # Prevent double completion
-        if call.status == "completed":
-            print(f"[CallService] Call {call_id} is ALREADY completed")
+        # Prevent double completion / race conditions
+        if call.status in ("completed", "failed", "incomplete"):
+            print(f"[CallService] Call {call_id} is ALREADY finished with status '{call.status}'")
+            return call
             return call
 
         # ── Calculate timestamps and duration FIRST ───────────────────
@@ -234,7 +241,40 @@ class CallService:
                             "credits_charged": False
                         }
 
-        # Check transcript for response signals (do this first to inform outcome_override)
+        # ── Determine if customer answered and engaged ────────────────
+        has_transcript = bool(transcript and transcript.strip())
+        has_customer_speech = False
+        if has_transcript:
+            lines = (transcript or "").strip().split("\n")
+            for line in lines:
+                lower_line = line.strip().lower()
+                if lower_line.startswith("user:") or lower_line.startswith("customer:"):
+                    has_customer_speech = True
+                    break
+            # If no explicit user role prefix was used, treat as speech if substantial content exists
+            if not has_customer_speech and not any(l.strip().lower().startswith("assistant:") for l in lines) and len((transcript or "").strip()) > 10:
+                has_customer_speech = True
+
+        is_success = bool(has_transcript and (has_customer_speech or len((transcript or "").strip()) > 40)) and not is_voicemail
+        is_missed_call = (not is_success) and (not is_voicemail)
+        
+        if is_voicemail:
+            call.status = "incomplete"
+        elif is_missed_call:
+            call.status = "failed"
+        else:
+            call.status = "completed"
+            
+        if detection_metadata:
+            call.detection_metadata = detection_metadata
+
+        # Check if appointment_date is a real, valid date string
+        has_valid_appointment = (
+            appointment_date is not None 
+            and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
+        )
+
+        # Check transcript for response signals
         lower_tx = (transcript or "").lower()
         is_not_interested = any(phrase in lower_tx for phrase in [
             "not interested", "no interest", "don't want", "dont want", "no thanks",
@@ -323,18 +363,31 @@ class CallService:
         # Default fallbacks before async background LLM enrichment
         if transcript:
             call.transcript = transcript
-            if is_not_interested:
+            if is_voicemail:
+                call.summary = "Voicemail"
+                call.category = "COLD"
+            elif is_not_interested:
                 call.summary = "Not Interested"
                 call.category = "COLD"
             elif is_reschedule:
                 call.summary = "Callback Requested"
                 call.category = "WARM"
+            elif is_missed_call:
+                call.summary = "No Answer"
+                call.category = "COLD"
             else:
                 call.summary = "General Inquiry"
                 call.category = "UNCATEGORIZED"
         else:
-            call.summary = "General Inquiry"
-            call.category = "UNCATEGORIZED"
+            if is_voicemail:
+                call.summary = "Voicemail"
+                call.category = "COLD"
+            elif is_missed_call:
+                call.summary = "No Answer"
+                call.category = "COLD"
+            else:
+                call.summary = "General Inquiry"
+                call.category = "UNCATEGORIZED"
 
         # ── Contact ───────────────────────────────────────────────────
         contact = None
@@ -343,14 +396,31 @@ class CallService:
         if contact:
             if is_voicemail:
                 contact.status = "incomplete"
+                contact.response = "Voicemail"
+            elif is_missed_call:
+                contact.status = "failed"
+                contact.response = "No Answer"
             else:
-                contact.status = "completed" if is_success else "failed"
+                contact.status = "completed"
+                if is_not_interested:
+                    contact.response = "Not Interested"
+                elif has_valid_appointment:
+                    contact.appointment_date = appointment_date
+                    if appointment_time:
+                        contact.appointment_time = appointment_time
+                    contact.response = "Rescheduled" if is_reschedule else "Appointment Booked"
+                elif is_reschedule:
+                    contact.response = "Rescheduled"
+                else:
+                    contact.response = "Answered"
+
             contact.duration = str(call.duration)
             if transcript:
                 contact.transcript = transcript
             if customer_name:
                 contact.customer_name = customer_name
 
+<<<<<<< HEAD
             if is_voicemail:
                 contact.response = "Voicemail"
             elif is_not_interested:
@@ -368,6 +438,8 @@ class CallService:
                 else:
                     contact.response = call.outcome.replace("_", " ").title() if call.outcome else "Unknown"
 
+=======
+>>>>>>> origin/Whatsapp
         business_outcome = contact.response if contact else "None"
 
         # ── Job / Campaign ────────────────────────────────────────────
@@ -421,6 +493,32 @@ class CallService:
             asyncio.create_task(
                 _analyze_and_update_summary(call.id, transcript, business_outcome, is_not_interested)
             )
+        else:
+            # Trigger WhatsApp Automation directly if no long transcript analysis
+            try:
+                import asyncio
+                from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                asyncio.create_task(WhatsAppAutomationService.process_call_automation(call.id))
+            except Exception as auto_err:
+                print(f"[CallService] Non-fatal WhatsApp automation trigger error: {auto_err}")
+
+        # ── Asynchronously trigger WhatsApp follow-up for Voicemail or Missed Call ──
+        if is_voicemail or is_missed_call:
+            try:
+                import asyncio
+                from app.services.whatsapp_actions import WhatsAppActionService
+                action_type = "SEND_VOICEMAIL" if is_voicemail else "SEND_MISSED_CALL"
+                asyncio.create_task(
+                    WhatsAppActionService.execute_action(
+                        call_id=call.id,
+                        action=action_type,
+                        contact_id=call.contact_id,
+                        phone=call.phone,
+                    )
+                )
+                print(f"[CallService] Queued WhatsApp action '{action_type}' for Call {call.id}")
+            except Exception as wa_err:
+                print(f"[CallService] Non-fatal WhatsApp trigger error: {wa_err}")
 
         return call
 
@@ -465,6 +563,7 @@ class CallService:
         if call.contact_id:
             contact = await db.get(Contact, call.contact_id)
         if contact:
+<<<<<<< HEAD
             if call.status == "failed":
                 contact.status = "failed"
                 contact.response = "System Failure"
@@ -475,6 +574,15 @@ class CallService:
                     contact.response = "Call Cut / Disconnected"
                 else:
                     contact.response = (call.outcome or "no_answer").replace("_", " ").title()
+=======
+            # Differentiate between no-answer / unreached vs call cut
+            has_tx = call.transcript and len(call.transcript.strip()) > 0
+            contact.status = "failed"
+            contact.response = "Call Cut / Disconnected" if has_tx else "No Answer"
+
+        call.summary = "No Answer" if not (call.transcript and len(call.transcript.strip()) > 0) else "Call Cut"
+        call.category = "COLD"
+>>>>>>> origin/Whatsapp
 
         job = None
         if call.job_id:
@@ -493,4 +601,30 @@ class CallService:
                         campaign.status = "completed"
 
         await db.commit()
+
+        # Asynchronously evaluate Campaign WhatsApp Automation (non-blocking)
+        try:
+            import asyncio
+            from app.services.whatsapp_automation_service import WhatsAppAutomationService
+            asyncio.create_task(WhatsAppAutomationService.process_call_automation(call.id))
+        except Exception as auto_err:
+            print(f"[CallService] Non-fatal WhatsApp automation fail_call trigger error: {auto_err}")
+
+        # Asynchronously trigger missed call / busy WhatsApp follow-up (non-blocking)
+        try:
+            import asyncio
+            from app.services.whatsapp_actions import WhatsAppActionService
+            is_busy = bool(contact and "busy" in (contact.response or "").lower())
+            action_type = "SEND_CALLBACK" if is_busy else "SEND_MISSED_CALL"
+            asyncio.create_task(
+                WhatsAppActionService.execute_action(
+                    call_id=call.id,
+                    action=action_type,
+                    contact_id=call.contact_id,
+                    phone=call.phone,
+                )
+            )
+        except Exception as wa_err:
+            print(f"[CallService] Non-fatal WhatsApp missed call trigger error: {wa_err}")
+
         return call
