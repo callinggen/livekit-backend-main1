@@ -420,26 +420,6 @@ class CallService:
             if customer_name:
                 contact.customer_name = customer_name
 
-<<<<<<< HEAD
-            if is_voicemail:
-                contact.response = "Voicemail"
-            elif is_not_interested:
-                contact.response = "Not Interested"
-            elif has_valid_appointment:
-                contact.appointment_date = appointment_date
-                if appointment_time:
-                    contact.appointment_time = appointment_time
-                contact.response = "Rescheduled" if is_reschedule else "Appointment Booked"
-            elif is_reschedule:
-                contact.response = "Rescheduled"
-            else:
-                if call.status == "failed":
-                    contact.response = "Failed"
-                else:
-                    contact.response = call.outcome.replace("_", " ").title() if call.outcome else "Unknown"
-
-=======
->>>>>>> origin/Whatsapp
         business_outcome = contact.response if contact else "None"
 
         # ── Job / Campaign ────────────────────────────────────────────
@@ -563,26 +543,16 @@ class CallService:
         if call.contact_id:
             contact = await db.get(Contact, call.contact_id)
         if contact:
-<<<<<<< HEAD
             if call.status == "failed":
                 contact.status = "failed"
                 contact.response = "System Failure"
             else:
-                contact.status = "failed" # From campaign's perspective, this contact failed to convert
+                contact.status = "failed"
                 has_tx = call.transcript and len(call.transcript.strip()) > 0
                 if has_tx and call.outcome == "no_answer":
                     contact.response = "Call Cut / Disconnected"
                 else:
                     contact.response = (call.outcome or "no_answer").replace("_", " ").title()
-=======
-            # Differentiate between no-answer / unreached vs call cut
-            has_tx = call.transcript and len(call.transcript.strip()) > 0
-            contact.status = "failed"
-            contact.response = "Call Cut / Disconnected" if has_tx else "No Answer"
-
-        call.summary = "No Answer" if not (call.transcript and len(call.transcript.strip()) > 0) else "Call Cut"
-        call.category = "COLD"
->>>>>>> origin/Whatsapp
 
         job = None
         if call.job_id:

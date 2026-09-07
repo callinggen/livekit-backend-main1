@@ -136,11 +136,18 @@ class CampaignService:
         subset = data.contacts
         remaining = []
 
-        if data.selection_type == "range" and data.start_row and data.end_row:
+        if data.upload_source != "single" and data.selection_type == "range" and data.start_row and data.end_row:
             start_idx = max(0, data.start_row - 1)
             end_idx = min(len(data.contacts), data.end_row)
-            subset = data.contacts[start_idx:end_idx]
-            remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
+            if start_idx < end_idx and start_idx < len(data.contacts):
+                subset = data.contacts[start_idx:end_idx]
+                remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
+            else:
+                subset = data.contacts
+                remaining = []
+        else:
+            subset = data.contacts
+            remaining = []
 
         for item in subset:
             contact = Contact(
