@@ -58,6 +58,8 @@ async def make_livekit_call(
 
     agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-outbound-agent")
 
+    print(f"[livekit_service] Outbound call — trunk={sip_trunk_id}, from={clean_sip_from}, to={clean_phone}, room={room_name}")
+
     # Step 1: Pre-create the room with agent dispatch config
     try:
         room_req = CreateRoomRequest(
@@ -81,24 +83,41 @@ async def make_livekit_call(
         wait_until_answered=False,
     )
 
-    try:
-        participant = await lkapi.sip.create_sip_participant(req)
+    # Retry up to 2 times for transient LiveKit SIP failures
+    last_error = None
+    for attempt in range(3):
+        try:
+            participant = await lkapi.sip.create_sip_participant(req)
+            print(f"[livekit_service] SIP participant created (attempt {attempt+1}): {participant.participant_id}")
+            await lkapi.aclose()
+            return {
+                "success": True,
+                "participant_id": participant.participant_id,
+                "room": room_name,
+                "phone": phone,
+            }
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            print(f"[livekit_service] SIP participant create attempt {attempt+1} failed: {err_str}")
+            # Only retry on transient errors (not_found trunk, server unavailable, timeout)
+            # Do NOT retry on telephony-level errors (busy, declined, no answer)
+            is_transient = (
+                "not_found" in err_str.lower()
+                or "unavailable" in err_str.lower()
+                or "timeout" in err_str.lower()
+                or "deadline" in err_str.lower()
+            )
+            if not is_transient or attempt == 2:
+                break
+            import asyncio as _asyncio
+            await _asyncio.sleep(1.0)  # Wait 1s before retry
 
-        return {
-            "success": True,
-            "participant_id": participant.participant_id,
-            "room": room_name,
-            "phone": phone,
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-        }
-
-    finally:
-        await lkapi.aclose()
+    await lkapi.aclose()
+    return {
+        "success": False,
+        "error": str(last_error),
+    }
 
 
 async def create_inbound_sip_trunk(numbers: list[str]) -> str:
