@@ -36,6 +36,32 @@ class CampaignService:
         )
         db.add(job)
         campaign.status = "running"
+
+        # Dispatch Campaign Started notification email to user profile email
+        if not getattr(campaign, "start_notified", False):
+            campaign.start_notified = True
+            if campaign.user_id:
+                try:
+                    from app.models.user import User
+                    user = await db.get(User, campaign.user_id)
+                    if user and user.email:
+                        import asyncio
+                        from app.services.email_service import email_service
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                email_service.send_campaign_started_email,
+                                to_email=user.email,
+                                user_name=user.full_name or "Client",
+                                campaign_name=campaign.campaign_name,
+                                total_contacts=total_contacts,
+                                agent_name=campaign.agent or "AI Voice Agent",
+                                is_pre_alert=False,
+                            )
+                        )
+                        print(f"[CampaignService] Dispatched campaign start notification email to {user.email}")
+                except Exception as notify_err:
+                    print(f"[CampaignService] Warning: Failed to send start notification: {notify_err}")
+
         await db.commit()
         await db.refresh(job)
         return job
@@ -97,8 +123,8 @@ class CampaignService:
             pass
             
         now = datetime.now(timezone.utc)
-        # If scheduled for the future (beyond a 10s network grace period), mark scheduled
-        if schedule_dt and schedule_dt > now + timedelta(seconds=10):
+        # If scheduled for the future (beyond a 15-second grace period), mark scheduled
+        if schedule_dt and schedule_dt > now + timedelta(seconds=15):
             campaign.status = "scheduled"
             await db.commit()
             return None, len(contacts)
@@ -125,7 +151,8 @@ class CampaignService:
             campaign_type="normal",
             upload_source=data.upload_source,
             sheet_name=data.sheet_name,
-            whatsapp_automation=data.whatsapp_automation,
+            voicemail_detection=getattr(data, "voicemail_detection", None),
+            whatsapp_automation=getattr(data, "whatsapp_automation", None),
         )
 
 
@@ -176,6 +203,8 @@ class CampaignService:
                 parent_campaign_id=campaign.id,
                 upload_source=data.upload_source,
                 sheet_name=data.sheet_name,
+                voicemail_detection=getattr(data, "voicemail_detection", None),
+                whatsapp_automation=getattr(data, "whatsapp_automation", None),
             )
             db.add(pending_campaign)
             await db.flush()

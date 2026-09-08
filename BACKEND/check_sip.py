@@ -1,48 +1,42 @@
-import asyncio
-import os
 from dotenv import load_dotenv
-from livekit import api
-from livekit.protocol.sip import (
-    ListSIPOutboundTrunkRequest,
-    ListSIPInboundTrunkRequest,
-    ListSIPDispatchRuleRequest
-)
-
 load_dotenv()
 
-async def inspect_livekit():
+import asyncio
+from livekit import api
+
+
+async def main():
     lkapi = api.LiveKitAPI()
-    print("Connecting to LiveKit at:", os.getenv("LIVEKIT_URL"))
-    
+
     try:
-        # Check outbound trunks
-        print("\n--- OUTBOUND TRUNKS ---")
-        outbound_trunks = await lkapi.sip.list_sip_outbound_trunk(ListSIPOutboundTrunkRequest())
-        for t in outbound_trunks.items:
-            print(f"ID: {t.sip_trunk_id} | Name: {t.name} | Address: {t.address} | Numbers: {t.numbers} | Auth Username: {t.auth_username}")
-        if not outbound_trunks.items:
-            print("No outbound trunks found!")
+        print("\n========== INBOUND TRUNKS ==========")
 
-        # Check inbound trunks
-        print("\n--- INBOUND TRUNKS ---")
-        inbound_trunks = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
-        for t in inbound_trunks.items:
-            print(f"ID: {t.sip_trunk_id} | Name: {t.name} | Numbers: {t.numbers}")
-        if not inbound_trunks.items:
-            print("No inbound trunks found!")
+        trunks = await lkapi.sip.list_inbound_trunk(
+            api.ListSIPInboundTrunkRequest()
+        )
 
-        # Check dispatch rules
-        print("\n--- DISPATCH RULES ---")
-        rules = await lkapi.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
-        for r in rules.items:
-            print(f"ID: {r.sip_dispatch_rule_id} | Name: {r.name} | Trunk IDs: {r.trunk_ids}")
-        if not rules.items:
-            print("No dispatch rules found!")
+        for trunk in trunks.items:
+            print("ID:", trunk.sip_trunk_id)
+            print("Name:", trunk.name)
+            print("Numbers:", list(trunk.numbers))
+            print()
 
-    except Exception as e:
-        print(f"Error inspecting LiveKit SIP: {e}")
+        print("\n========== DISPATCH RULES ==========")
+
+        rules = await lkapi.sip.list_dispatch_rule(
+            api.ListSIPDispatchRuleRequest()
+        )
+
+        for rule in rules.items:
+            print("ID:", rule.sip_dispatch_rule_id)
+            print("Name:", rule.name)
+            print("Trunk IDs:", list(rule.trunk_ids))
+            print("Rule:", rule.rule)
+            print("Room Config:", rule.room_config)
+            print()
+
     finally:
         await lkapi.aclose()
 
-if __name__ == "__main__":
-    asyncio.run(inspect_livekit())
+
+asyncio.run(main())

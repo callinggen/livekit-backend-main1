@@ -10,8 +10,10 @@ from app.models.contact import Contact
 from app.models.job import Job
 from app.models.call import Call
 from app.services.livekit_service import make_livekit_call
+from app.api.calls import _to_ist, _fmt_duration, _parse_transcript
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional
 
 router = APIRouter()
 
@@ -27,7 +29,8 @@ async def trigger_outbound_call_task_async(
     name: str, 
     company: str, 
     phone: str, 
-    industry: str
+    industry: str,
+    email: Optional[str] = None
 ):
     """
     Background task that bridges the DemoLead to the Call/Campaign architecture
@@ -88,7 +91,7 @@ async def trigger_outbound_call_task_async(
             campaign = res.scalars().first()
 
             if not campaign:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 campaign = Campaign(
                     user_id=admin.id,
                     campaign_name="Website Demo Requests",
@@ -107,12 +110,16 @@ async def trigger_outbound_call_task_async(
                 await db.commit()
 
             # 3. Create Contact
+            meta = {"industry": industry, "company": company}
+            if email:
+                meta["email"] = email
+
             contact = Contact(
                 campaign_id=campaign.id,
                 name=name,
                 phone=phone,
                 status="calling",
-                metadata_fields={"industry": industry, "company": company, "email": email} if 'email' in locals() else {"industry": industry, "company": company}
+                metadata_fields=meta
             )
             db.add(contact)
             
@@ -159,7 +166,9 @@ async def trigger_outbound_call_task_async(
             
             if result.get("success"):
                 call.status = "in_progress"
-                call.livekit_participant_id = result.get("participant_id")
+                participant_id = result.get("participant_id")
+                if participant_id is not None:
+                    call.livekit_participant_id = str(participant_id)
                 await db.commit()
                 print(f"Demo Call {call.id} successfully dispatched to LiveKit.")
             else:
@@ -197,7 +206,8 @@ async def trigger_demo_call(
             req.name, 
             req.company, 
             req.phone, 
-            req.industry
+            req.industry,
+            req.email
         )
 
         return {"success": True, "lead_id": new_lead.id, "message": "Call initiated successfully."}
@@ -217,6 +227,7 @@ async def get_demo_leads(db: AsyncSession = Depends(get_db)):
 
 class LeadStatusUpdateRequest(BaseModel):
     status: str
+
 
 @router.post("/leads/{lead_id}/trigger-call")
 async def trigger_call_for_existing_lead(
@@ -249,6 +260,7 @@ async def trigger_call_for_existing_lead(
         "message": f"AI Call initiated to {lead.name} ({lead.phone})"
     }
 
+
 @router.put("/leads/{lead_id}/status")
 async def update_lead_status(
     lead_id: int,
@@ -271,7 +283,6 @@ async def update_lead_status(
         "status": lead.status
     }
 
-from app.api.calls import _to_ist, _fmt_duration, _parse_transcript
 
 @router.get("/lead/{lead_id}/details")
 async def get_demo_lead_details(lead_id: int, db: AsyncSession = Depends(get_db)):

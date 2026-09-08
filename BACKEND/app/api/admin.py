@@ -12,6 +12,7 @@ from app.models.campaign import Campaign
 from app.models.call import Call
 from app.models.agent import Agent
 from app.models.user_phone_number import UserPhoneNumber
+
 from app.models.contact_form_user import ContactFormUser
 from app.models.blocked_slot import BlockedSlot
 
@@ -282,9 +283,9 @@ async def update_booking_status(
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    booking.status = req.status
+    setattr(booking, "status", req.status)
     if req.admin_notes is not None:
-        booking.admin_notes = req.admin_notes
+        setattr(booking, "admin_notes", req.admin_notes)
 
     await db.commit()
     await db.refresh(booking)
@@ -295,7 +296,7 @@ async def update_booking_status(
         "booking": {
             "id": booking.id,
             "status": booking.status,
-            "admin_notes": booking.admin_notes
+            "admin_notes": getattr(booking, "admin_notes", None) or ""
         }
     }
 

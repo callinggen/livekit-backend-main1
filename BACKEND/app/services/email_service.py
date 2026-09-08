@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
-import resend
+import importlib
+from typing import Any
 
 from app.services import email_templates
 
@@ -63,7 +64,8 @@ class EmailService:
         return os.getenv("RESEND_TEMPLATE_BOOKING", "").strip()
 
     def is_configured(self):
-        return bool(self.api_key)
+        k = self.api_key
+        return bool(k and not k.startswith("re_your_") and k != "re_your_api_key_here")
 
     def _send_email(
         self,
@@ -81,18 +83,9 @@ class EmailService:
             return
 
         if not self.is_configured():
-            print("\n" + "="*50)
-            print("RESEND NOT CONFIGURED (RESEND_API_KEY missing in .env)")
-            print(f"To: {to_email}")
-            print(f"Subject: {subject}")
-            if template_id:
-                print(f"Resend Template ID: {template_id}")
-                print(f"Variables: {template_variables}")
-            else:
-                print(f"Format: {'HTML' if is_html else 'PLAIN'}")
-            print("="*50 + "\n")
-            # In development/test mode when Resend isn't set, log cleanly without breaking application flow
-            return
+            err_msg = "Resend API Key is not configured in server environment (RESEND_API_KEY in .env). Please set a valid Resend API key."
+            print(f"\n[EmailService] ERROR: {err_msg}\n")
+            raise RuntimeError(err_msg)
 
         sender = from_override or self.from_email
 
@@ -118,13 +111,33 @@ class EmailService:
             params["reply_to"] = reply_to
 
         try:
-            resend.api_key = self.api_key
-            response = resend.Emails.send(params)
-            print(f"[EmailService] Email sent successfully via Resend to {to_email}. Response: {response}")
-            return response
+            try:
+                resend_mod: Any = importlib.import_module("resend")
+                setattr(resend_mod, "api_key", self.api_key)
+                response = resend_mod.Emails.send(params)
+                print(f"[EmailService] Email sent successfully via Resend to {to_email}. Response: {response}")
+                return response
+            except ImportError:
+                import json
+                import urllib.request
+                req = urllib.request.Request(
+                    "https://api.resend.com/emails",
+                    data=json.dumps(params).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "CallingGen/1.0",
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    print(f"[EmailService] Email sent via Resend REST API to {to_email}. Response: {data}")
+                    return data
         except Exception as e:
             print(f"[EmailService] Error sending email via Resend to {to_email}: {e}")
             raise Exception(f"Failed to send email via Resend: {e}")
+
 
     # --- Credit Notifications ---
     def send_low_credit_email(self, to_email: str, full_name: str, company_name: str, remaining_credits: int, plan_name: str = "Standard"):
@@ -365,6 +378,53 @@ class EmailService:
             from_override=from_header,
             reply_to=reply_to,
         )
+
+    # --- Campaign Notifications (Start / 2-Min Pre-Alert / Complete) ---
+    def send_campaign_started_email(
+        self,
+        to_email: str,
+        user_name: str,
+        campaign_name: str,
+        total_contacts: int,
+        agent_name: str = "AI Voice Agent",
+        is_pre_alert: bool = False
+    ):
+        """Sends pre-launch (2 min before) or instant launch notification to campaign owner."""
+        subject = (
+            f"⏳ Campaign Starting in 2 Min: {campaign_name}"
+            if is_pre_alert
+            else f"🚀 Campaign Started: {campaign_name}"
+        )
+        html_body = email_templates.get_campaign_started_html(
+            full_name=user_name,
+            campaign_name=campaign_name,
+            total_contacts=total_contacts,
+            agent_name=agent_name,
+            is_pre_alert=is_pre_alert
+        )
+        return self._send_email(to_email=to_email, subject=subject, body=html_body, is_html=True)
+
+    def send_campaign_completed_email(
+        self,
+        to_email: str,
+        user_name: str,
+        campaign_name: str,
+        total_calls: int,
+        completed: int,
+        failed: int,
+        hot_leads: int,
+    ):
+        """Sends comprehensive campaign completion summary to campaign owner."""
+        subject = f"✅ Campaign Completed: {campaign_name}"
+        html_body = email_templates.get_campaign_completed_html(
+            full_name=user_name,
+            campaign_name=campaign_name,
+            total_calls=total_calls,
+            completed=completed,
+            failed=failed,
+            hot_leads=hot_leads
+        )
+        return self._send_email(to_email=to_email, subject=subject, body=html_body, is_html=True)
 
 # Create a singleton instance
 email_service = EmailService()

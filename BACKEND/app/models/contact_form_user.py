@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import Base
 
 class ContactFormUser(Base):
@@ -14,4 +14,4 @@ class ContactFormUser(Base):
     appointment_time = Column(DateTime)
     status = Column(String, default="booked")
     admin_notes = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
