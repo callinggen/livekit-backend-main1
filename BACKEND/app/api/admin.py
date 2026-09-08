@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func, or_, case
 from sqlalchemy.orm import selectinload
-from sqlalchemy import func
 from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
@@ -206,14 +206,22 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(User).options(selectinload(User.agents)).order_by(User.id.desc()))
     users = res.scalars().all()
 
+    phone_res = await db.execute(select(UserPhoneNumber))
+    phone_numbers = phone_res.scalars().all()
+    user_phone_map = {}
+    for pn in phone_numbers:
+        if pn.user_id not in user_phone_map:
+            user_phone_map[pn.user_id] = pn
+
     return [
         {
             "id": f"USR-{u.id}",
             "raw_id": u.id,
             "name": u.full_name or u.email or f"User #{u.id}",
             "email": u.email or "",
-            "mobile": u.phone_number or "",
-            "phone": u.phone_number or "",
+            "mobile": (user_phone_map.get(u.id).phone_number if user_phone_map.get(u.id) else None) or u.phone_number or "",
+            "phone": (user_phone_map.get(u.id).phone_number if user_phone_map.get(u.id) else None) or u.phone_number or "",
+            "provider": user_phone_map.get(u.id).provider_name if user_phone_map.get(u.id) else "Telnyx",
             "organization": u.full_name or "Independent",
             "plan": u.subscription_plan or "Starter",
             "credits": u.credits or 0,
@@ -246,6 +254,76 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
         }
         for u in users
     ]
+
+
+@router.get("/users/{user_id}/activity")
+async def get_user_activity(user_id: str, db: AsyncSession = Depends(get_db)):
+    """Return live activity stats for a specific user."""
+    from app.models.contact import Contact
+    clean_id = user_id.replace("USR-", "").strip()
+    try:
+        uid = int(clean_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+
+    # 1. Total campaigns for this user
+    camp_res = await db.execute(
+        select(func.count(Campaign.id)).where(
+            or_(Campaign.user_id == uid, Campaign.user_id.is_(None)),
+            Campaign.campaign_name != "Website Demo Requests"
+        )
+    )
+    total_campaigns = camp_res.scalar() or 0
+
+    # 2. Today's calls
+    now_utc = datetime.now(timezone.utc)
+    today_start = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
+
+    today_res = await db.execute(
+        select(
+            func.count(Call.id).label("calls_today"),
+            func.count(case((or_(Call.status == "completed", Call.duration > 0), Call.id))).label("successful_today"),
+            func.count(case((Call.status.in_(["failed", "incomplete"]), Call.id))).label("failed_today")
+        )
+        .select_from(Call)
+        .outerjoin(Contact, Call.contact_id == Contact.id)
+        .outerjoin(Campaign, Contact.campaign_id == Campaign.id)
+        .where(or_(Campaign.user_id == uid, Call.tenant_id == uid))
+        .where(Call.started_at >= today_start)
+    )
+    today_row = today_res.fetchone()
+    calls_today = today_row[0] if today_row else 0
+    success_today = today_row[1] if today_row else 0
+    failed_today = today_row[2] if today_row else 0
+
+    # If 0 calls today, show all-time call activity so metrics are never blank
+    if calls_today == 0:
+        all_time_res = await db.execute(
+            select(
+                func.count(Call.id).label("total_calls"),
+                func.count(case((or_(Call.status == "completed", Call.duration > 0), Call.id))).label("successful_total"),
+                func.count(case((Call.status.in_(["failed", "incomplete"]), Call.id))).label("failed_total")
+            )
+            .select_from(Call)
+            .outerjoin(Contact, Call.contact_id == Contact.id)
+            .outerjoin(Campaign, Contact.campaign_id == Campaign.id)
+            .where(or_(Campaign.user_id == uid, Call.tenant_id == uid))
+        )
+        all_row = all_time_res.fetchone()
+        calls_today = all_row[0] if all_row else 0
+        success_today = all_row[1] if all_row else 0
+        failed_today = all_row[2] if all_row else 0
+
+    return {
+        "user_id": f"USR-{uid}",
+        "total_campaigns": total_campaigns,
+        "today": {
+            "calls": calls_today,
+            "successful": success_today,
+            "failed": failed_today
+        }
+    }
+
 
 
 @router.get("/contact-users")

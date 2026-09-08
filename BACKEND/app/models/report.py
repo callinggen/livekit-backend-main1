@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, ForeignKey
 from app.database import Base
 
@@ -12,4 +12,4 @@ class Report(Base):
     end_date = Column(String(50), nullable=False)
     content = Column(Text, nullable=False)
     stats = Column(JSON, nullable=True)
-    generated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
