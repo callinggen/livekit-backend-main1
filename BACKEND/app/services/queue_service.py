@@ -33,12 +33,23 @@ class QueueService:
             print("Job not found")
             return False
 
+        if job.status in ("paused", "stopped", "completed", "failed"):
+            print(f"Job {job_id} status is '{job.status}'. Skipping processing.")
+            return False
+
+        campaign = await db.get(Campaign, job.campaign_id)
+        if campaign and campaign.status in ("paused", "stopped", "completed", "failed"):
+            print(f"Campaign {campaign.id} status is '{campaign.status}'. Halting processing for Job {job_id}.")
+            if job.status in ("queued", "processing"):
+                job.status = campaign.status
+                await db.commit()
+            return False
+
         if job.started_at is None:
             job.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
 
         # ── Dynamic user telephony lookup (must happen before concurrency check) ──
-        campaign = await db.get(Campaign, job.campaign_id)
         user_phone: UserPhoneNumber | None = None
         sip_trunk_id: str | None = None
         sip_call_from: str | None = None

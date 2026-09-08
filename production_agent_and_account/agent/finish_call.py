@@ -1,0 +1,213 @@
+import asyncio
+from typing import Any
+
+from livekit.agents import function_tool
+from livekit import api
+
+from app.services.conversation_state import ACTIVE_CALLS
+from backend_client import notify_call_complete
+
+GOODBYE_PHRASE = "Thank you for your time. Have a great day! Goodbye."
+
+
+def _build_transcript(session: Any) -> str:
+    """
+    Extract the conversation transcript from the AgentSession.
+
+    LiveKit Agents v1.6 API:
+      session.history          → ChatContext
+      chat_ctx.messages()      → list[ChatMessage]   (method, not property)
+      msg.role                 → ChatRole enum  (e.g. ChatRole.USER)
+      msg.text_content         → str | None
+    """
+    try:
+        chat_ctx = getattr(session, "history", None)
+        if chat_ctx is None:
+            print("Warning – session.history is None, transcript will be empty.")
+            return ""
+
+        # .messages() is a method in v1.6, not a property
+        messages = chat_ctx.messages()
+
+        lines = []
+        for msg in messages:
+            # ChatRole enum → "ChatRole.USER" → keep just "user"
+            role = str(getattr(msg, "role", "")).split(".")[-1].lower()
+            if role in ("system", "tool"):
+                continue
+
+            # text_content is the convenience property that joins all str content
+            text = getattr(msg, "text_content", None)
+            if not text:
+                # Fallback: join any raw string items in .content list
+                raw = getattr(msg, "content", [])
+                text = " ".join(c for c in raw if isinstance(c, str))
+
+            if text and text.strip():
+                lines.append(f"{role}: {text.strip()}")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        print(f"Warning – could not build transcript: {e}")
+        return ""
+
+
+@function_tool(
+    description="""
+Call this tool whenever the call/conversation is complete or needs to end.
+This includes:
+- When an appointment is booked or confirmed by the customer.
+- When the customer is not interested, busy, or declines.
+- When the customer says goodbye, thank you, or indicates they want to hang up.
+
+Calling this tool will automatically say goodbye and hang up the call.
+
+Pass any details collected during the conversation:
+- customer_name: the customer's full name
+- appointment_date: the date if an appointment was booked (e.g. "2026-07-15")
+- appointment_time: the time if an appointment was booked (e.g. "10:00 AM")
+"""
+)
+async def finish_call(
+    customer_name: str = "",
+    appointment_date: str = "",
+    appointment_time: str = "",
+):
+    import os
+    print("-" * 50)
+    print("AGENT: finish_call TOOL INVOKED")
+    print(f"PID: {os.getpid()}")
+    print(f"customer_name   : '{customer_name}'")
+    print(f"appointment_date: '{appointment_date}'")
+    print(f"appointment_time: '{appointment_time}'")
+    print(f"ACTIVE_CALLS keys: {list(ACTIVE_CALLS.keys())}")
+    print("-" * 50)
+
+    if not ACTIVE_CALLS:
+        print("[finish_call] WARNING: No active calls in ACTIVE_CALLS dictionary.")
+        return "No active call found."
+
+    # Temporary: one active call at a time.
+    room_name = list(ACTIVE_CALLS.keys())[0]
+    state = ACTIVE_CALLS.get(room_name)
+
+    if state is None:
+        print(f"[finish_call] WARNING: State for room '{room_name}' already removed.")
+        return "No active call found."
+
+    # ── Guard against duplicate invocations ─────────────────────────────────
+    # The LLM can call finish_call a second time while the first is still running
+    # (e.g. customer says goodbye again). Ignore the duplicate.
+    if state.get("finishing"):
+        print("finish_call already in progress — ignoring duplicate invocation.")
+        return "Call finish already in progress."
+
+    # Mark as finishing so agent.py knows to wait for us before shutting down
+    state["finishing"] = True
+    session = state["session"]
+
+    print(f"Room: {room_name}")
+
+    # Determine appropriate goodbye phrase
+    if (appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()):
+        goodbye_phrase = "Thank you. Your appointment request has been recorded. Goodbye."
+    else:
+        goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
+
+    try:
+        # ── Step 1: Speak the goodbye phrase via TTS ──────────────────────
+        try:
+            print(f"Speaking goodbye: '{goodbye_phrase}'")
+            res = session.say(goodbye_phrase, allow_interruptions=False)
+            if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                await res
+            await asyncio.sleep(4.0)
+            print("Goodbye spoken successfully.")
+        except Exception as e:
+            print(f"Warning – could not speak goodbye (non-fatal): {e}")
+
+        # ── Step 2: Build transcript (after goodbye is in history) ────────
+        transcript = _build_transcript(session)
+        print(f"Transcript lines: {len(transcript.splitlines())}")
+
+        # ── Step 3: Close the agent session ──────────────────────────────
+        try:
+            print("Closing AgentSession...")
+            await asyncio.wait_for(session.aclose(), timeout=5.0)
+            print("AgentSession closed.")
+        except Exception as e:
+            print(f"Warning – session.aclose() error (non-fatal): {e}")
+
+        # ── Step 4: Notify backend with full payload ──────────────────────
+        try:
+            call_id = int(room_name.rsplit("-", 1)[-1])
+        except (ValueError, IndexError):
+            call_id = -1
+
+        payload = {
+            "transcript": transcript or None,
+            "customer_name": customer_name or None,
+            "appointment_date": appointment_date or None,
+            "appointment_time": appointment_time or None,
+            "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+        }
+
+        # Mix WAV tracks, upload to S3 (with verification), then clean up track files
+        if call_id != -1:
+            try:
+                await asyncio.sleep(1.5)  # give recorder time to flush & close
+                from agent import mix_wav_files
+                local_wav = f"recordings/call_{call_id}.wav"
+                mix_wav_files(
+                    f"recordings/call_{call_id}_customer.wav",
+                    f"recordings/call_{call_id}_agent.wav",
+                    local_wav
+                )
+                from app.services.s3_service import upload_to_s3_and_delete_local, cleanup_track_files
+                s3_url = upload_to_s3_and_delete_local(local_wav)
+                if s3_url:
+                    payload["recording_url"] = s3_url
+                    # IMPORTANT: Only delete track files AFTER confirmed S3 upload
+                    cleanup_track_files(call_id, recordings_dir="recordings")
+                else:
+                    print(f"[finish_call] WARNING: S3 upload failed for call {call_id} — keeping local files")
+            except Exception as mix_err:
+                print(f"Warning – mixing/uploading audio failed: {mix_err}")
+
+        try:
+            print("Notifying backend that the call is complete...")
+            success = await notify_call_complete(room_name, payload=payload)
+            if not success:
+                print(f"[finish_call] FORENSIC ALERT: notify_call_complete returned FALSE for room '{room_name}'!")
+        except Exception as e:
+            print(f"[finish_call] ERROR notifying backend: {e}")
+
+    finally:
+        # ── Step 5: ALWAYS delete the LiveKit room to hang up the call ──
+        try:
+            print("Deleting LiveKit room (hanging up SIP call)...")
+            import os
+            lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+            lk_key = os.getenv("LIVEKIT_API_KEY")
+            lk_secret = os.getenv("LIVEKIT_API_SECRET")
+            
+            if lk_url:
+                lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
+            else:
+                lkapi = api.LiveKitAPI()
+
+            try:
+                await lkapi.room.delete_room(
+                    api.DeleteRoomRequest(room=room_name)
+                )
+                print("Room deleted successfully — call hung up.")
+            finally:
+                await lkapi.aclose()
+        except Exception as e:
+            print(f"Warning – room deletion error: {e}")
+
+        # Remove active call state
+        ACTIVE_CALLS.pop(room_name, None)
+
+    return "Call ended successfully."

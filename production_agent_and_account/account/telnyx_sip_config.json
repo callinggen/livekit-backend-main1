@@ -1,0 +1,11 @@
+{
+  "provider": "telnyx",
+  "sip_trunk_id": "ST_AB44u8gKNDkE",
+  "sip_username": "livekitny",
+  "sip_password": "Genx@12345",
+  "sip_domain": "sip.telnyx.com",
+  "sip_port": 5060,
+  "outbound_caller_id": "+19344001617",
+  "livekit_sip_dispatch_rule": "default",
+  "livekit_sip_uri": "sip:ST_AB44u8gKNDkE@sip.telnyx.com"
+}

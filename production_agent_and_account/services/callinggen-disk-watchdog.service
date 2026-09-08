@@ -1,0 +1,17 @@
+[Unit]
+Description=CallingGen Disk Space Watchdog
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/app/BACKEND/BACKEND
+ExecStart=/home/ubuntu/app/BACKEND/BACKEND/.venv/bin/python3 /home/ubuntu/scripts/disk_watchdog.py
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/ubuntu/logs/disk_watchdog.log
+StandardError=append:/home/ubuntu/logs/disk_watchdog.log
+Environment="PYTHONPATH=/home/ubuntu/app/BACKEND/BACKEND"
+
+[Install]
+WantedBy=multi-user.target

@@ -508,6 +508,14 @@ async def list_calls(
         campaign_name = campaign.campaign_name if campaign else "Inbound Call"
         agent_name = agent.name if agent else (campaign.agent if campaign else "Sales Agent")
 
+        appt_d = (contact.appointment_date or "").strip() if contact else ""
+        appt_t = (contact.appointment_time or "").strip() if contact else ""
+        if not appt_d:
+            import re
+            m = re.search(r'\b(202\d-[01]\d-[0-3]\d)\b', (call.summary or "") + " " + (call.human_response or ""))
+            if m:
+                appt_d = m.group(1)
+
         calls.append({
             "id": str(call.id),
             "name": contact_name,
@@ -523,9 +531,9 @@ async def list_calls(
             "category": call.category or "UNCATEGORIZED",
             "sentiment": sentiment,
             "human_response": call.human_response,
-            "notes": f"Appointment: {contact.appointment_date or '—'} at {contact.appointment_time or '—'}" if contact else "—",
-            "appointment_date": contact.appointment_date or "" if contact else "",
-            "appointment_time": contact.appointment_time or "" if contact else "",
+            "notes": f"Appointment: {appt_d or '—'} at {appt_t or '—'}" if (appt_d or appt_t) else (f"Appointment: {contact.appointment_date or '—'} at {contact.appointment_time or '—'}" if contact else "—"),
+            "appointment_date": appt_d,
+            "appointment_time": appt_t,
             "customer_name": contact_name,
             "recording_url": call.recording_url or "",
             "creditsDeducted": call.credits_deducted,

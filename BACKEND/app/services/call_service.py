@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
 
 from app.models.call import Call
 from app.models.contact import Contact
@@ -106,6 +107,24 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
             f"Business Outcome: {business_outcome}\n"
             f"Transcript:\n{transcript}"
         )
+
+        from datetime import timedelta
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        today_ref = ist_now.strftime("%Y-%m-%d (%A)")
+
+        prompt_appt = (
+            f"Reference call date: {today_ref} (IST).\n"
+            "Analyze the following call transcript. Did the customer and assistant agree on or schedule a specific appointment, consultation, demo, or callback date and time?\n"
+            "If YES, return a JSON object with:\n"
+            "  \"is_appointment\": true,\n"
+            "  \"appointment_date\": \"YYYY-MM-DD\" (resolve relative terms like 'tomorrow', 'this Friday', 'next Monday' to actual YYYY-MM-DD based on the reference call date),\n"
+            "  \"appointment_time\": \"hh:mm AM/PM\" (e.g. \"02:30 PM\"),\n"
+            "  \"type\": \"appointment\" or \"reschedule\"\n"
+            "If NO appointment or callback was scheduled, return:\n"
+            "  {\"is_appointment\": false}\n"
+            "Return ONLY the valid JSON object. No markdown, no other text.\n\n"
+            f"Transcript:\n{transcript}"
+        )
         
         task_class = client.chat.completions.create(
             model="deepseek-chat",
@@ -120,14 +139,42 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
             max_tokens=10,
             temperature=0.3
         )
+
+        task_appt = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt_appt}],
+            max_tokens=120,
+            temperature=0.1
+        )
         
-        res_class, res_cat = await asyncio.gather(task_class, task_cat)
+        res_class, res_cat, res_appt = await asyncio.gather(task_class, task_cat, task_appt, return_exceptions=True)
         
-        raw_summary = res_class.choices[0].message.content or ""
+        raw_summary = ""
+        if res_class and not isinstance(res_class, BaseException):
+            try:
+                raw_summary = res_class.choices[0].message.content or ""
+            except Exception:
+                pass
         clean_summary = raw_summary.strip().strip("'\".").replace("\n", " ")
         
-        raw_cat = res_cat.choices[0].message.content or ""
+        raw_cat = ""
+        if res_cat and not isinstance(res_cat, BaseException):
+            try:
+                raw_cat = res_cat.choices[0].message.content or ""
+            except Exception:
+                pass
         clean_cat = raw_cat.strip().strip("'\".").upper()
+
+        appt_data = {}
+        if res_appt and not isinstance(res_appt, BaseException):
+            try:
+                import json
+                raw_appt = res_appt.choices[0].message.content or "{}"
+                # Clean possible markdown block
+                raw_appt = raw_appt.strip().replace("```json", "").replace("```", "").strip()
+                appt_data = json.loads(raw_appt)
+            except Exception as j_err:
+                print(f"[CallService] JSON parse error for appointment extraction: {j_err}")
         
         async with AsyncSessionLocal() as bg_db:
             bg_call = await bg_db.get(Call, call_id)
@@ -140,6 +187,25 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
                         bg_call.summary = clean_summary
                     if clean_cat in ["HOT", "WARM", "COLD"]:
                         bg_call.category = clean_cat
+
+                # If DeepSeek discovered an appointment or callback scheduled
+                if appt_data.get("is_appointment") and appt_data.get("appointment_date"):
+                    parsed_date = str(appt_data["appointment_date"]).strip()
+                    parsed_time = str(appt_data.get("appointment_time") or "10:00 AM").strip()
+                    is_meeting = (appt_data.get("type") != "reschedule")
+                    
+                    contact = None
+                    if bg_call.contact_id:
+                        contact = await bg_db.get(Contact, bg_call.contact_id)
+                    if contact:
+                        if not contact.appointment_date:
+                            contact.appointment_date = parsed_date
+                            contact.appointment_time = parsed_time
+                            contact.response = "Appointment Booked" if is_meeting else "Rescheduled"
+                            print(f"[CallService] AI extracted appointment for Contact {contact.id}: {parsed_date} at {parsed_time}")
+                    bg_call.outcome = "appointment_booked" if is_meeting else "rescheduled"
+                    bg_call.category = "HOT"
+
                 await bg_db.commit()
                 print(f"[CallService] Background AI classification updated for Call {call_id}: summary='{bg_call.summary}', category='{bg_call.category}'")
 
@@ -248,10 +314,19 @@ class CallService:
             "not needing", "no assistance", "refuse", "declined", "stop calling",
             "do not call", "don't call", "never call", "remove my number"
         ])
+        # Fix keyword list: remove bare 'after' which caused false positives on 'after filing'
         is_reschedule = any(phrase in lower_tx for phrase in [
             "call me", "call back", "reschedule", "later today", "tomorrow at",
-            "after", "later this week", "next week", "would work better"
+            "call later", "call after", "reach me later", "later this week", "next week", "would work better"
         ])
+
+        # Normalize appointment_date if passed in ISO or other formats
+        if appointment_date and isinstance(appointment_date, str):
+            appointment_date = appointment_date.strip()
+            if "T" in appointment_date:
+                appointment_date = appointment_date.split("T")[0]
+            elif " " in appointment_date and len(appointment_date.split(" ")[0]) == 10 and "-" in appointment_date.split(" ")[0]:
+                appointment_date = appointment_date.split(" ")[0]
 
         has_valid_appointment = (
             appointment_date is not None 
@@ -288,14 +363,18 @@ class CallService:
             failure_reason=failure_reason
         )
 
-        # If zero customer speech was ever detected and duration is brief, this was an unanswered call
-        if customer_lines == 0 and not is_voicemail and not has_valid_appointment:
-            if final_outcome in ("customer_hangup", "answered", "unknown", None) or call.duration < 35:
-                final_status = "ended"
-                final_outcome = "no_answer"
-                call.sip_was_active = False
+        connected = bool(call.sip_was_active or call.answered_at or (call.duration and call.duration > 0))
 
-        connected = bool(call.sip_was_active or call.answered_at)
+        # A call that was never answered is only one where neither SIP was active nor answered_at was recorded
+        if not connected and not is_voicemail and not has_valid_appointment:
+            final_status = "ended"
+            final_outcome = "no_answer"
+
+        # Connected calls: if customer ended in between, outcome is customer_hangup or answered (NEVER no_answer)
+        if connected and final_outcome in ("no_answer", "unknown", None):
+            final_status = "completed"
+            final_outcome = "customer_hangup" if disconnect_reason == "customer_disconnect" or outcome in ("customer_hangup", "customer_silence") else "answered"
+            print(f"[CLASSIFICATION] Connected call {call_id} auto-resolved outcome to '{final_outcome}' (status: {final_status})")
         
         print(f"\n[CLASSIFICATION INVARIANT]")
         print(f"call_id={call_id}")
@@ -304,11 +383,6 @@ class CallService:
         print(f"sip_was_active={call.sip_was_active}")
         print(f"answered_at={call.answered_at}")
         print(f"outcome={final_outcome}\n")
-
-        if connected and final_outcome == "no_answer" and customer_lines > 0:
-            print(f"[CRITICAL ERROR] Connected call {call_id} was classified as no_answer. Autocorrecting to 'answered'.")
-            final_status = "completed"
-            final_outcome = "answered"
 
         call.status = final_status
         call.outcome = final_outcome
@@ -419,16 +493,32 @@ class CallService:
                         campaign.status = "completed"
 
         # ── BACKEND GUARD ─────────────────────────────────────────────
-        if (call.sip_was_active or call.answered_at) and customer_lines > 0:
+        if call.sip_was_active or call.answered_at or (call.duration and call.duration > 0):
             if call.outcome == "no_answer":
-                print(f"[FATAL ERROR] Connected Call {call_id} attempted to be marked as no_answer!")
-                raise RuntimeError(f"Invalid classification: connected call {call_id} cannot be no_answer")
+                call.outcome = "customer_hangup"
+                call.status = "completed"
                 
-        if call.outcome in ("no_answer", "declined", "busy"):
+        if call.outcome in ("no_answer", "declined", "busy") and not (call.answered_at or call.sip_was_active or (call.duration and call.duration > 0)):
             call.duration = 0
             call.credits_deducted = 0
             if contact:
                 contact.duration = "0"
+
+        # ── Demo Lead Sync ────────────────────────────────────────────
+        try:
+            from app.models.demo_lead import DemoLead
+            lead_stmt = select(DemoLead).where(DemoLead.call_id == call.id)
+            lead_res = await db.execute(lead_stmt)
+            demo_lead = lead_res.scalars().first()
+            if demo_lead:
+                if is_success or call.status == "completed" or (call.duration and call.duration > 0):
+                    demo_lead.status = "completed"
+                elif is_voicemail or call.outcome in ("no_answer", "busy", "declined"):
+                    demo_lead.status = "no_answer"
+                else:
+                    demo_lead.status = "failed"
+        except Exception as dl_err:
+            print(f"[CallService] Demo lead sync error (non-fatal): {dl_err}")
 
         # ── IMMEDIATE COMMIT ──────────────────────────────────────────
         await db.commit()
@@ -524,7 +614,6 @@ class CallService:
                         campaign.status = "completed"
                     # Safety net: mark any remaining pending/dialing contacts as failed
                     # so campaigns never get stuck in "running" state
-                    from sqlalchemy import select, update
                     from app.models.contact import Contact as ContactModel
                     await db.execute(
                         update(ContactModel)
@@ -532,6 +621,17 @@ class CallService:
                         .where(ContactModel.status.in_(["pending", "dialing"]))
                         .values(status="failed", response="System Failure")
                     )
+
+        # ── Demo Lead Sync ────────────────────────────────────────────
+        try:
+            from app.models.demo_lead import DemoLead
+            lead_stmt = select(DemoLead).where(DemoLead.call_id == call.id)
+            lead_res = await db.execute(lead_stmt)
+            demo_lead = lead_res.scalars().first()
+            if demo_lead:
+                demo_lead.status = "failed"
+        except Exception as dl_err:
+            print(f"[CallService] Demo lead sync error in fail_call (non-fatal): {dl_err}")
 
         await db.commit()
 

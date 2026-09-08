@@ -1,0 +1,10 @@
+api_key: APIuLp9KqY3tZxV
+api_secret: SECnRt8MwP2vLyK4jHgF6dQ1sAbXc5zE
+ws_url: ws://127.0.0.1:7880
+
+sip_port: 5060
+rtp_port_range_start: 10000
+rtp_port_range_end: 20000
+
+logging:
+  level: info

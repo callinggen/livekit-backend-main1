@@ -1,4 +1,4 @@
-import pytest
+import pytest  # type: ignore
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,3 +114,71 @@ async def test_launch_campaign_and_status(client: AsyncClient, db_session: Async
     assert status_data["total"] == 1
     assert status_data["completed"] == 0
     assert status_data["failed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pause_resume_stop_campaign(client: AsyncClient, db_session: AsyncSession):
+    # Setup campaign with contact and job
+    campaign = Campaign(
+        campaign_name="Pause Stop Test Campaign",
+        agent="Voice-A",
+        script="Script",
+        schedule_date="2026-07-15",
+        schedule_time="12:00",
+        status="running"
+    )
+    db_session.add(campaign)
+    await db_session.commit()
+    await db_session.refresh(campaign)
+
+    contact = Contact(
+        campaign_id=campaign.id,
+        name="Dave",
+        phone="+9998887777",
+        status="pending"
+    )
+    db_session.add(contact)
+    job = Job(
+        campaign_id=campaign.id,
+        status="queued",
+        total_contacts=1,
+        completed_contacts=0,
+        failed_contacts=0
+    )
+    db_session.add(job)
+    await db_session.commit()
+    await db_session.refresh(job)
+
+    # 1. Pause campaign
+    pause_resp = await client.post(f"/api/campaigns/{campaign.id}/pause")
+    assert pause_resp.status_code == 200
+    pause_data = pause_resp.json()
+    assert pause_data["status"] == "Paused"
+    await db_session.refresh(campaign)
+    assert campaign.status == "paused"
+    await db_session.refresh(job)
+    assert job.status == "paused"
+
+    # 2. Resume campaign
+    resume_resp = await client.post(f"/api/campaigns/{campaign.id}/resume")
+    assert resume_resp.status_code == 200
+    resume_data = resume_resp.json()
+    assert resume_data["status"] == "Running"
+    await db_session.refresh(campaign)
+    assert campaign.status == "running"
+    await db_session.refresh(job)
+    assert job.status == "queued"
+
+    # 3. Stop campaign
+    stop_resp = await client.post(f"/api/campaigns/{campaign.id}/stop")
+    assert stop_resp.status_code == 200
+    stop_data = stop_resp.json()
+    assert stop_data["status"] == "Stopped"
+    await db_session.refresh(campaign)
+    assert campaign.status == "stopped"
+    await db_session.refresh(job)
+    assert job.status == "stopped"
+    await db_session.refresh(contact)
+    assert contact.status == "failed"
+    assert contact.response == "Campaign Stopped"
+

@@ -6,6 +6,7 @@ import wave
 import re
 import socket
 import sys
+sys.setrecursionlimit(5000)
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete

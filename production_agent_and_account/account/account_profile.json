@@ -1,0 +1,26 @@
+{
+  "account_name": "Morning Tax",
+  "user_id": 1,
+  "role": "production_primary_account",
+  "status": "active",
+  "credit_balance": 4559,
+  "phone_number": "+19344001617",
+  "sip_trunk_id": "ST_AB44u8gKNDkE",
+  "tts_provider": "sarvam",
+  "tts_model": "bulbul:v3",
+  "tts_speaker": "meera",
+  "stt_provider": "sarvam",
+  "stt_model": "saaras:v2",
+  "stt_language": "en-IN",
+  "llm_provider": "deepseek",
+  "llm_model": "deepseek-chat",
+  "active_agents": [
+    "Meera (Morning Tax)",
+    "Raj (Morning Tax)",
+    "John (Morning Tax)",
+    "Voice-E (Tax Agent)"
+  ],
+  "production_server_ip": "3.85.244.64",
+  "ssh_user": "ubuntu",
+  "ssh_key": "callinggen-key-prod.pem"
+}
