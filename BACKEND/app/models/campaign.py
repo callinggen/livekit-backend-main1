@@ -93,6 +93,18 @@ class Campaign(Base):
         nullable=True,
     )
 
+    pre_start_notified: Mapped[bool] = mapped_column(
+        default=False,
+    )
+
+    start_notified: Mapped[bool] = mapped_column(
+        default=False,
+    )
+
+    completed_notified: Mapped[bool] = mapped_column(
+        default=False,
+    )
+
     contacts = relationship(
     "Contact",
     back_populates="campaign",

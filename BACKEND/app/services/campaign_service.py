@@ -36,6 +36,32 @@ class CampaignService:
         )
         db.add(job)
         campaign.status = "running"
+
+        # Dispatch Campaign Started notification email to user profile email
+        if not getattr(campaign, "start_notified", False):
+            campaign.start_notified = True
+            if campaign.user_id:
+                try:
+                    from app.models.user import User
+                    user = await db.get(User, campaign.user_id)
+                    if user and user.email:
+                        import asyncio
+                        from app.services.email_service import email_service
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                email_service.send_campaign_started_email,
+                                to_email=user.email,
+                                user_name=user.full_name or "Client",
+                                campaign_name=campaign.campaign_name,
+                                total_contacts=total_contacts,
+                                agent_name=campaign.agent or "AI Voice Agent",
+                                is_pre_alert=False,
+                            )
+                        )
+                        print(f"[CampaignService] Dispatched campaign start notification email to {user.email}")
+                except Exception as notify_err:
+                    print(f"[CampaignService] Warning: Failed to send start notification: {notify_err}")
+
         await db.commit()
         await db.refresh(job)
         return job

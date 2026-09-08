@@ -170,6 +170,43 @@ class QueueService:
             if campaign:
                 campaign.status = "completed"
 
+                # Dispatch Campaign Completed notification email to user profile email
+                if not getattr(campaign, "completed_notified", False):
+                    campaign.completed_notified = True
+                    if campaign.user_id:
+                        try:
+                            from app.models.user import User
+                            user = await db.get(User, campaign.user_id)
+                            if user and user.email:
+                                # Fetch all calls for accurate summary
+                                calls_res = await db.execute(
+                                    select(Call).join(Contact, Call.contact_id == Contact.id)
+                                    .where(Contact.campaign_id == campaign.id)
+                                )
+                                calls = calls_res.scalars().all()
+                                total_calls = len(calls)
+                                completed_calls = sum(1 for c in calls if c.status == "completed")
+                                failed_calls = sum(1 for c in calls if c.status in ("failed", "no_answer"))
+                                hot_leads = sum(1 for c in calls if c.category == "HOT")
+
+                                import asyncio
+                                from app.services.email_service import email_service
+                                asyncio.create_task(
+                                    asyncio.to_thread(
+                                        email_service.send_campaign_completed_email,
+                                        to_email=user.email,
+                                        user_name=user.full_name or "Client",
+                                        campaign_name=campaign.campaign_name,
+                                        total_calls=total_calls,
+                                        completed=completed_calls,
+                                        failed=failed_calls,
+                                        hot_leads=hot_leads,
+                                    )
+                                )
+                                print(f"[QueueService] Dispatched campaign completion email to {user.email} for '{campaign.campaign_name}'")
+                        except Exception as comp_notify_err:
+                            print(f"[QueueService] Warning: Failed to send campaign completion email: {comp_notify_err}")
+
             await db.commit()
 
             return False

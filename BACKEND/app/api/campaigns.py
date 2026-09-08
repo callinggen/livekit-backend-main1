@@ -367,10 +367,17 @@ async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_d
 
 def _map_status(status: str) -> str:
     """Map backend status values to the capitalized strings the frontend uses."""
+    s = (status or "").strip().lower()
     return {
-        "pending":   "Scheduled",
-        "running":   "Running",
-        "completed": "Completed",
-        "failed":    "Failed",
-        "paused":    "Paused",
-    }.get(status, status.capitalize())
+        "pending":    "Scheduled",
+        "scheduled":  "Scheduled",
+        "running":    "Running",
+        "in_progress":"Running",
+        "completed":  "Completed",
+        "failed":     "Failed",
+        "incomplete": "Incomplete",
+        "stopped":    "Stopped",
+        "finished":   "Completed",
+        "paused":     "Paused",
+        "draft":      "Draft",
+    }.get(s, status.capitalize() if status else "Draft")
