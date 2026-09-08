@@ -10,7 +10,8 @@ from livekit.protocol.sip import (
     SIPDispatchRuleIndividual,
     CreateSIPDispatchRuleRequest,
 )
-from livekit.api import RoomConfiguration, RoomAgentDispatch
+from livekit.protocol.agent_dispatch import RoomAgentDispatch, CreateAgentDispatchRequest
+from livekit.protocol.room import RoomConfiguration, CreateRoomRequest
 
 import os
 
@@ -21,10 +22,7 @@ async def make_livekit_call(
     sip_trunk_id: str | None = None,
     sip_call_from: str | None = None,
 ):
-    url = os.getenv("LIVEKIT_URL", "ws://13.232.26.174:7880")
-    key = os.getenv("LIVEKIT_API_KEY", "devkey")
-    secret = os.getenv("LIVEKIT_API_SECRET", "devsecret123456789012345678901234567890")
-    lkapi = api.LiveKitAPI(url=url, api_key=key, api_secret=secret)
+    lkapi = api.LiveKitAPI()
     
     # Sanitize the destination phone number
     clean_phone = "".join(c for c in phone if c.isdigit() or c == "+")
@@ -37,8 +35,13 @@ async def make_livekit_call(
             clean_phone = f"+{clean_phone}"
 
     # Use dynamic SIP Trunk ID if provided, otherwise fallback to env / system trunk
+    _BAD_TRUNKS = ("ST_3yaCewggPpAs", "ST_yZR7oi5aS79a")
+    if not sip_trunk_id or sip_trunk_id in _BAD_TRUNKS:
+        env_trunk = os.getenv("SIP_TRUNK_ID", "")
+        # Also skip known-bad env values
+        sip_trunk_id = env_trunk if env_trunk and env_trunk not in _BAD_TRUNKS else "ST_3iPMqSQPX8z5"
     if not sip_trunk_id:
-        sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3iPMqSQPX8z5")
+        sip_trunk_id = "ST_3iPMqSQPX8z5"
         
     # Use dynamic assigned caller ID if provided, otherwise fallback to system caller ID
     if not sip_call_from:
@@ -53,6 +56,23 @@ async def make_livekit_call(
     elif not clean_sip_from:
         clean_sip_from = "+917971442271"
 
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-outbound-agent")
+
+    print(f"[livekit_service] Outbound call — trunk={sip_trunk_id}, from={clean_sip_from}, to={clean_phone}, room={room_name}")
+
+    # Step 1: Pre-create the room with agent dispatch config
+    try:
+        room_req = CreateRoomRequest(
+            name=room_name,
+            empty_timeout=300,
+            departure_timeout=30,
+            agents=[RoomAgentDispatch(agent_name=agent_name)],
+        )
+        await lkapi.room.create_room(room_req)
+        print(f"[livekit_service] Pre-created room '{room_name}' with RoomAgentDispatch(agent_name='{agent_name}')")
+    except Exception as room_err:
+        print(f"[livekit_service] Room create notice for '{room_name}': {room_err}")
+
     req = CreateSIPParticipantRequest(
         sip_trunk_id=sip_trunk_id,
         sip_call_to=clean_phone,
@@ -60,41 +80,44 @@ async def make_livekit_call(
         room_name=room_name,
         participant_identity="customer",
         participant_name="Customer",
-        wait_until_answered=True,
+        wait_until_answered=False,
     )
 
-    try:
-        participant = await lkapi.sip.create_sip_participant(req)
-
-        # Dispatch the agent to the room explicitly
+    # Retry up to 2 times for transient LiveKit SIP failures
+    last_error = None
+    for attempt in range(3):
         try:
-            from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
-            agent_name = os.getenv("LIVEKIT_AGENT_NAME", "inbound-agent")
-            if agent_name:
-                dispatch_req = CreateAgentDispatchRequest(
-                    agent_name=agent_name,
-                    room=room_name,
-                )
-                await lkapi.agent_dispatch.create_dispatch(dispatch_req)
-                print(f"[livekit_service] Successfully dispatched agent '{agent_name}' to room '{room_name}'")
-        except Exception as dispatch_err:
-            print(f"[livekit_service] Warning: Failed to dispatch agent to room '{room_name}': {dispatch_err}")
+            participant = await lkapi.sip.create_sip_participant(req)
+            print(f"[livekit_service] SIP participant created (attempt {attempt+1}): {participant.participant_id}")
+            await lkapi.aclose()
+            return {
+                "success": True,
+                "participant_id": participant.participant_id,
+                "room": room_name,
+                "phone": phone,
+            }
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            print(f"[livekit_service] SIP participant create attempt {attempt+1} failed: {err_str}")
+            # Only retry on transient errors (not_found trunk, server unavailable, timeout)
+            # Do NOT retry on telephony-level errors (busy, declined, no answer)
+            is_transient = (
+                "not_found" in err_str.lower()
+                or "unavailable" in err_str.lower()
+                or "timeout" in err_str.lower()
+                or "deadline" in err_str.lower()
+            )
+            if not is_transient or attempt == 2:
+                break
+            import asyncio as _asyncio
+            await _asyncio.sleep(1.0)  # Wait 1s before retry
 
-        return {
-            "success": True,
-            "participant_id": participant.participant_id,
-            "room": room_name,
-            "phone": phone,
-        }
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-        }
-
-    finally:
-        await lkapi.aclose()
+    await lkapi.aclose()
+    return {
+        "success": False,
+        "error": str(last_error),
+    }
 
 
 async def create_inbound_sip_trunk(numbers: list[str]) -> str:
@@ -176,3 +199,8 @@ async def setup_inbound_sip(phone_number: str):
     except Exception as e:
         print(f"[livekit_service] Error provisioning LiveKit inbound SIP for {phone_number}: {e}")
         return False
+
+
+def get_inbound_sip_trunk_id() -> str:
+    """Return the authoritative inbound SIP trunk ID."""
+    return os.getenv("SIP_INBOUND_TRUNK_ID") or os.getenv("INBOUND_SIP_TRUNK_ID") or "ST_j856Hob6eAWi"

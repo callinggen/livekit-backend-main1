@@ -51,8 +51,9 @@ async def livekit_webhook(
     event_data = None
     if lk_key and lk_secret and auth_header:
         try:
-            from livekit.api import WebhookReceiver
-            receiver = WebhookReceiver()
+            from livekit.api import WebhookReceiver, TokenVerifier
+            verifier = TokenVerifier(lk_key, lk_secret)
+            receiver = WebhookReceiver(verifier)
             event = receiver.receive(body_str, auth_header)
             event_data = {
                 "event": event.event,
@@ -66,25 +67,28 @@ async def livekit_webhook(
         except Exception as sig_err:
             print(f"[webhook] Webhook signature verification failed: {sig_err}. Parsing as raw JSON.")
             
-    if not event_data:
+    if not event_data or not isinstance(event_data, dict):
         import json
         try:
-            event_data = json.loads(body_str)
+            parsed = json.loads(body_str)
+            event_data = parsed if isinstance(parsed, dict) else {}
         except Exception as e:
             print(f"[webhook] Failed to parse webhook payload: {e}")
             return {"error": "Invalid JSON"}
 
     event_name = event_data.get("event")
-    room_name = event_data.get("room", {}).get("name")
+    room_dict = event_data.get("room")
+    room_name = room_dict.get("name") if isinstance(room_dict, dict) else None
     
     print(f"[webhook] Received event '{event_name}' for room '{room_name}'")
     
     if event_name == "participant_joined":
-        part = event_data.get("participant", {})
-        if part:
-            attributes = part.get("attributes", {})
-            caller_number = attributes.get("sip.caller")
-            called_number = attributes.get("sip.called")
+        part = event_data.get("participant")
+        if isinstance(part, dict):
+            attributes = part.get("attributes")
+            attrs_dict = attributes if isinstance(attributes, dict) else {}
+            caller_number = attrs_dict.get("sip.caller")
+            called_number = attrs_dict.get("sip.called")
             participant_sid = part.get("sid")
             
             # If both are present, this is a SIP participant!
@@ -100,13 +104,13 @@ async def livekit_webhook(
                 
                 if existing_call:
                     existing_call.status = "in_progress"
-                    if not existing_call.livekit_participant_id:
-                        existing_call.livekit_participant_id = participant_sid
+                    if not existing_call.livekit_participant_id and participant_sid:
+                        existing_call.livekit_participant_id = str(participant_sid)
                     await db.commit()
                     print(f"[webhook] Outbound call {existing_call.id} participant joined")
                 else:
                     # Inbound call! Find phone line mapping
-                    print(f"[webhook] Inbound SIP call matching called number: {called_number} (clean: {clean_allowed if 'clean_allowed' in locals() else clean_called})")
+                    print(f"[webhook] Inbound SIP call matching called number: {called_number} (clean: {clean_called})")
                     
                     pn_stmt = select(UserPhoneNumber).where(UserPhoneNumber.is_active == True)
                     pn_res = await db.execute(pn_stmt)
@@ -118,10 +122,22 @@ async def livekit_webhook(
                         if line_clean in clean_called or clean_called in line_clean:
                             matched_line = line
                             break
+                    
+                    if not matched_line and all_lines:
+                        # Fallback to default primary phone line
+                        matched_line = all_lines[0]
                             
-                    if matched_line and matched_line.inbound_enabled:
-                        tenant_id = matched_line.user_id
+                    if matched_line:
+                        tenant_id = matched_line.user_id or 1
                         agent_id = matched_line.inbound_agent_id
+                        
+                        if not agent_id:
+                            from app.models.agent import Agent as AgentModel
+                            agent_res = await db.execute(
+                                select(AgentModel).where(AgentModel.user_id == tenant_id).limit(1)
+                            )
+                            found_agent = agent_res.scalars().first()
+                            agent_id = found_agent.id if found_agent else 6
                         
                         clean_caller = "".join(c for c in caller_number if c.isdigit())
                         contact_stmt = select(Contact)
@@ -140,7 +156,7 @@ async def livekit_webhook(
                             caller_number=caller_number,
                             called_number=called_number,
                             phone=caller_number,
-                            phone_line_id=matched_line.id,
+                            phone_line_id=matched_line.id if matched_line else None,
                             tenant_id=tenant_id,
                             agent_id=agent_id,
                             room_name=room_name,
@@ -153,17 +169,24 @@ async def livekit_webhook(
                         await db.commit()
                         print(f"[webhook] Created Inbound Call record {new_call.id} for tenant {tenant_id}, agent {agent_id}")
                     else:
-                        print(f"[webhook] Rejected inbound call: Phone line not configured or inbound disabled")
-                        try:
-                            lkapi = lk_api.LiveKitAPI()
-                            await lkapi.room.delete_room(lk_api.DeleteRoomRequest(room=room_name))
-                            await lkapi.aclose()
-                        except Exception as e:
-                            print(f"[webhook] Failed to reject room {room_name}: {e}")
+                        print(f"[webhook] Notice: No phone lines in DB, accepting inbound call with default agent 6")
+                        new_call = Call(
+                            direction="inbound",
+                            caller_number=caller_number,
+                            called_number=called_number,
+                            phone=caller_number,
+                            tenant_id=1,
+                            agent_id=6,
+                            room_name=room_name,
+                            status="in_progress",
+                            livekit_participant_id=participant_sid,
+                            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                        )
+                        db.add(new_call)
+                        await db.commit()
 
-    elif event_name == "room_finished":
-        import asyncio
-        asyncio.create_task(LiveKitEventService.room_finished(room_name))
+    elif event_name == "room_finished" and room_name:
+        await LiveKitEventService.room_finished(db, str(room_name))
 
     return {"status": "ok"}
 
@@ -272,13 +295,14 @@ async def inbound_init(
                 if agent_obj:
                     agent_name = agent_obj.name
 
+            now_utc = datetime.now(timezone.utc)
             campaign = Campaign(
                 user_id=tenant_id,
                 campaign_name="Inbound Calls Campaign",
                 agent=agent_name,
                 script="Thank you for calling Morning Tax. How can I help you?",
-                schedule_date=datetime.utcnow().strftime("%Y-%m-%d"),
-                schedule_time=datetime.utcnow().strftime("%H:%M"),
+                schedule_date=now_utc.strftime("%Y-%m-%d"),
+                schedule_time=now_utc.strftime("%H:%M"),
                 status="active",
             )
             db.add(campaign)
@@ -451,7 +475,7 @@ async def list_calls(
                 Call.tenant_id == current_user.id
             )
         )
-        .where(Campaign.campaign_name != "Website Demo Requests")
+        .where(or_(Campaign.campaign_name != "Website Demo Requests", Campaign.campaign_name.is_(None)))
         .order_by(Call.id.desc())
     )
     rows = result.all()
@@ -514,3 +538,18 @@ async def list_calls(
             "sip_was_active": call.sip_was_active,
         })
     return calls
+
+
+@router.post("/calls/{call_id}/whatsapp-action")
+async def trigger_call_whatsapp_action(
+    call_id: int,
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Trigger in-call WhatsApp delivery (e.g. SEND_BROCHURE) requested by the AI during a live call.
+    """
+    action = payload.get("action", "SEND_BROCHURE")
+    from app.services.whatsapp_automation_service import WhatsAppAutomationService
+    result = await WhatsAppAutomationService.trigger_in_call_action(call_id, action)
+    return result or {"success": True, "action": action}

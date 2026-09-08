@@ -3,6 +3,7 @@ from typing import Optional
 
 class PaymentCreateOrderRequest(BaseModel):
     plan_name: str
+    custom_credits: Optional[int] = None
 
 class PaymentCreateOrderResponse(BaseModel):
     razorpay_order_id: str

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Integer, String, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -59,10 +59,15 @@ class Campaign(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
     )
     
     voicemail_detection: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    whatsapp_automation: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
     )
@@ -86,6 +91,18 @@ class Campaign(Base):
         Integer,
         ForeignKey("campaigns.id"),
         nullable=True,
+    )
+
+    pre_start_notified: Mapped[bool] = mapped_column(
+        default=False,
+    )
+
+    start_notified: Mapped[bool] = mapped_column(
+        default=False,
+    )
+
+    completed_notified: Mapped[bool] = mapped_column(
+        default=False,
     )
 
     contacts = relationship(

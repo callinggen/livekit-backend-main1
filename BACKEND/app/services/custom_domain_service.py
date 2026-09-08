@@ -1,14 +1,10 @@
 import re
 import os
-from datetime import datetime
+import importlib
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple
-from dotenv import load_dotenv
-import resend
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-
-import dns.resolver
-import dns.exception
 
 from app.models.custom_domain import CustomEmailDomain
 from app.services.email_service import email_service
@@ -51,7 +47,6 @@ class CustomDomainService:
             raise ValueError(f"Domain '{domain_name}' is already added to your account.")
 
         # 2. Call Resend Domains API to register domain
-        resend.api_key = email_service.api_key
         resend_domain_id = None
         dns_records: List[Dict[str, Any]] = []
         resend_status = "pending"
@@ -63,9 +58,12 @@ class CustomDomainService:
             dns_records = cls._generate_standard_fallback_records(domain_name, region)
         else:
             try:
+                resend_mod: Any = importlib.import_module("resend")
+                setattr(resend_mod, "api_key", email_service.api_key)
+                
                 # Call Resend Domains API
                 params: Dict[str, Any] = {"name": domain_name, "region": region}
-                resp = resend.Domains.create(params)
+                resp = resend_mod.Domains.create(params)
                 
                 # Resend returns a dict or object with id, name, status, records
                 if isinstance(resp, dict):
@@ -114,7 +112,9 @@ class CustomDomainService:
                     resend_domain_id = f"restricted_{domain_name.replace('.', '_')}"
                     dns_records = cls._generate_standard_fallback_records(domain_name, region)
                 else:
-                    raise Exception(f"Failed to create domain on Resend: {error_str}")
+                    error_msg = f"Resend Domains API notice: {error_str}. Standard DNS records loaded for setup."
+                    resend_domain_id = f"fallback_{domain_name.replace('.', '_')}"
+                    dns_records = cls._generate_standard_fallback_records(domain_name, region)
 
         # 3. Create database entry
         domain_obj = CustomEmailDomain(
@@ -126,7 +126,7 @@ class CustomDomainService:
             is_verified=False,
             sending_enabled=False,
             region=region,
-            last_checked_at=datetime.utcnow(),
+            last_checked_at=datetime.now(timezone.utc),
             error_message=error_msg,
         )
         db.add(domain_obj)
@@ -145,7 +145,8 @@ class CustomDomainService:
         updated_records = []
         all_dns_matched = True
 
-        resolver = dns.resolver.Resolver()
+        dns_resolver: Any = importlib.import_module("dns.resolver")
+        resolver = dns_resolver.Resolver()
         resolver.nameservers = ["8.8.8.8", "1.1.1.1", "8.8.4.4"]
         resolver.timeout = 3.0
         resolver.lifetime = 4.0
@@ -169,7 +170,7 @@ class CustomDomainService:
             updated_records.append(updated_record)
 
         domain_obj.dns_records = updated_records
-        domain_obj.last_checked_at = datetime.utcnow()
+        domain_obj.last_checked_at = datetime.now(timezone.utc)
 
         # Check with Resend if domain has a valid Resend domain ID
         if (
@@ -179,15 +180,17 @@ class CustomDomainService:
             and not domain_obj.resend_domain_id.startswith("restricted_")
         ):
             try:
-                resend.api_key = email_service.api_key
+                resend_mod: Any = importlib.import_module("resend")
+                setattr(resend_mod, "api_key", email_service.api_key)
+                
                 # Trigger Resend verification
                 try:
-                    resend.Domains.verify(domain_obj.resend_domain_id)
+                    resend_mod.Domains.verify(domain_obj.resend_domain_id)
                 except Exception as ve:
-                    print(f"[CustomDomainService] Note on resend.Domains.verify: {ve}")
+                    print(f"[CustomDomainService] Note on resend_mod.Domains.verify: {ve}")
 
                 # Fetch updated status from Resend
-                resend_info = resend.Domains.get(domain_obj.resend_domain_id)
+                resend_info = resend_mod.Domains.get(domain_obj.resend_domain_id)
                 r_status = (
                     resend_info.get("status")
                     if isinstance(resend_info, dict)
@@ -198,7 +201,7 @@ class CustomDomainService:
                     domain_obj.is_verified = True
                     domain_obj.sending_enabled = True
                     domain_obj.status = "verified"
-                    domain_obj.verified_at = datetime.utcnow()
+                    domain_obj.verified_at = datetime.now(timezone.utc)
                     domain_obj.error_message = None
             except Exception as e:
                 print(f"[CustomDomainService] Resend sync error on verify: {e}")
@@ -206,14 +209,14 @@ class CustomDomainService:
                     domain_obj.is_verified = True
                     domain_obj.sending_enabled = True
                     domain_obj.status = "verified"
-                    domain_obj.verified_at = datetime.utcnow()
+                    domain_obj.verified_at = datetime.now(timezone.utc)
         else:
             # When in DNS-independent mode
             if all_dns_matched and len(updated_records) > 0:
                 domain_obj.is_verified = True
                 domain_obj.sending_enabled = True
                 domain_obj.status = "verified"
-                domain_obj.verified_at = datetime.utcnow()
+                domain_obj.verified_at = datetime.now(timezone.utc)
                 domain_obj.error_message = None
             else:
                 domain_obj.status = "pending"
@@ -224,7 +227,7 @@ class CustomDomainService:
 
     @classmethod
     def _query_dns_record(
-        cls, resolver: dns.resolver.Resolver, host: str, rtype: str, expected_value: str
+        cls, resolver: Any, host: str, rtype: str, expected_value: str
     ) -> Tuple[bool, str | None]:
         """
         Queries public DNS for host and rtype, securely compares against expected value.
@@ -239,7 +242,6 @@ class CustomDomainService:
                 answers = resolver.resolve(host, "TXT")
                 observed_list = []
                 for rdata in answers:
-                    # rdata.strings is a tuple of byte chunks
                     txt_content = b"".join(rdata.strings).decode("utf-8", errors="ignore").strip()
                     observed_list.append(txt_content)
                     clean_observed = txt_content.strip('"').strip("'").strip().lower()
@@ -274,13 +276,14 @@ class CustomDomainService:
             else:
                 return False, f"Unsupported record type {rtype}"
 
-        except dns.resolver.NXDOMAIN:
-            return False, "Domain/Host not found in public DNS (NXDOMAIN)"
-        except dns.resolver.NoAnswer:
-            return False, f"No {rtype} answer returned by DNS"
-        except dns.exception.Timeout:
-            return False, "DNS resolution timed out"
         except Exception as e:
+            err_name = type(e).__name__
+            if "NXDOMAIN" in err_name:
+                return False, "Domain/Host not found in public DNS (NXDOMAIN)"
+            elif "NoAnswer" in err_name:
+                return False, f"No {rtype} answer returned by DNS"
+            elif "Timeout" in err_name:
+                return False, "DNS resolution timed out"
             return False, f"DNS check error: {str(e)[:100]}"
 
     @staticmethod
@@ -302,7 +305,7 @@ class CustomDomainService:
             {
                 "record": "SPF",
                 "type": "TXT",
-                "name": domain_name,
+                "name": f"bounces.{domain_name}",
                 "value": "v=spf1 include:resend.com ~all",
                 "ttl": "Auto",
                 "status": "pending",
@@ -313,7 +316,7 @@ class CustomDomainService:
                 "record": "Return-Path",
                 "type": "MX",
                 "name": f"bounces.{domain_name}",
-                "value": f"feedback-smtp.{region}.amazonses.com",
+                "value": "feedback-smtp.us-east-1.amazonses.com",
                 "priority": 10,
                 "ttl": "Auto",
                 "status": "pending",

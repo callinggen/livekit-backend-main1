@@ -31,7 +31,7 @@ def classify_call_end(sip_was_active: bool, disconnect_reason: Optional[str], ou
     if outcome_override == "no_answer":
         outcome_override = None
 
-    if outcome_override in ("appointment_booked", "rescheduled", "not_interested", "agent_no_response", "customer_hangup", "agent_hangup"):
+    if outcome_override in ("appointment_booked", "rescheduled", "not_interested", "customer_no_response", "agent_no_response", "customer_hangup", "agent_hangup"):
         return "completed", outcome_override, None
 
     if disconnect_reason == "customer_disconnect":
@@ -142,6 +142,13 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
                         bg_call.category = clean_cat
                 await bg_db.commit()
                 print(f"[CallService] Background AI classification updated for Call {call_id}: summary='{bg_call.summary}', category='{bg_call.category}'")
+
+                # Trigger campaign WhatsApp automation rules now that classification is finalized
+                try:
+                    from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                    await WhatsAppAutomationService.process_call_automation(call_id)
+                except Exception as wa_err:
+                    print(f"[CallService] WhatsApp automation error after AI classification for Call {call_id}: {wa_err}")
     except Exception as e:
         print(f"[CallService] Background DeepSeek analysis error (non-fatal): {e}")
 
@@ -268,6 +275,12 @@ class CallService:
         if outcome in ("customer_hangup", "agent_hangup"):
             disconnect_reason = outcome
 
+        customer_lines = 0
+        if transcript:
+            for line in transcript.strip().splitlines():
+                if line.strip().lower().startswith("user:"):
+                    customer_lines += 1
+
         final_status, final_outcome, final_failure = classify_call_end(
             sip_was_active=call.sip_was_active,
             disconnect_reason=disconnect_reason,
@@ -275,16 +288,24 @@ class CallService:
             failure_reason=failure_reason
         )
 
+        # If zero customer speech was ever detected and duration is brief, this was an unanswered call
+        if customer_lines == 0 and not is_voicemail and not has_valid_appointment:
+            if final_outcome in ("customer_hangup", "answered", "unknown", None) or call.duration < 35:
+                final_status = "ended"
+                final_outcome = "no_answer"
+                call.sip_was_active = False
+
         connected = bool(call.sip_was_active or call.answered_at)
         
         print(f"\n[CLASSIFICATION INVARIANT]")
         print(f"call_id={call_id}")
+        print(f"customer_lines={customer_lines}")
         print(f"connected={connected}")
         print(f"sip_was_active={call.sip_was_active}")
         print(f"answered_at={call.answered_at}")
         print(f"outcome={final_outcome}\n")
 
-        if connected and final_outcome == "no_answer":
+        if connected and final_outcome == "no_answer" and customer_lines > 0:
             print(f"[CRITICAL ERROR] Connected call {call_id} was classified as no_answer. Autocorrecting to 'answered'.")
             final_status = "completed"
             final_outcome = "answered"
@@ -326,15 +347,19 @@ class CallService:
             if is_not_interested:
                 call.summary = "Not Interested"
                 call.category = "COLD"
-            elif is_reschedule:
-                call.summary = "Callback Requested"
-                call.category = "WARM"
+            elif call.outcome == "no_answer":
+                call.summary = "Unanswered Call"
+                call.category = "UNANSWERED"
             else:
                 call.summary = "General Inquiry"
                 call.category = "UNCATEGORIZED"
         else:
-            call.summary = "General Inquiry"
-            call.category = "UNCATEGORIZED"
+            if call.outcome == "no_answer":
+                call.summary = "Unanswered Call"
+                call.category = "UNANSWERED"
+            else:
+                call.summary = "General Inquiry"
+                call.category = "UNCATEGORIZED"
 
         # ── Contact ───────────────────────────────────────────────────
         contact = None
@@ -394,7 +419,7 @@ class CallService:
                         campaign.status = "completed"
 
         # ── BACKEND GUARD ─────────────────────────────────────────────
-        if call.sip_was_active or call.answered_at:
+        if (call.sip_was_active or call.answered_at) and customer_lines > 0:
             if call.outcome == "no_answer":
                 print(f"[FATAL ERROR] Connected Call {call_id} attempted to be marked as no_answer!")
                 raise RuntimeError(f"Invalid classification: connected call {call_id} cannot be no_answer")
@@ -415,12 +440,18 @@ class CallService:
         print(f"Job ID {call.job_id} Completed Contacts -> {job.completed_contacts if job else 0}")
         print("-" * 50)
 
-        # ── Spawn DeepSeek Analysis in Background (Non-blocking) ──────
+        # ── Spawn DeepSeek Analysis & WhatsApp Automation (Non-blocking) ──────
+        import asyncio
         if transcript and len(transcript.strip()) > 20:
-            import asyncio
             asyncio.create_task(
                 _analyze_and_update_summary(call.id, transcript, business_outcome, is_not_interested)
             )
+        else:
+            try:
+                from app.services.whatsapp_automation_service import WhatsAppAutomationService
+                asyncio.create_task(WhatsAppAutomationService.process_call_automation(call.id))
+            except Exception as wa_err:
+                print(f"[CallService] Error dispatching WhatsApp automation for Call {call.id}: {wa_err}")
 
         return call
 
@@ -491,6 +522,25 @@ class CallService:
                         campaign.status = "incomplete"
                     else:
                         campaign.status = "completed"
+                    # Safety net: mark any remaining pending/dialing contacts as failed
+                    # so campaigns never get stuck in "running" state
+                    from sqlalchemy import select, update
+                    from app.models.contact import Contact as ContactModel
+                    await db.execute(
+                        update(ContactModel)
+                        .where(ContactModel.campaign_id == job.campaign_id)
+                        .where(ContactModel.status.in_(["pending", "dialing"]))
+                        .values(status="failed", response="System Failure")
+                    )
 
         await db.commit()
+
+        # Trigger WhatsApp automation rules for failed/unanswered call
+        try:
+            import asyncio
+            from app.services.whatsapp_automation_service import WhatsAppAutomationService
+            asyncio.create_task(WhatsAppAutomationService.process_call_automation(call_id))
+        except Exception as wa_err:
+            print(f"[CallService] Error dispatching WhatsApp automation for failed Call {call_id}: {wa_err}")
+
         return call

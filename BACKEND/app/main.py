@@ -14,11 +14,15 @@ from app.api.reports import router as report_router
 from app.api.agents import router as agents_router
 from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
-from app.api.phone_numbers import router as phone_numbers_router
 from app.api.email_campaigns import router as email_campaign_router
 from app.api.email_templates import router as email_template_router
 from app.api.custom_domains import router as custom_domain_router
+from app.api.phone_numbers import router as phone_numbers_router
 from app.api.payments import router as payment_router
+from app.api.whatsapp_send import router as whatsapp_send_router
+from app.api.whatsapp_materials import router as whatsapp_materials_router
+from app.api.whatsapp_history import router as whatsapp_history_router
+from whatsapp.routes import router as whatsapp_router
 
 
 # Ensure recordings directory exists
@@ -44,6 +48,10 @@ from app.models.email_contact import EmailContact    # registers email tables
 from app.models.email_template import EmailMarketingTemplate  # registers template table
 from app.models.custom_domain import CustomEmailDomain        # registers custom domain table
 from app.models.payment import Payment
+from app.models.whatsapp_action import WhatsAppAction
+from app.models.whatsapp_material import WhatsAppMaterial
+from app.models.whatsapp_send_job import WhatsAppSendJob
+from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
 
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
@@ -60,12 +68,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
                 
-        for col_name in ["campaign_type", "parent_campaign_id"]:
+        for col_name in ["campaign_type", "parent_campaign_id", "pre_start_notified", "start_notified", "completed_notified"]:
             try:
                 if col_name == "campaign_type":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN campaign_type VARCHAR DEFAULT 'normal';"))
                 elif col_name == "parent_campaign_id":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN parent_campaign_id INTEGER;"))
+                elif col_name in ["pre_start_notified", "start_notified", "completed_notified"]:
+                    await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} BOOLEAN DEFAULT 0;"))
             except Exception:
                 pass
 
@@ -88,6 +98,11 @@ async def lifespan(app: FastAPI):
 
         try:
             await conn.execute(text("ALTER TABLE contacts ADD COLUMN original_row INTEGER;"))
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(text("ALTER TABLE whatsapp_send_jobs ADD COLUMN scheduled_for TIMESTAMP;"))
         except Exception:
             pass
 
@@ -130,6 +145,8 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+
+
         # Email Campaign columns auto-migrations
         for col_name, col_type in [
             ("from_name", "VARCHAR"),
@@ -145,9 +162,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-
-
-
     # Ensure default admin user exists
     async with AsyncSessionLocal() as db:
         res = await db.execute(select(User).where(User.email == "admin@example.com"))
@@ -162,6 +176,13 @@ async def lifespan(app: FastAPI):
             db.add(admin_user)
             await db.commit()
 
+        # Seed default marketing email templates if not already present
+        try:
+            from app.api.email_templates import ensure_default_templates_seeded
+            await ensure_default_templates_seeded(db)
+        except Exception as seed_err:
+            print(f"[STARTUP] Could not seed default email templates: {seed_err}")
+
     # Startup: Start lightweight scheduler
     task = asyncio.create_task(schedule_poller())
     yield
@@ -169,6 +190,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 async def schedule_poller():
+    from datetime import timedelta
     while True:
         try:
             async with AsyncSessionLocal() as db:
@@ -182,14 +204,52 @@ async def schedule_poller():
                     try:
                         iso_str = campaign.schedule_date.replace("Z", "+00:00")
                         schedule_dt = datetime.fromisoformat(iso_str)
+                        if schedule_dt.tzinfo is None:
+                            schedule_dt = schedule_dt.replace(tzinfo=timezone.utc)
+
+                        # 1. Check if campaign is ~2 minutes away from launch (Pre-start email alert)
+                        if (
+                            schedule_dt > now
+                            and (schedule_dt - now) <= timedelta(minutes=2)
+                            and not getattr(campaign, "pre_start_notified", False)
+                        ):
+                            campaign.pre_start_notified = True
+                            if campaign.user_id:
+                                user = await db.get(User, campaign.user_id)
+                                if user and user.email:
+                                    c_res = await db.execute(select(Contact).where(Contact.campaign_id == campaign.id))
+                                    contacts = c_res.scalars().all()
+                                    from app.services.email_service import email_service
+                                    asyncio.create_task(
+                                        asyncio.to_thread(
+                                            email_service.send_campaign_started_email,
+                                            to_email=user.email,
+                                            user_name=user.full_name or "Client",
+                                            campaign_name=campaign.campaign_name,
+                                            total_contacts=len(contacts),
+                                            agent_name=campaign.agent or "AI Voice Agent",
+                                            is_pre_alert=True,
+                                        )
+                                    )
+                                    print(f"[SchedulePoller] Sent 2-min pre-launch email alert to {user.email} for '{campaign.campaign_name}'")
+                            await db.commit()
+
+                        # 2. Time arrived, queue and start campaign
                         if schedule_dt <= now:
-                            # Time arrived, queue it
                             c_res = await db.execute(select(Contact).where(Contact.campaign_id == campaign.id))
                             contacts = c_res.scalars().all()
                             if contacts:
                                 await CampaignService.queue_campaign_job(db, campaign, len(contacts))
                     except Exception as e:
                         print(f"Scheduler error processing campaign {campaign.id}: {e}")
+
+            # 3. Process due WhatsApp scheduled broadcasts
+            try:
+                from app.services.whatsapp_scheduler_service import WhatsAppSchedulerService
+                await WhatsAppSchedulerService.process_due_jobs()
+            except Exception as wa_sched_err:
+                print(f"WhatsApp scheduler error: {wa_sched_err}")
+
         except Exception as e:
             print(f"Scheduler loop error: {e}")
         
@@ -225,6 +285,10 @@ app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
 app.include_router(phone_numbers_router)
 app.include_router(payment_router, prefix="/api")
+app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
+app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
+app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
+app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
 
 
 

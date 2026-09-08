@@ -10,7 +10,7 @@ from backend_client import notify_call_complete
 GOODBYE_PHRASE = "Thank you for your time. Have a great day! Goodbye."
 
 
-def _build_transcript(session: Any) -> str:
+def _build_transcript(session: Any) -> tuple[list[str], int, int]:
     """
     Extract the conversation transcript from the AgentSession.
     """
@@ -21,7 +21,7 @@ def _build_transcript(session: Any) -> str:
             
         if chat_ctx is None:
             print("Warning – session.chat_ctx/history is None, transcript will be empty.")
-            return ""
+            return [], 0, 0
 
         messages: Any = []
         if hasattr(chat_ctx, "messages"):
@@ -77,7 +77,7 @@ def _build_transcript(session: Any) -> str:
     except Exception as e:
         import traceback
         print(f"Warning – could not build transcript: {e}\n{traceback.format_exc()}")
-        return ""
+        return [], 0, 0
 
 
 def request_call_finish(
@@ -87,9 +87,9 @@ def request_call_finish(
     appointment_date: str = "",
     appointment_time: str = "",
     is_voicemail: bool = False,
-    detection_metadata: dict = None,
-    outcome: str = None,
-    failure_reason: str = None,
+    detection_metadata: dict[Any, Any] | None = None,
+    outcome: str | None = None,
+    failure_reason: str | None = None,
 ):
     state = ACTIVE_CALLS.get(room_name)
     if not state:
@@ -132,9 +132,9 @@ async def terminate_call_once(
     appointment_date: str = "",
     appointment_time: str = "",
     is_voicemail: bool = False,
-    detection_metadata: dict = None,
-    outcome: str = None,
-    failure_reason: str = None,
+    detection_metadata: dict[Any, Any] | None = None,
+    outcome: str | None = None,
+    failure_reason: str | None = None,
 ):
     import os
     import time
@@ -245,11 +245,24 @@ async def terminate_call_once(
     print(f"agent_lines={agent_lines}")
     print(f"total_lines={len(transcript_str.splitlines())}\n")
 
-    # Determine if this was an agent_no_response
-    if not outcome and sip_was_active and first_audio_received and not customer_has_spoken:
-        if reason == "customer_silence":
-            outcome = "agent_no_response"
-            print("-> Reclassifying outcome to: agent_no_response")
+    # Determine accurate outcome for silence / no response / unanswered
+    if not outcome and sip_was_active:
+        if customer_lines == 0 and not customer_has_spoken:
+            outcome = "no_answer"
+            print("-> Reclassifying outcome to: no_answer (no customer speech detected - call was unanswered)")
+        elif reason == "customer_silence":
+            if first_audio_received and not customer_has_spoken:
+                outcome = "customer_no_response"
+                print("-> Reclassifying outcome to: customer_no_response (agent spoke, customer was silent)")
+            elif not first_audio_received and customer_has_spoken:
+                outcome = "agent_no_response"
+                print("-> Reclassifying outcome to: agent_no_response (customer spoke, agent failed)")
+            else:
+                outcome = "customer_no_response"
+                print("-> Reclassifying outcome to: customer_no_response")
+    elif outcome == "customer_hangup" and customer_lines == 0 and not customer_has_spoken:
+        outcome = "no_answer"
+        print("-> Reclassifying customer_hangup to no_answer because customer never spoke or answered")
 
     # ── Step 4: Mix WAV tracks ────────
     if call_id != -1:
@@ -272,7 +285,7 @@ async def terminate_call_once(
         print("[WARNING] Transcript shows 0 agent lines for an active call!")
 
     # ── Step 5: Notify backend with full payload ──────────────────────
-    payload = {
+    payload: dict[str, Any] = {
         "transcript": transcript_str or None,
         "customer_name": customer_name or None,
         "appointment_date": appointment_date or None,
@@ -326,24 +339,19 @@ async def terminate_call_once(
 
 @function_tool(
     description="""
-Call this tool ONLY when the conversation is completely finished.
-MUST BE CALLED IMMEDIATELY IN THESE CASES:
-- When the customer says "not interested", "no thanks", "don't call me", or declines.
-- When an appointment or callback date/time is requested or confirmed.
-- When the customer says goodbye, thank you, or indicates they want to hang up.
+Call this tool ONLY when the call is completely finished and ready to be disconnected.
 
-Calling this tool will automatically hang up the SIP call.
+CRITICAL DISCONNECT TRIGGERS:
+- When the customer explicitly says "not interested", "no thanks", "don't call me", or declines.
+- When an appointment or callback date/time has been confirmed.
+- When the customer explicitly says goodbye or wants to hang up.
 
-CRITICAL RULES:
-- Do not call during the initial greeting.
-- Do not call before the customer responds.
-- Do not call merely because the greeting is complete.
-- Use only after a legitimate conversation-ending condition.
+NEVER CALL THIS TOOL IF:
+- The customer says "hello", "hi", "yes", "speaking", "who is this", or answers the call.
+- The customer is asking a question or engaging in conversation.
+- The call has just started.
 
-Pass any details collected during the conversation:
-- customer_name: the customer's full name
-- appointment_date: the date if an appointment or callback was requested (e.g. "2026-08-07")
-- appointment_time: the time if an appointment or callback was requested (e.g. "05:30 PM")
+Calling this tool will immediately disconnect the phone call.
 """
 )
 async def finish_call(
@@ -372,6 +380,10 @@ async def finish_call(
 
     room_str = room_name
 
+    state = ACTIVE_CALLS.get(room_str)
+    if not state:
+        return "No active call state found."
+
     # ── Guard against duplicate invocations ─────────────────────────────────
     # The LLM can call finish_call a second time while the first is still running
     # (e.g. customer says goodbye again). Ignore the duplicate.
@@ -386,7 +398,12 @@ async def finish_call(
     print(f"Room: {room_name}")
 
     # Determine appropriate goodbye phrase dynamically based on customer conversation context
-    transcript = _build_transcript(session)
+    res = _build_transcript(session)
+    if isinstance(res, tuple) and len(res) == 3:
+        lines, customer_lines, agent_lines = res
+        transcript = "\n".join(lines)
+    else:
+        transcript = str(res or "")
     lower_t = transcript.lower()
 
     if (appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()):
@@ -398,25 +415,34 @@ async def finish_call(
         goodbye_phrase = "Thank you for your time. Have a great day! Goodbye."
 
     try:
-        # ── Step 1: Speak the goodbye phrase via TTS ──────────────────────
-        try:
-            print(f"Speaking goodbye: '{goodbye_phrase}'")
-            speech = session.say(goodbye_phrase, allow_interruptions=False)
-            if speech:
-                try:
-                    await asyncio.wait_for(speech, timeout=8.0)
-                except Exception:
-                    pass
-            # Calculate dynamic audio playback buffer based on character count (approx 10 chars/sec + 1.5s overhead)
-            play_buffer = max(5.0, min(9.0, len(goodbye_phrase) * 0.11 + 1.5))
-            print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming to complete on SIP line...")
-            await asyncio.sleep(play_buffer)
-            print("Goodbye spoken successfully.")
-        except Exception as e:
-            print(f"Warning – could not speak goodbye (non-fatal): {e}")
+        # ── Step 1: Speak the goodbye phrase via TTS ONLY IF NOT ALREADY SPOKEN ──
+        already_said_goodbye = any(g in lower_t for g in ["goodbye", "have a great day", "have a wonderful day", "bye!", "take care", "have a nice day"])
+        if not already_said_goodbye:
+            try:
+                print(f"Speaking goodbye: '{goodbye_phrase}'")
+                speech = session.say(goodbye_phrase, allow_interruptions=False)
+                if speech:
+                    try:
+                        await asyncio.wait_for(speech, timeout=6.0)
+                    except Exception:
+                        pass
+                play_buffer = max(2.5, min(5.0, len(goodbye_phrase) * 0.08 + 1.0))
+                print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming...")
+                await asyncio.sleep(play_buffer)
+                print("Goodbye spoken successfully.")
+            except Exception as e:
+                print(f"Warning – could not speak goodbye (non-fatal): {e}")
+        else:
+            print("Assistant already spoke goodbye during conversation turn. Waiting 1.8s for SIP audio buffer...")
+            await asyncio.sleep(1.8)
 
         # ── Step 2: Build transcript (after goodbye is in history) ────────
-        transcript = _build_transcript(session)
+        res_end = _build_transcript(session)
+        if isinstance(res_end, tuple) and len(res_end) == 3:
+            lines_end, _, _ = res_end
+            transcript = "\n".join(lines_end)
+        else:
+            transcript = str(res_end or "")
         print(f"Transcript lines: {len(transcript.splitlines())}")
 
         # ── Step 3: Close the agent session ──────────────────────────────
@@ -466,7 +492,7 @@ async def finish_call(
         # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
         if call_id != -1:
             try:
-                await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
+                await asyncio.sleep(1.0)  # give recorder time to flush & close
                 from agent import mix_wav_files
                 mix_wav_files(
                     f"recordings/call_{call_id}_customer.wav",
@@ -512,19 +538,5 @@ async def finish_call(
 
         # Remove active call state
         ACTIVE_CALLS.pop(room_str, None)
-    res = request_call_finish(
-        room_name=room_name,
-        reason="llm_tool",
-        customer_name=customer_name,
-        appointment_date=appointment_date,
-        appointment_time=appointment_time,
-    )
-
-    if isinstance(res, str):
-        return res
-
-    state = ACTIVE_CALLS.get(room_name)
-    if state:
-        state["call_phase"] = "finishing"
 
     return "Call ended successfully."

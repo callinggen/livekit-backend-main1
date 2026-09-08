@@ -103,6 +103,7 @@ def build_agent_instructions(
     agent_type: str,
     custom_script: str,
     customer_name: str,
+    whatsapp_enabled: bool = False,
 ) -> str:
     """
     Compose the full system prompt for the agent from:
@@ -111,6 +112,7 @@ def build_agent_instructions(
     - the campaign-specific custom script
     - the pre-known customer name
     - mandatory date/time validation rules
+    - conditional post-call WhatsApp permission protocol (if whatsapp_enabled is True)
     """
     from datetime import datetime, timezone, timedelta
 
@@ -152,6 +154,31 @@ DATE & CALLBACK RESOLUTION RULES:
 - If the customer specifies a date in the past relative to Today ({today_date}), politely inform them: "I'm sorry, that date has already passed. Could you please provide a future date?"
 """
 
+    if whatsapp_enabled:
+        whatsapp_protocol = """
+WHATSAPP BROCHURES & AUTOMATION PROTOCOL (ENABLED FOR THIS CAMPAIGN):
+- You have access to the `send_whatsapp_info` tool.
+- If the customer asks for brochures, pricing, catalogue, or details on WhatsApp at any point:
+  Invoke `send_whatsapp_info(action="SEND_BROCHURE")` immediately during the call.
+  Confirm verbally: "I have just sent our brochure directly to your WhatsApp number!"
+- CRITICAL WRAP-UP REQUIREMENT:
+  Before concluding the call or scheduling an appointment, ALWAYS ask the customer for WhatsApp permission:
+  "Would it be okay if I send our brochure and information on WhatsApp so you can review it?"
+  * If YES / sure / okay:
+    Invoke `send_whatsapp_info(action="SEND_BROCHURE")`, say: "Great! I've sent that over to your WhatsApp. Thank you and have a wonderful day!", and THEN invoke `finish_call`.
+  * If NO / not needed / decline:
+    Say: "No problem at all! Thank you and have a great day!", and invoke `finish_call`.
+- Use `send_whatsapp_info` when dispatching WhatsApp information.
+- Use `finish_call` ONLY after the conversation and WhatsApp protocol have concluded.
+"""
+    else:
+        whatsapp_protocol = """
+WHATSAPP AUTOMATION IS DISABLED FOR THIS CAMPAIGN:
+- Do NOT offer to send WhatsApp messages or brochures.
+- Do NOT ask for WhatsApp permission.
+- If the customer asks, say: "I don't have WhatsApp sharing enabled on this line, but our team can follow up via email."
+"""
+
     if agent_type in AGENT_BASE_PROMPTS:
         base = AGENT_BASE_PROMPTS[agent_type]
     else:
@@ -184,6 +211,8 @@ CAMPAIGN-SPECIFIC SCRIPT:
 {custom_script}
 
 {DATE_TIME_VALIDATION_RULES}
+
+{whatsapp_protocol}
 
 REMINDER ON HANGUP:
 Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
@@ -352,22 +381,19 @@ class VoicemailDetector:
             if elapsed > self.timeout:
                 return None
             
-            transcript_raw = _build_transcript(self.session)
-            if not transcript_raw:
+            # _build_transcript always returns a tuple (lines, customer_count, agent_count)
+            transcript_tuple = _build_transcript(self.session)
+            if isinstance(transcript_tuple, tuple):
+                transcript_lines_list = transcript_tuple[0]
+            else:
+                transcript_lines_list = transcript_tuple if transcript_tuple else []
+
+            if not transcript_lines_list:
                 await asyncio.sleep(1.0)
                 continue
-                
-            if isinstance(transcript_raw, tuple):
-                print(f"[VOICEMAIL DETECTOR] call_id={self.session.call_id if hasattr(self.session, 'call_id') else 'unknown'} type(transcript_raw)={type(transcript_raw)} type(transcript_raw[0])={type(transcript_raw[0])}")
-                try:
-                    print(f"[VOICEMAIL DETECTOR] sample_value={transcript_raw[0][0] if transcript_raw[0] else None}")
-                except Exception:
-                    pass
-                transcript_text = "\n".join(transcript_raw[0])
-            else:
-                transcript_text = transcript_raw
-                
-            if not transcript_text:
+
+            transcript_text = "\n".join(transcript_lines_list)
+            if not transcript_text.strip():
                 await asyncio.sleep(1.0)
                 continue
 
@@ -395,12 +421,66 @@ class VoicemailDetector:
 class DynamicAgent(Agent):
     """Agent whose behaviour is fully driven by the campaign configuration."""
 
-    def __init__(self, agent_type: str, custom_script: str, customer_name: str):
-        instructions = build_agent_instructions(agent_type, custom_script, customer_name)
+    def __init__(
+        self,
+        agent_type: str,
+        custom_script: str,
+        customer_name: str,
+        greeting_instructions: str = "",
+        call_answered_event: asyncio.Event | None = None,
+        whatsapp_enabled: bool = False,
+    ):
+        instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
+        self._greeting_instructions = greeting_instructions
+        self._call_answered_event = call_answered_event
+        tools: list[Any] = [finish_call]
+        if whatsapp_enabled:
+            try:
+                from whatsapp_tool import send_whatsapp_info
+                tools.append(send_whatsapp_info)
+            except Exception as tool_err:
+                print(f"[agent] Could not load whatsapp_tool: {tool_err}")
         super().__init__(
             instructions=instructions,
-            tools=[finish_call],
+            tools=tools,
         )
+
+    async def on_enter(self) -> None:
+        """Deliver the greeting when the agent session is active AND the customer has answered.
+        Uses session.say() to go straight to TTS — no LLM needed for the opening line.
+        This is faster and more reliable than generate_reply for the initial greeting.
+        """
+        if self._greeting_instructions:
+            # Wait for call to be answered (customer picks up the phone or joins)
+            if self._call_answered_event is not None and not self._call_answered_event.is_set():
+                try:
+                    await asyncio.wait_for(self._call_answered_event.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    print("[on_enter] Timeout waiting for call_answered_event. Delivering greeting now as failsafe.")
+
+            # Small buffer to ensure WebRTC audio track subscription is live on the SIP gateway
+            await asyncio.sleep(0.5)
+            print(f"[on_enter] Delivering greeting via session.say() (direct TTS, text: '{self._greeting_instructions[:80]}...')")
+            try:
+                handle = self.session.say(
+                    self._greeting_instructions,
+                    allow_interruptions=True,
+                )
+                await handle
+                print("[on_enter] Greeting delivered successfully.")
+                if hasattr(self.session, "_transcript_lines"):
+                    lines = getattr(self.session, "_transcript_lines")
+                    if not any(self._greeting_instructions[:30] in l for l in lines):
+                        lines.append(f"assistant: {self._greeting_instructions}")
+            except Exception as e:
+                print(f"[on_enter] say() error: {e}. Falling back to generate_reply.")
+                try:
+                    await self.session.generate_reply(
+                        instructions=self._greeting_instructions,
+                        allow_interruptions=True,
+                    )
+                except Exception as e2:
+                    print(f"[on_enter] generate_reply fallback also failed: {e2}")
 
 
 async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
@@ -476,6 +556,18 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                     elif "Voice-E" in campaign.agent:
                         voice_profile = "Meera" # Female voice
 
+            whatsapp_enabled = False
+            if campaign and campaign.whatsapp_automation:
+                wa_config = campaign.whatsapp_automation
+                if isinstance(wa_config, str):
+                    try:
+                        import json
+                        wa_config = json.loads(wa_config)
+                    except Exception:
+                        wa_config = {}
+                if isinstance(wa_config, dict):
+                    whatsapp_enabled = bool(wa_config.get("enabled", False))
+
             return {
                 "job_id": job.id if job else None,
                 "campaign_id": campaign.id if campaign else None,
@@ -486,11 +578,13 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                 "metadata_fields": contact.metadata_fields if contact else {},
                 "voicemail_detection": campaign.voicemail_detection if campaign else None,
                 "voice": voice_profile,
+                "whatsapp_enabled": whatsapp_enabled,
+                "whatsapp_automation": campaign.whatsapp_automation if campaign else None,
                 "direction": "outbound",
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "direction": "outbound"}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False, "direction": "outbound"}
 
 
 async def entrypoint(ctx: JobContext):
@@ -545,6 +639,23 @@ async def entrypoint(ctx: JobContext):
     call_answered_event = asyncio.Event()
     customer_disconnected_event = asyncio.Event()
 
+    def _mark_call_answered(source: str):
+        if not call_answered_event.is_set():
+            call_answered_event.set()
+            t_ans = time.monotonic()
+            state = ACTIVE_CALLS.get(room_name)
+            if state:
+                if state.get("answered_at") is None:
+                    state["answered_at"] = t_ans
+                    state["call_phase"] = "greeting"
+                    from backend_client import notify_call_active
+                    _safe_create_task(notify_call_active(room_name), name="notify_call_active", call_id=call_id)
+                    print(f"[PERF] sip_active={t_ans:.3f}")
+                    print(f"[PERF] answered_at={t_ans:.3f}")
+                    print(f"[CALL] answered_at set at {state['answered_at']} (source: {source})")
+            else:
+                print(f"[CALL] answered_at triggered before state created (source: {source})")
+
     @ctx.room.on("participant_attributes_changed")
     def on_participant_attributes_changed(changed_attributes: dict, participant: rtc.Participant):
         if getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
@@ -552,17 +663,22 @@ async def entrypoint(ctx: JobContext):
             if status:
                 print(f"[SIP] callStatus changed to: {status}")
                 if status == "active":
-                    state = ACTIVE_CALLS.get(room_name)
-                    if state and state.get("answered_at") is None:
-                        from backend_client import notify_call_active
-                        _safe_create_task(notify_call_active(room_name), name="notify_call_active", call_id=call_id)
-                        t_ans = time.monotonic()
-                        state["answered_at"] = t_ans
-                        state["call_phase"] = "greeting"
-                        call_answered_event.set()
-                        print(f"[PERF] sip_active={t_ans:.3f}")
-                        print(f"[PERF] answered_at={t_ans:.3f}")
-                        print(f"[CALL] answered_at set at {state['answered_at']}")
+                    _mark_call_answered("participant_attributes_changed_active")
+
+    @ctx.room.on("participant_connected")
+    def on_participant_connected(participant: rtc.RemoteParticipant):
+        is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+            participant.identity != ctx.room.local_participant.identity
+        )
+        if is_customer:
+            print(f"[ROOM] Remote participant connected: identity='{participant.identity}' kind={getattr(participant, 'kind', None)}")
+            if getattr(participant, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                status = participant.attributes.get("sip.callStatus")
+                if status == "active":
+                    _mark_call_answered("participant_connected_sip_active")
+            else:
+                # Web / Direct caller
+                _mark_call_answered("participant_connected_direct")
 
     @ctx.room.on("disconnected")
     def on_room_disconnected(*args):
@@ -601,12 +717,25 @@ async def entrypoint(ctx: JobContext):
         is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
             participant.identity != ctx.room.local_participant.identity
         )
-        if track.kind == rtc.TrackKind.KIND_AUDIO and is_customer:
-            asyncio.create_task(record_track(track, call_id))
+        if is_customer:
+            # Subscribed audio track from customer -> call is definitely answered & audio active
+            _mark_call_answered("track_subscribed")
+            if track.kind == rtc.TrackKind.KIND_AUDIO:
+                asyncio.create_task(record_track(track, call_id))
 
     try:
         await ctx.connect()
         print(f"Connected to room: {ctx.room.name}")
+
+        # Scan if remote participant is already in room upon connect
+        for participant in ctx.room.remote_participants.values():
+            is_customer = participant.identity == "customer" or "customer" in participant.identity.lower() or (
+                participant.identity != ctx.room.local_participant.identity
+            )
+            if is_customer:
+                status = participant.attributes.get("sip.callStatus")
+                if status == "active" or getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                    _mark_call_answered("existing_participant_connect")
 
         # If it's an inbound call and still call_id == -1, initialize it via backend
         if (room_name.startswith("inbound-call-") or "inbound" in room_name) and call_id == -1:
@@ -745,29 +874,54 @@ async def entrypoint(ctx: JobContext):
                     if "sip_disconnected_event" in state:
                         state["sip_disconnected_event"].set()
                     print(f"[SIP END] call_id={call_id} sip_participant={participant.sid} sip_ended_at={state['sip_ended_at']} source=sip_participant_disconnect")
-            
-            _safe_create_task(_handle_unexpected_disconnect("customer hung up"), name="_handle_unexpected_disconnect", call_id=call_id)
 
-        # Dynamic voice selection mapping for Sarvam bulbul v2 compatible voices
-        SARVAM_VOICE_MAPPING = {
-            "Meera": "anushka",
-            "Raj": "abhilash",
-            "Manisha": "manisha",
-            "Karun": "karun",
-            "Vidya": "vidya",
-            "Hitesh": "hitesh",
-            "Female 1": "anushka",
-            "Female 2": "anushka",
-            "Male 1": "abhilash",
-            "Male 2": "abhilash",
-            "Nova (ElevenLabs)": "anushka",
+                # Only treat as customer hangup if finish_call is NOT already running
+                # (if finishing=True, the agent ended the call — not the customer)
+                if state and not state.get("finishing"):
+                    _safe_create_task(_handle_unexpected_disconnect("customer hung up"), name="_handle_unexpected_disconnect", call_id=call_id)
+                else:
+                    print(f"[SIP END] call_id={call_id} — SIP participant left after agent-initiated hangup. Not treating as customer disconnect.")
+
+        # Dynamic voice selection mapping for Sarvam bulbul:v3 compatible voices
+        ALLOWED_SARVAM_SPEAKERS = {
+            "shubh", "ritu", "rahul", "pooja", "simran", "kavya", "amit", "ratan", "rohan",
+            "dev", "ishita", "shreya", "manan", "sumit", "priya", "aditya", "kabir", "neha",
+            "varun", "roopa", "aayan", "ashutosh", "advait", "amelia", "sophia", "suhani",
+            "rupali", "tanya", "shruti", "kavitha"
         }
-        db_voice = campaign_info.get("voice", "Meera")
-        speaker_voice = SARVAM_VOICE_MAPPING.get(db_voice, "anushka")
-        print(f"[agent] Configured agent voice profile: {db_voice} -> mapped to Sarvam speaker: {speaker_voice}")
+        SARVAM_VOICE_MAPPING = {
+            "meera": "shreya",
+            "meera (morning tax)": "shreya",
+            "raj": "aditya",
+            "raj (morning tax)": "aditya",
+            "john (morning tax)": "aditya",
+            "voice-e": "shreya",
+            "voice-e (tax agent)": "shreya",
+            "manisha": "kavya",
+            "karun": "rahul",
+            "vidya": "priya",
+            "hitesh": "aditya",
+            "female 1": "shreya",
+            "female 2": "pooja",
+            "male 1": "aditya",
+            "male 2": "rahul",
+            "nova (elevenlabs)": "shreya",
+            "alex": "aditya",
+            "james": "aditya",
+            "sarah": "simran",
+            "anushka": "shreya",
+            "abhilash": "aditya",
+        }
+        raw_db_voice = str(campaign_info.get("voice", "Meera")).strip()
+        mapped_speaker = SARVAM_VOICE_MAPPING.get(raw_db_voice.lower(), raw_db_voice.lower())
+        speaker_voice = mapped_speaker if mapped_speaker in ALLOWED_SARVAM_SPEAKERS else "shreya"
+        print(f"[agent] Configured agent voice profile: '{raw_db_voice}' -> mapped to Sarvam bulbul:v3 speaker: '{speaker_voice}'")
 
         session = AgentSession(
-            vad=silero.VAD.load(),
+            vad=silero.VAD.load(
+                min_silence_duration=0.35,
+                activation_threshold=0.35,
+            ),
             stt=sarvam.STT(),
 
             llm=openai.LLM(
@@ -777,7 +931,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
-                model="bulbul:v2",
+                model="bulbul:v3",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
             ),
@@ -809,6 +963,24 @@ async def entrypoint(ctx: JobContext):
                         # ONLY append agent lines here. User lines come from STT below to avoid dupes/misses.
                         if role == "assistant":
                             transcript_lines.append(f"{role}: {clean_t}")
+
+                            # Auto-hangup safety net: If assistant spoke a terminal goodbye, schedule auto-hangup
+                            lower_agent_msg = clean_t.lower()
+                            terminal_goodbye_cues = [
+                                "goodbye", "good bye", "have a great day", "have a wonderful day",
+                                "have a nice day", "take care", "bye bye", "bye!"
+                            ]
+                            if any(cue in lower_agent_msg for cue in terminal_goodbye_cues):
+                                state = ACTIVE_CALLS.get(room_name)
+                                if state and state.get("call_phase") != "greeting" and not state.get("finishing"):
+                                    async def _auto_goodbye_hangup():
+                                        # Wait 4 seconds to let TTS stream out to the customer
+                                        await asyncio.sleep(4.0)
+                                        st = ACTIVE_CALLS.get(room_name)
+                                        if st and not st.get("finishing"):
+                                            print(f"[AUTO HANGUP TRIGGERED] Assistant said goodbye in message: '{clean_t[:60]}...' -> Hanging up call.")
+                                            request_call_finish(room_name, reason="assistant_goodbye_auto_hangup")
+                                    _safe_create_task(_auto_goodbye_hangup(), name="_auto_goodbye_hangup", call_id=call_id)
             except Exception:
                 pass
 
@@ -818,6 +990,7 @@ async def entrypoint(ctx: JobContext):
             if text and text.strip():
                 clean_t = text.strip()
                 if not any(h in clean_t.lower() for h in ["wave of covid", "second wave", "third wave"]):
+                    _mark_call_answered("user_speech")
                     print(f"[STT] call_id={call_id} customer_track=True speech_start=None speech_end=None transcript_received=True text='{clean_t}'")
                     transcript_lines.append(f"user: {clean_t}")
                     state = ACTIVE_CALLS.get(room_name)
@@ -835,7 +1008,7 @@ async def entrypoint(ctx: JobContext):
             "agent_id": campaign_info.get("agent_id"),
             "agent_name": agent_type,
             "script": custom_script[:50] + "..." if custom_script else "",
-            "voice_profile": db_voice,
+            "voice_profile": raw_db_voice,
             "lines": transcript_lines,
             "answered_at": None,
             "disconnected_event": customer_disconnected_event,
@@ -849,7 +1022,97 @@ async def entrypoint(ctx: JobContext):
         }
 
 
-        print("Session started")
+        # Build the actual greeting text to speak (goes to TTS directly via session.say)
+        direction = campaign_info.get("direction", "outbound")
+        if direction == "inbound":
+            # Inbound: generate a natural greeting via instructions
+            greeting_text = (
+                f"Hello! Thank you for calling Morning Tax. "
+                f"I'm {agent_type}, your AI tax consultant. How can I help you today?"
+            )
+        else:
+            # Outbound: find the first actual spoken greeting line from the script.
+            # Scripts often start with section headers like "AGENT IDENTITY:", "STEP 1 —", etc.
+            # We need to find the first line that is actual speech (not a header/instruction).
+            script_lines = [l.strip() for l in custom_script.strip().splitlines() if l.strip()]
+
+            # Priority 1: find a quoted greeting in the script (e.g. "Hi, ..." or 'Hello ...')
+            greeting_text = None
+            for line in script_lines:
+                # Match lines that are or contain a quoted spoken greeting
+                if line.startswith('"') or line.startswith("'"):
+                    greeting_text = line.strip('"').strip("'").strip()
+                    break
+                # Match lines that contain a quoted greeting after a colon (e.g. Greet: "Hi...")
+                quoted = re.search(r'["\u201c]([^"\u201d]{10,200})["\u201d]', line)
+                if quoted and any(w in quoted.group(1).lower() for w in ["hi", "hello", "good morning", "good afternoon", "namaste", "may i speak"]):
+                    greeting_text = quoted.group(1).strip()
+                    break
+
+            # Priority 2: first non-header, non-instruction line
+            if not greeting_text:
+                header_patterns = re.compile(
+                    r'^(AGENT IDENTITY|STEP \d|OBJECTION|CLOSING|GOAL|INSTRUCTIONS?|NOTE|RULES?|GUIDELINES?)',
+                    re.IGNORECASE
+                )
+                for line in script_lines:
+                    if not header_patterns.match(line) and len(line) > 20:
+                        greeting_text = line
+                        break
+
+            # Final fallback: first line regardless
+            if not greeting_text:
+                greeting_text = script_lines[0] if script_lines else custom_script[:250].strip()
+
+            # Personalize with customer name if available and not already present
+            if customer_name.strip() and customer_name.lower() not in greeting_text.lower():
+                personalized = greeting_text.replace("{{customer_name}}", customer_name)
+                if personalized == greeting_text:
+                    # Try to insert name after "Hi" or "Hello"
+                    personalized = re.sub(
+                        r'\b(Hi|Hello|Good morning|Good afternoon),?\s*(may I speak with)?',
+                        lambda m: f"{m.group(1)}, {customer_name}! " if not m.group(2) else m.group(0),
+                        greeting_text, count=1, flags=re.IGNORECASE
+                    )
+                greeting_text = personalized if personalized != greeting_text else greeting_text
+            elif "{{customer_name}}" in greeting_text:
+                greeting_text = greeting_text.replace("{{customer_name}}", customer_name or "there")
+
+        # Check if greeting_text looks like system prompt/instructions rather than spoken dialogue
+        system_instruction_indicators = [
+            "you are", "your goal", "your role", "act as", "professional and courteous",
+            "campaign:", "prompt:", "rules:", "instructions:", "step 1", "step 2",
+            "guidelines:", "context:", "system prompt"
+        ]
+        is_system_prompt = any(indicator in (greeting_text or "").lower() for indicator in system_instruction_indicators)
+
+        if not greeting_text or not greeting_text.strip() or is_system_prompt or len(greeting_text) > 180:
+            clean_name = (customer_name or "").strip()
+            if clean_name:
+                greeting_text = f"Hello, may I speak with {clean_name}?"
+            else:
+                greeting_text = f"Hello! This is {agent_type} calling. How are you today?"
+
+        print(f"[agent] Greeting text: '{greeting_text[:100]}...'")
+
+        # Start session immediately so agent audio track is published to LiveKit room
+        t_session_start = time.monotonic()
+        print(f"[PERF] session_start={t_session_start:.3f}")
+        await session.start(
+            room=ctx.room,
+            agent=DynamicAgent(
+                agent_type=agent_type,
+                custom_script=custom_script,
+                customer_name=customer_name,
+                greeting_instructions=greeting_text,
+                call_answered_event=call_answered_event,
+                whatsapp_enabled=campaign_info.get("whatsapp_enabled", False),
+            ),
+        )
+        if ACTIVE_CALLS.get(room_name):
+            ACTIVE_CALLS[room_name]["session"] = session
+
+        print("Session started and audio track published")
 
         # Identify the local agent track to record it as well
         agent_track = None
@@ -935,6 +1198,7 @@ async def entrypoint(ctx: JobContext):
                 },
             )
             shutdown_event.set()
+            return
         else:
             print("Waiting for SIP call to become active...")
             try:
@@ -949,23 +1213,6 @@ async def entrypoint(ctx: JobContext):
                 )
                 shutdown_event.set()
                 return
-
-            # LATENCY FIX: Start session AFTER call is answered to prevent VAD/STT from processing ringing audio
-            t_session_start = time.monotonic()
-            print(f"[PERF] session_start={t_session_start:.3f}")
-            await session.start(
-                room=ctx.room,
-                agent=DynamicAgent(
-                    agent_type=agent_type,
-                    custom_script=custom_script,
-                    customer_name=customer_name,
-                ),
-            )
-            # Update the session in ACTIVE_CALLS
-            if ACTIVE_CALLS.get(room_name):
-                ACTIVE_CALLS[room_name]["session"] = session
-
-            print("Session started")
             
             # Start Voicemail Detector
             vd_config = campaign_info.get("voicemail_detection") or {"enabled": True, "timeout": 45}
@@ -978,55 +1225,9 @@ async def entrypoint(ctx: JobContext):
                         await _handle_voicemail_disconnect(result)
                 _safe_create_task(run_voicemail_detector(), name="run_voicemail_detector", call_id=call_id)
 
-            # Small buffer to let audio pipeline stabilize
-            await asyncio.sleep(0.5)
-
-            direction = campaign_info.get("direction", "outbound")
-            if direction == "inbound":
-                greeting_instructions = (
-                    f"You are answering an inbound call from the customer. The customer's name is '{customer_name}' (if known). "
-                    f"Greet them warmly (e.g., 'Thank you for calling Morning Tax, my name is {agent_type}. How can I help you today?') "
-                    "or follow Step 1 of the script if applicable. Start speaking now."
-                )
-            else:
-                # Force the agent to strictly follow STEP 1 of the script verbatim
-                greeting_instructions = (
-                    f"You are now starting the call. The customer's name is '{customer_name}'. "
-                    "Begin EXACTLY at STEP 1 of the campaign script — say the EXACT words written there, "
-                    "do NOT paraphrase or improvise. Do not skip any step. Start speaking now."
-                    if customer_name.strip()
-                    else
-                    "You are now starting the call. Begin EXACTLY at STEP 1 of the campaign script — "
-                    "say the EXACT words written there, do NOT paraphrase or improvise. Start speaking now."
-                )
-
-            t_gen_reply = time.monotonic()
-            print(f"\n[AI FIRST RESPONSE TRACE]")
+            print(f"\n[GREETING] Customer answered — greeting will be delivered via on_enter().")
             print(f"call_id={call_id}")
             print(f"session_start={t_session_start:.3f}")
-            print(f"generate_reply_start={t_gen_reply:.3f}")
-            
-            @session.on("agent_speech_started")  # type: ignore
-            def on_agent_speech_started():
-                t_first_audio = time.monotonic()
-                state = ACTIVE_CALLS.get(room_name)
-                if state:
-                    state["speech_started_at"] = t_first_audio
-                print(f"[PERF] agent_speech_started={t_first_audio:.3f}")
-                
-            @session.on("agent_speech_stopped")  # type: ignore
-            def on_agent_speech_stopped():
-                t_complete = time.monotonic()
-                print(f"[PERF] greeting_complete={t_complete:.3f}")
-                
-            try:
-                await session.generate_reply(instructions=greeting_instructions)
-                print(f"[PERF] generate_reply_success=true")
-                print("Greeting generation completed")
-            except Exception as e:
-                print(f"[PERF] generate_reply_error=true")
-                print(f"[GREETING] generation FAILED: {e}")
-                raise RuntimeError(f"agent_tool_schema_error: {e}")
 
         # Silence detector
         async def silence_detector_loop():
@@ -1078,8 +1279,8 @@ async def entrypoint(ctx: JobContext):
                         if not is_ai_busy:
                             silence_timer += dt
                             
-                        if silence_timer >= 10.0:
-                            print("[SILENCE] Customer silent for 10 seconds - ending call")
+                        if silence_timer >= 30.0:
+                            print("[SILENCE] Customer silent for 30 seconds - ending call")
                             request_call_finish(room_name, reason="customer_silence")
                             break
 
@@ -1145,12 +1346,23 @@ if __name__ == "__main__":
         print("Please stop it before starting a new one to prevent multiple agents in a call.")
         sys.exit(1)
 
-    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
+    # Clean up any stale lock files from previous runs
+    import glob
+    import tempfile
+    for lf in glob.glob(os.path.join(tempfile.gettempdir(), "livekit_room_*.lock")):
+        try:
+            os.remove(lf)
+        except Exception:
+            pass
+
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-outbound-agent")
     print(f"[agent] Registering LiveKit agent worker with name: '{agent_name}'")
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             agent_name=agent_name,
-            num_idle_processes=5,
+            num_idle_processes=2,
+            load_threshold=float('inf'),
+            load_fnc=lambda: 0.0,
         )
     )
