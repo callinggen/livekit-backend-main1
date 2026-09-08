@@ -276,8 +276,8 @@ async def get_user_activity(user_id: str, db: AsyncSession = Depends(get_db)):
     total_campaigns = camp_res.scalar() or 0
 
     # 2. Today's calls
-    now_utc = datetime.now(timezone.utc)
-    today_start = datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=timezone.utc)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    today_start = datetime(now_utc.year, now_utc.month, now_utc.day)
 
     today_res = await db.execute(
         select(
