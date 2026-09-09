@@ -67,7 +67,7 @@ async def login(
         )
         
     # Update last login
-    user.last_login_at = datetime.now(timezone.utc)
+    user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
         
     return Token(
