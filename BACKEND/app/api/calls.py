@@ -450,7 +450,7 @@ async def mark_call_active(
 
     return {"success": True, "call_id": call.id}
 
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from app.models.user import User
 from app.core.security import get_current_user
 
@@ -458,13 +458,26 @@ from app.core.security import get_current_user
 async def list_calls(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    page: int = 1,
+    page_size: int = 100,
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    direction: Optional[str] = None,
+    campaign_id: Optional[int] = None,
 ):
     """
-    Return all calls for current user joined with their contact and campaign info.
-    Used by the Responses page.
+    Return paginated calls for current user joined with their contact and campaign info.
+    Supports page, page_size (max 500), search, status, direction, campaign_id filters.
+    Returns { total, page, page_size, calls: [...] }
     """
     from app.models.agent import Agent
-    result = await db.execute(
+
+    # Cap page_size to avoid abuse
+    page_size = min(page_size, 500)
+    page = max(page, 1)
+    offset = (page - 1) * page_size
+
+    base_query = (
         select(Call, Contact, Campaign, Agent)
         .outerjoin(Contact, Call.contact_id == Contact.id)
         .outerjoin(Campaign, Contact.campaign_id == Campaign.id)
@@ -476,8 +489,33 @@ async def list_calls(
             )
         )
         .where(or_(Campaign.campaign_name != "Website Demo Requests", Campaign.campaign_name.is_(None)))
-        .order_by(Call.id.desc())
     )
+
+    # Apply optional filters
+    if status:
+        base_query = base_query.where(Call.status == status.lower())
+    if direction:
+        base_query = base_query.where(Call.direction == direction.lower())
+    if campaign_id:
+        base_query = base_query.where(Contact.campaign_id == campaign_id)
+    if search:
+        search_like = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                Contact.name.ilike(search_like),
+                Contact.phone.ilike(search_like),
+                Call.caller_number.ilike(search_like),
+            )
+        )
+
+    # Count total matching rows
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # Fetch paginated page
+    paged_query = base_query.order_by(Call.id.desc()).offset(offset).limit(page_size)
+    result = await db.execute(paged_query)
     rows = result.all()
 
     calls = []
@@ -545,7 +583,7 @@ async def list_calls(
             "failure_reason": call.failure_reason or "",
             "sip_was_active": call.sip_was_active,
         })
-    return calls
+    return {"total": total, "page": page, "page_size": page_size, "calls": calls}
 
 
 @router.post("/calls/{call_id}/whatsapp-action")
