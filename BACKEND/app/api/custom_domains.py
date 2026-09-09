@@ -79,17 +79,37 @@ async def get_verified_senders(
         else default_from.strip()
     )
 
-    senders: List[VerifiedSenderOut] = [
-        VerifiedSenderOut(
-            email=clean_default_email,
-            display_name=current_user.company_name or "CallingGen",
-            domain="callinggen.in",
-            is_default=True,
-            is_verified=True,
-        )
-    ]
+    senders: List[VerifiedSenderOut] = []
 
-    # Fetch user's verified custom domains
+    # 1. Fetch user's active & verified SMTP mailboxes (Method 2 - Highest Priority)
+    from app.models.user_smtp_config import UserSmtpConfig
+    smtp_stmt = (
+        select(UserSmtpConfig)
+        .where(
+            and_(
+                UserSmtpConfig.user_id == current_user.id,
+                UserSmtpConfig.is_active == True,
+                UserSmtpConfig.is_verified == True,
+            )
+        )
+        .order_by(UserSmtpConfig.is_default.desc(), UserSmtpConfig.id.asc())
+    )
+    user_mailboxes = (await db.execute(smtp_stmt)).scalars().all()
+    for mb in user_mailboxes:
+        senders.append(
+            VerifiedSenderOut(
+                email=mb.sender_email,
+                display_name=mb.sender_name or current_user.company_name or mb.sender_email,
+                domain=mb.sender_email.split("@")[-1] if "@" in mb.sender_email else "connected-mailbox",
+                is_default=mb.is_default,
+                is_verified=True,
+                is_smtp=True,
+                provider=mb.provider,
+                mailbox_id=mb.id,
+            )
+        )
+
+    # 2. Fetch user's verified custom domains (Method 1)
     stmt = select(CustomEmailDomain).where(
         and_(
             CustomEmailDomain.user_id == current_user.id,
@@ -107,8 +127,21 @@ async def get_verified_senders(
                 domain=d.domain,
                 is_default=False,
                 is_verified=True,
+                is_smtp=False,
             )
         )
+
+    # 3. Default CallingGen Platform Mailer
+    senders.append(
+        VerifiedSenderOut(
+            email=clean_default_email,
+            display_name=current_user.company_name or "CallingGen",
+            domain="callinggen.in",
+            is_default=(len(user_mailboxes) == 0),
+            is_verified=True,
+            is_smtp=False,
+        )
+    )
 
     return senders
 

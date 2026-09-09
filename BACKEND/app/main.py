@@ -17,6 +17,7 @@ from app.api.calendar import router as calendar_router
 from app.api.email_campaigns import router as email_campaign_router
 from app.api.email_templates import router as email_template_router
 from app.api.custom_domains import router as custom_domain_router
+from app.api.smtp_configs import router as smtp_configs_router
 from app.api.phone_numbers import router as phone_numbers_router
 from app.api.payments import router as payment_router
 from app.api.whatsapp_send import router as whatsapp_send_router
@@ -47,6 +48,7 @@ from app.models.email_campaign import EmailCampaign  # registers email tables
 from app.models.email_contact import EmailContact    # registers email tables
 from app.models.email_template import EmailMarketingTemplate  # registers template table
 from app.models.custom_domain import CustomEmailDomain        # registers custom domain table
+from app.models.user_smtp_config import UserSmtpConfig        # registers smtp mailbox table
 from app.models.payment import Payment
 from app.models.whatsapp_action import WhatsAppAction
 from app.models.whatsapp_material import WhatsAppMaterial
@@ -279,6 +281,7 @@ app.include_router(campaign_router, prefix="/api", tags=["Campaigns"])
 app.include_router(email_campaign_router, prefix="/api", tags=["Email Campaigns"])
 app.include_router(email_template_router, prefix="/api", tags=["Email Templates"])
 app.include_router(custom_domain_router, prefix="/api", tags=["Custom Sending Domains"])
+app.include_router(smtp_configs_router, prefix="/api", tags=["Connected Mailboxes (SMTP)"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])

@@ -20,4 +20,5 @@ from .email_campaign import EmailCampaign
 from .email_contact import EmailContact
 from .email_template import EmailMarketingTemplate
 from .custom_domain import CustomEmailDomain
+from .user_smtp_config import UserSmtpConfig
 
