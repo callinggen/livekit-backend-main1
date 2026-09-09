@@ -77,6 +77,8 @@ class EmailService:
         reply_to: str | None = None,
         template_id: str | None = None,
         template_variables: dict | None = None,
+        attachments: list | None = None,
+        headers: dict | None = None,
     ):
         if not to_email:
             print("[EmailService] No recipient email specified, skipping.")
@@ -109,6 +111,12 @@ class EmailService:
 
         if reply_to:
             params["reply_to"] = reply_to
+
+        if attachments:
+            params["attachments"] = attachments
+
+        if headers:
+            params["headers"] = headers
 
         try:
             try:

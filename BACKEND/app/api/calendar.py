@@ -144,9 +144,9 @@ def generate_ics_invite(
     attendee_email: str,
     attendee_name: str,
     admin_email: str,
-    meeting_link: str = "https://meet.google.com/gen-calling-demo"
+    meeting_link: str = "https://meet.google.com/hfi-jick-ijc"
 ) -> str:
-    """Generates standard iCalendar (.ics) format string for Google Calendar / Outlook auto-invite."""
+    """Generates standard RFC 5545 iCalendar (.ics) format string for Google Calendar, Apple Calendar, and Outlook auto-invite."""
     fmt = "%Y%m%dT%H%M%SZ"
     start_utc = start_dt.astimezone(timezone.utc).strftime(fmt)
     end_utc = end_dt.astimezone(timezone.utc).strftime(fmt)
@@ -166,30 +166,31 @@ def generate_ics_invite(
         f"DTEND:{end_utc}\r\n"
         f"SUMMARY:{summary}\r\n"
         f"DESCRIPTION:{description}\\nMeeting Link: {meeting_link}\r\n"
-        f"LOCATION:Google Meet Video Call ({meeting_link})\r\n"
+        f"LOCATION:Google Meet ({meeting_link})\r\n"
         f"ORGANIZER;CN=CallingGen AI:mailto:{organizer_email}\r\n"
-        f"ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN={attendee_name}:mailto:{attendee_email}\r\n"
+        f"ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN={attendee_name}:mailto:{attendee_email}\r\n"
         f"ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=CallingGen Admin:mailto:{admin_email}\r\n"
         "STATUS:CONFIRMED\r\n"
         "SEQUENCE:0\r\n"
+        "TRANSP:OPAQUE\r\n"
+        "BEGIN:VALARM\r\n"
+        "TRIGGER:-PT15M\r\n"
+        "ACTION:DISPLAY\r\n"
+        "DESCRIPTION:CallingGen Demo Reminder (in 15 min)\r\n"
+        "END:VALARM\r\n"
         "END:VEVENT\r\n"
         "END:VCALENDAR\r\n"
     )
 
-async def send_email_notifications(booking: BookSlotRequest):
+async def send_email_notifications(booking: BookSlotRequest, meet_link_override: str | None = None):
     """
-    Sends premium Resend-styled HTML email confirmations to Customer & Admin (saisathwik@genxreality.in) with iCalendar Google Invite attachment.
+    Sends premium Resend HTML email confirmations to Customer (booking.email) & Admin (calliggen0@gmail.com)
+    with Google Meet video link and iCalendar (.ics) Google Calendar attachments.
     """
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USERNAME") or os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
     admin_email = os.getenv("ADMIN_EMAIL", "saisathwik@genxreality.in")
-    meeting_link = os.getenv("MEETING_LINK", "https://meet.google.com/hfi-jick-ijc")
-
-    if not smtp_user or not smtp_pass:
-        print(f"[EMAIL NOTIFICATION] Skipped: SMTP_USERNAME or SMTP_PASSWORD not configured in .env.")
-        return
+    support_email = os.getenv("SUPPORT_EMAIL", "callinggen0@gmail.com")
+    from_email = os.getenv("RESEND_FROM_EMAIL", "CallingGen <noreply@callinggen.in>")
+    meeting_link = meet_link_override or os.getenv("MEETING_LINK", "https://meet.google.com/hfi-jick-ijc")
 
     try:
         dt_obj = datetime.fromisoformat(booking.appointment_time)
@@ -200,14 +201,60 @@ async def send_email_notifications(booking: BookSlotRequest):
         readable_time = ""
         dt_obj = datetime.now(LOCAL_TZ)
 
-    # 1. Customer Confirmation Email (Resend Style with Google Calendar Invite)
-    cust_msg = MIMEMultipart("mixed")
-    cust_msg["Subject"] = f"Confirmed: Your CallingGen Voice AI Demo on {readable_date}"
-    cust_msg["From"] = f"CallingGen AI <{smtp_user}>"
-    cust_msg["To"] = booking.email
+    end_dt = dt_obj + timedelta(hours=1)
 
-    alt_part = MIMEMultipart("alternative")
+    # Generate 1-Click Calendar Web URLs
+    import urllib.parse
+    import base64
 
+    fmt_gcal = "%Y%m%dT%H%M%SZ"
+    start_utc_str = dt_obj.astimezone(timezone.utc).strftime(fmt_gcal)
+    end_utc_str = end_dt.astimezone(timezone.utc).strftime(fmt_gcal)
+
+    gcal_params = {
+        "action": "TEMPLATE",
+        "text": f"CallingGen Demo - {booking.name}",
+        "details": f"1-on-1 Personalized CallingGen Voice AI Demo Consultation\n\nClient: {booking.name}\nCompany: {booking.company}\nPhone: {booking.phone}\n\nJoin Google Meet: {meeting_link}",
+        "location": meeting_link,
+        "dates": f"{start_utc_str}/{end_utc_str}",
+    }
+    google_cal_url = f"https://calendar.google.com/calendar/render?{urllib.parse.urlencode(gcal_params)}"
+
+    fmt_outlook = "%Y-%m-%dT%H:%M:%SZ"
+    outlook_start = dt_obj.astimezone(timezone.utc).strftime(fmt_outlook)
+    outlook_end = end_dt.astimezone(timezone.utc).strftime(fmt_outlook)
+    outlook_params = {
+        "path": "/calendar/action/compose",
+        "rru": "addevent",
+        "startdt": outlook_start,
+        "enddt": outlook_end,
+        "subject": f"CallingGen Demo - {booking.name}",
+        "body": f"CallingGen Voice AI Demo Consultation\nJoin Google Meet: {meeting_link}",
+        "location": meeting_link,
+    }
+    outlook_cal_url = f"https://outlook.live.com/calendar/0/deeplink/compose?{urllib.parse.urlencode(outlook_params)}"
+
+    # Generate standard iCalendar (.ics) attachment with RFC 5545 compliance
+    ics_content = generate_ics_invite(
+        summary=f"CallingGen Demo - {booking.name}",
+        description=f"CallingGen Voice AI Demo Consultation\\nClient: {booking.name}\\nCompany: {booking.company}\\nPhone: {booking.phone}\\nMeeting Link: {meeting_link}",
+        start_dt=dt_obj,
+        end_dt=end_dt,
+        organizer_email="noreply@callinggen.in",
+        attendee_email=booking.email,
+        attendee_name=booking.name,
+        admin_email=admin_email,
+        meeting_link=meeting_link,
+    )
+
+    ics_b64 = base64.b64encode(ics_content.encode("utf-8")).decode("utf-8")
+    ics_attachment = {
+        "filename": "invite.ics",
+        "content": ics_b64,
+        "content_type": "text/calendar; method=REQUEST; charset=UTF-8",
+    }
+
+    # 1. Customer Confirmation Email
     cust_html = f"""
     <!DOCTYPE html>
     <html>
@@ -215,12 +262,14 @@ async def send_email_notifications(booking: BookSlotRequest):
         <meta charset="utf-8">
         <style>
           body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #FAFAFA; margin: 0; padding: 0; color: #1E293B; }}
-          .card {{ max-width: 580px; margin: 40px auto; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }}
-          .header {{ padding: 32px 32px 24px; border-bottom: 1px solid #F1F5F9; }}
+          .card {{ max-width: 580px; margin: 32px auto; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.04); }}
+          .header {{ padding: 32px 32px 20px; border-bottom: 1px solid #F1F5F9; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: #FFFFFF; }}
           .content {{ padding: 32px; font-size: 15px; line-height: 1.6; color: #334155; }}
-          .badge {{ display: inline-block; padding: 6px 12px; font-size: 12px; font-weight: 700; background: #EEF2FF; color: #4F46E5; border-radius: 9999px; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; }}
-          .slot-box {{ background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; margin: 24px 0; }}
-          .button {{ display: inline-block; background-color: #4F46E5; color: #FFFFFF !important; font-size: 15px; font-weight: 600; text-decoration: none; padding: 14px 28px; border-radius: 10px; margin-top: 8px; }}
+          .badge {{ display: inline-block; padding: 4px 12px; font-size: 11px; font-weight: 700; background: rgba(255,255,255,0.2); color: #FFFFFF; border-radius: 9999px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }}
+          .slot-box {{ background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 14px; padding: 20px; margin: 24px 0; }}
+          .btn-primary {{ display: inline-block; background-color: #4F46E5; color: #FFFFFF !important; font-size: 15px; font-weight: 700; text-decoration: none; padding: 14px 28px; border-radius: 10px; box-shadow: 0 4px 10px rgba(79, 70, 229, 0.25); }}
+          .btn-gcal {{ display: inline-block; background-color: #0F172A; color: #FFFFFF !important; font-size: 13px; font-weight: 600; text-decoration: none; padding: 10px 18px; border-radius: 8px; margin: 4px; }}
+          .btn-outlook {{ display: inline-block; background-color: #0284C7; color: #FFFFFF !important; font-size: 13px; font-weight: 600; text-decoration: none; padding: 10px 18px; border-radius: 8px; margin: 4px; }}
           .footer {{ padding: 24px 32px; background: #F8FAFC; border-top: 1px solid #F1F5F9; font-size: 13px; color: #94A3B8; text-align: center; }}
         </style>
       </head>
@@ -228,90 +277,71 @@ async def send_email_notifications(booking: BookSlotRequest):
         <div class="card">
           <div class="header">
             <div class="badge">Appointment Confirmed</div>
-            <h1 style="margin: 0; font-size: 22px; font-weight: 800; color: #0F172A;">Your 1-on-1 CallingGen Demo is Booked</h1>
+            <h1 style="margin: 0; font-size: 22px; font-weight: 800; color: #FFFFFF;">Your 1-on-1 CallingGen Demo is Scheduled</h1>
           </div>
           <div class="content">
             <p>Hi <b>{booking.name}</b>,</p>
-            <p>Thank you for scheduling a personalized consultation with CallingGen. We look forward to showing you how our autonomous voice AI agents can automate your outbound campaigns and incoming calls.</p>
+            <p>Thank you for scheduling a consultation with CallingGen. We look forward to demonstrating how our voice AI agents can automate your customer calling operations.</p>
             
             <div class="slot-box">
-              <div style="font-size: 12px; color: #64748B; font-weight: 600; text-transform: uppercase;">Scheduled Time (IST)</div>
-              <div style="font-size: 18px; font-weight: 800; color: #0F172A; margin: 4px 0;">📅 {readable_date}</div>
+              <div style="font-size: 11px; color: #64748B; font-weight: 700; text-transform: uppercase;">Scheduled Time (IST)</div>
+              <div style="font-size: 18px; font-weight: 800; color: #0F172A; margin: 6px 0 2px;">📅 {readable_date}</div>
               <div style="font-size: 16px; font-weight: 700; color: #4F46E5;">⏰ {readable_time}</div>
             </div>
 
-            <p style="margin-bottom: 24px;">Click the button below to join the video conference at your scheduled time:</p>
-            <div style="text-align: center; margin-bottom: 24px;">
-              <a href="{meeting_link}" class="button" target="_blank">Join Google Meet Consultation</a>
+            <div style="text-align: center; margin: 28px 0 20px;">
+              <a href="{meeting_link}" class="btn-primary" target="_blank">🎥 Join Google Meet Video Call</a>
             </div>
 
-            <p style="font-size: 13px; color: #64748B;"><i>Tip: An interactive Google Calendar invite (.ics) has been attached to this email. You can click to add it directly to your calendar.</i></p>
+            <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; text-align: center; margin-bottom: 24px;">
+              <p style="margin: 0 0 10px; font-size: 13px; font-weight: 700; color: #1E293B;">Add this meeting to your Calendar:</p>
+              <div>
+                <a href="{google_cal_url}" class="btn-gcal" target="_blank">📅 Add to Google Calendar</a>
+                <a href="{outlook_cal_url}" class="btn-outlook" target="_blank">📅 Add to Outlook Calendar</a>
+              </div>
+            </div>
+
+            <p style="font-size: 12px; color: #64748B; line-height: 1.5;">
+              💡 <b>Auto-Sync / Calendar Attachment:</b> An interactive <code>invite.ics</code> file is attached. Opening it will automatically pin this event and video call directly to your calendar app.
+            </p>
           </div>
           <div class="footer">
             © CallingGen AI • Autonomous Telephony Voice Agents<br/>
-            Need to reschedule? Reply directly to this email.
+            Need to reschedule? Reply directly or contact <b>{support_email}</b>
           </div>
         </div>
       </body>
     </html>
     """
-    alt_part.attach(MIMEText(cust_html, "html"))
-    cust_msg.attach(alt_part)
 
-    # Attach Google Calendar / Outlook .ics Event Invite
-    try:
-        ics_text = generate_ics_invite(
-            summary=f"CallingGen Demo - {booking.name}",
-            description=f"1-on-1 Personalized CallingGen Voice AI Demo Consultation\\nClient: {booking.name}\\nCompany: {booking.company}\\nPhone: {booking.phone}",
-            start_dt=dt_obj,
-            end_dt=dt_obj + timedelta(hours=1),
-            organizer_email=smtp_user,
-            attendee_email=booking.email,
-            attendee_name=booking.name,
-            admin_email=admin_email,
-            meeting_link=meeting_link
-        )
-        ics_part = MIMEText(ics_text, "calendar; method=REQUEST")
-        ics_part.add_header("Content-Disposition", "inline; filename=invite.ics")
-        cust_msg.attach(ics_part)
-    except Exception as ics_err:
-        print(f"[ICS ATTACHMENT ERROR] {ics_err}")
-
-    # 2. Admin Notification Email (Resend Dashboard Alert Style with Google Calendar Invite)
-    admin_msg = MIMEMultipart("mixed")
-    admin_msg["Subject"] = f"🔥 New Demo Booking: {booking.name} ({booking.company})"
-    admin_msg["From"] = f"CallingGen Alerts <{smtp_user}>"
-    admin_msg["To"] = admin_email
-
-    admin_alt = MIMEMultipart("alternative")
-
+    # 2. Admin Alert Email (Sent to saisathwik@genxreality.in)
     admin_html = f"""
     <!DOCTYPE html>
     <html>
       <head>
         <meta charset="utf-8">
       </head>
-      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F8FAFC; margin: 0; padding: 20px;">
-        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 580px; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 16px; overflow: hidden;">
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F8FAFC; margin: 0; padding: 24px;">
+        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 580px; background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
           
           <tr>
-            <td style="padding: 24px 32px; background: #0F172A; color: #FFFFFF; font-size: 16px; font-weight: 700;">
-              ⚡ New Demo Appointment Scheduled
+            <td style="padding: 24px 32px; background: #0F172A; color: #FFFFFF; font-size: 17px; font-weight: 800;">
+              ⚡ New Demo Lead Scheduled
             </td>
           </tr>
 
           <tr>
             <td style="padding: 32px;">
-              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #F1F5F9; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
                 <tr>
-                  <td style="padding-bottom: 10px; font-size: 13px; color: #64748B; font-weight: 700; text-transform: uppercase;">Client Information</td>
+                  <td style="padding-bottom: 8px; font-size: 11px; color: #64748B; font-weight: 700; text-transform: uppercase;">Prospect Information</td>
                 </tr>
                 <tr>
                   <td style="font-size: 18px; font-weight: 800; color: #0F172A;">{booking.name}</td>
                 </tr>
                 <tr>
-                  <td style="padding-top: 8px; font-size: 14px; color: #334155;">
-                    📧 Email: <b>{booking.email}</b><br/>
+                  <td style="padding-top: 10px; font-size: 14px; color: #334155; line-height: 1.6;">
+                    📧 Email: <a href="mailto:{booking.email}" style="color: #4F46E5; font-weight: 600;">{booking.email}</a><br/>
                     📞 Phone: <b>{booking.phone}</b><br/>
                     🏢 Company: <b>{booking.company}</b><br/>
                     💼 Industry: <b>{booking.industry}</b>
@@ -319,73 +349,75 @@ async def send_email_notifications(booking: BookSlotRequest):
                 </tr>
               </table>
 
-              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #EEF2FF; border: 1px solid #C7D2FE; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #EEF2FF; border: 1px solid #C7D2FE; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
                 <tr>
-                  <td style="font-size: 13px; color: #4338CA; font-weight: 700; text-transform: uppercase;">Scheduled IST Time Slot</td>
+                  <td style="font-size: 11px; color: #4338CA; font-weight: 700; text-transform: uppercase;">Scheduled IST Slot</td>
                 </tr>
                 <tr>
-                  <td style="font-size: 16px; font-weight: 800; color: #3730A3; margin-top: 4px;">📅 {readable_date}</td>
+                  <td style="font-size: 16px; font-weight: 800; color: #3730A3; padding-top: 4px;">📅 {readable_date}</td>
                 </tr>
                 <tr>
                   <td style="font-size: 15px; font-weight: 700; color: #4F6BFF;">⏰ {readable_time}</td>
                 </tr>
                 <tr>
-                  <td style="font-size: 14px; font-weight: 600; color: #10B981; margin-top: 8px;">📹 <a href="{meeting_link}" target="_blank" style="color: #10B981; text-decoration: underline;">Open Google Meet Link</a></td>
+                  <td style="padding-top: 14px;">
+                    <a href="{meeting_link}" target="_blank" style="display: inline-block; background-color: #10B981; color: #FFFFFF; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; font-size: 13px;">
+                      🎥 Open Google Meet Call
+                    </a>
+                  </td>
                 </tr>
               </table>
+
+              <div style="text-align: center;">
+                <a href="{google_cal_url}" target="_blank" style="display: inline-block; background-color: #0F172A; color: #FFFFFF; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600;">
+                  📅 Add to Admin Google Calendar
+                </a>
+              </div>
             </td>
           </tr>
         </table>
       </body>
     </html>
     """
-    admin_alt.attach(MIMEText(admin_html, "html"))
-    admin_msg.attach(admin_alt)
 
-    try:
-        ics_text = generate_ics_invite(
-            summary=f"CallingGen Demo - {booking.name}",
-            description=f"1-on-1 Personalized CallingGen Voice AI Demo Consultation\\nClient: {booking.name}\\nCompany: {booking.company}\\nPhone: {booking.phone}",
-            start_dt=dt_obj,
-            end_dt=dt_obj + timedelta(hours=1),
-            organizer_email=smtp_user,
-            attendee_email=booking.email,
-            attendee_name=booking.name,
-            admin_email=admin_email,
-            meeting_link=meeting_link
-        )
-        ics_part = MIMEText(ics_text, "calendar; method=REQUEST")
-        ics_part.add_header("Content-Disposition", "inline; filename=invite.ics")
-        admin_msg.attach(ics_part)
-    except Exception:
-        pass
+    from app.services.email_service import email_service
 
-    # Send Customer Confirmation via EmailService (Resend / Fallback)
+    # Send Confirmation to Customer via Resend
     try:
-        from app.services.email_service import email_service
         email_service._send_email(
             to_email=booking.email,
-            subject=f"Confirmed: CallingGen Demo Session on {readable_date}",
+            subject=f"Confirmed: Your CallingGen Voice AI Demo on {readable_date}",
             body=cust_html,
             is_html=True,
+            from_override=from_email,
+            reply_to=support_email,
+            attachments=[ics_attachment],
+            headers={
+                "Content-Class": "urn:content-classes:calendarmessage",
+            },
         )
-        print(f"[CALENDAR EMAIL] Confirmation sent to customer: {booking.email}")
+        print(f"[CALENDAR EMAIL] Confirmation sent to customer: {booking.email} via Resend")
     except Exception as e:
-        print(f"[CALENDAR EMAIL ERROR] Failed to send customer confirmation: {e}")
+        print(f"[CALENDAR EMAIL ERROR] Failed to send customer confirmation via Resend: {e}")
 
-    # Send Admin Alert via EmailService (Resend / Fallback)
+    # Send Notification to Admin via Resend
     if admin_email:
         try:
-            from app.services.email_service import email_service
             email_service._send_email(
                 to_email=admin_email,
                 subject=f"🔥 New Demo Booking: {booking.name} ({booking.company})",
                 body=admin_html,
                 is_html=True,
+                from_override="CallingGen Alerts <noreply@callinggen.in>",
+                reply_to=booking.email,
+                attachments=[ics_attachment],
+                headers={
+                    "Content-Class": "urn:content-classes:calendarmessage",
+                },
             )
-            print(f"[CALENDAR EMAIL] Notification sent to admin: {admin_email}")
+            print(f"[CALENDAR EMAIL] Notification sent to admin: {admin_email} via Resend")
         except Exception as e:
-            print(f"[CALENDAR EMAIL ERROR] Failed to send admin notification: {e}")
+            print(f"[CALENDAR EMAIL ERROR] Failed to send admin alert via Resend: {e}")
 
 
 # -------------------------------------------------------------------
