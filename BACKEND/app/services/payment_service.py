@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
 from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
