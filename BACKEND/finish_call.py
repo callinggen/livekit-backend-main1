@@ -172,8 +172,8 @@ async def terminate_call_once(
 
     # ── Step 1: Delay room deletion to allow final TTS to play ──
     if reason == "llm_tool":
-        print("Waiting 4.5 seconds to allow final agent response to play before hanging up...")
-        await asyncio.sleep(4.5)
+        print("Waiting 1.2 seconds to allow final agent response to play before hanging up...")
+        await asyncio.sleep(1.2)
         print("Grace period finished. Proceeding to hang up.")
 
     # ── Step 2: ALWAYS delete the LiveKit room to hang up the call FIRST ──
@@ -423,20 +423,43 @@ async def finish_call(
                 speech = session.say(goodbye_phrase, allow_interruptions=False)
                 if speech:
                     try:
-                        await asyncio.wait_for(speech, timeout=6.0)
+                        await asyncio.wait_for(speech, timeout=3.0)
                     except Exception:
                         pass
-                play_buffer = max(2.5, min(5.0, len(goodbye_phrase) * 0.08 + 1.0))
-                print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming...")
-                await asyncio.sleep(play_buffer)
+                await asyncio.sleep(1.0)
                 print("Goodbye spoken successfully.")
             except Exception as e:
                 print(f"Warning – could not speak goodbye (non-fatal): {e}")
         else:
-            print("Assistant already spoke goodbye during conversation turn. Waiting 1.8s for SIP audio buffer...")
-            await asyncio.sleep(1.8)
+            print("Assistant already spoke goodbye during conversation turn. Brief 0.8s buffer for SIP audio...")
+            await asyncio.sleep(0.8)
 
-        # ── Step 2: Build transcript (after goodbye is in history) ────────
+        # ── Step 2: HANG UP THE SIP CALL IMMEDIATELY (Delete LiveKit room FIRST) ──
+        try:
+            print("Deleting LiveKit room (hanging up SIP call immediately)...")
+            import os
+            lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+            lk_key = os.getenv("LIVEKIT_API_KEY")
+            lk_secret = os.getenv("LIVEKIT_API_SECRET")
+            
+            if lk_url:
+                lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
+            else:
+                lkapi = api.LiveKitAPI()
+
+            try:
+                await lkapi.room.delete_room(
+                    api.DeleteRoomRequest(room=room_str)
+                )
+                with open("finish_call_debug.log", "a") as f: f.write(f"Room deleted successfully — call hung up.\n")
+                print("Room deleted successfully — call hung up immediately.")
+            finally:
+                await lkapi.aclose()
+        except Exception as e:
+            with open("finish_call_debug.log", "a") as f: f.write(f"Warning – room deletion error: {e}\n")
+            print(f"Warning – room deletion error: {e}")
+
+        # ── Step 3: Build transcript (after goodbye is in history) ────────
         res_end = _build_transcript(session)
         if isinstance(res_end, tuple) and len(res_end) == 3:
             lines_end, _, _ = res_end
@@ -445,15 +468,15 @@ async def finish_call(
             transcript = str(res_end or "")
         print(f"Transcript lines: {len(transcript.splitlines())}")
 
-        # ── Step 3: Close the agent session ──────────────────────────────
+        # ── Step 4: Close the agent session ──────────────────────────────
         try:
             print("Closing AgentSession...")
-            await asyncio.wait_for(session.aclose(), timeout=5.0)
+            await asyncio.wait_for(session.aclose(), timeout=2.0)
             print("AgentSession closed.")
         except Exception as e:
             print(f"Warning – session.aclose() error (non-fatal): {e}")
 
-        # ── Step 4: Notify backend with full payload ──────────────────────
+        # ── Step 5: Notify backend with full payload ──────────────────────
         call_id = state.get("call_id", -1) if state else -1
         if call_id == -1 or call_id is None:
             try:
@@ -502,7 +525,7 @@ async def finish_call(
         # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
         if call_id != -1:
             try:
-                await asyncio.sleep(1.0)  # give recorder time to flush & close
+                await asyncio.sleep(0.5)
                 from agent import mix_wav_files
                 mix_wav_files(
                     f"recordings/call_{call_id}_customer.wav",
@@ -521,30 +544,22 @@ async def finish_call(
             print(f"[finish_call] ERROR notifying backend: {e}")
 
     finally:
-        # ── Step 5: ALWAYS delete the LiveKit room to hang up the call ──
+        # Failsafe cleanup: ensure room is deleted if not already done
         try:
-            print("Deleting LiveKit room (hanging up SIP call)...")
             import os
             lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
             lk_key = os.getenv("LIVEKIT_API_KEY")
             lk_secret = os.getenv("LIVEKIT_API_SECRET")
-            
             if lk_url:
                 lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
-            else:
-                lkapi = api.LiveKitAPI()
-
-            try:
-                await lkapi.room.delete_room(
-                    api.DeleteRoomRequest(room=room_str)
-                )
-                with open("finish_call_debug.log", "a") as f: f.write(f"Room deleted successfully — call hung up.\n")
-                print("Room deleted successfully — call hung up.")
-            finally:
-                await lkapi.aclose()
-        except Exception as e:
-            with open("finish_call_debug.log", "a") as f: f.write(f"Warning – room deletion error: {e}\n")
-            print(f"Warning – room deletion error: {e}")
+                try:
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_str))
+                except Exception:
+                    pass
+                finally:
+                    await lkapi.aclose()
+        except Exception:
+            pass
 
         # Remove active call state
         ACTIVE_CALLS.pop(room_str, None)

@@ -1006,8 +1006,8 @@ async def entrypoint(ctx: JobContext):
                                 state = ACTIVE_CALLS.get(room_name)
                                 if state and state.get("call_phase") != "greeting" and not state.get("finishing"):
                                     async def _auto_goodbye_hangup():
-                                        # Wait 4 seconds to let TTS stream out to the customer
-                                        await asyncio.sleep(4.0)
+                                        # Wait 1.5 seconds to let TTS audio stream out to the customer
+                                        await asyncio.sleep(1.5)
                                         st = ACTIVE_CALLS.get(room_name)
                                         if st and not st.get("finishing"):
                                             print(f"[AUTO HANGUP TRIGGERED] Assistant said goodbye in message: '{clean_t[:60]}...' -> Hanging up call.")
