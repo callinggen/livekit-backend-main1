@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func, or_
 from datetime import datetime, timedelta, timezone
 from pydantic import EmailStr, TypeAdapter, ValidationError
 import random
@@ -41,16 +42,31 @@ async def login(
 ):
     identifier = login_data.identifier.strip() if login_data.identifier else ""
     
-    # Try fetching by email first (case-insensitive)
+    # 1. Try fetching by email first (case-insensitive)
     stmt = select(User).where(func.lower(User.email) == identifier.lower())
     result = await db.execute(stmt)
     user = result.scalars().first()
     
+    # 2. Try fetching by exact phone
     if not user:
-        # Try fetching by phone
         stmt = select(User).where(User.phone_number == identifier)
         result = await db.execute(stmt)
         user = result.scalars().first()
+
+    # 3. Flexible lookup by digits (e.g. +918074669893 or 8074669893 -> 8074669893@callinggen.in)
+    if not user:
+        digits = re.sub(r"\D", "", identifier)
+        last10 = digits[-10:] if len(digits) >= 10 else digits
+        if len(last10) >= 7:
+            stmt = select(User).where(
+                or_(
+                    func.lower(User.email).like(f"{last10}@%"),
+                    func.lower(User.email).like(f"%{last10}%"),
+                    func.replace(func.replace(User.phone_number, "+", ""), " ", "").like(f"%{last10}%")
+                )
+            )
+            result = await db.execute(stmt)
+            user = result.scalars().first()
         
     if not user:
         return JSONResponse(
@@ -68,7 +84,7 @@ async def login(
         )
         
     # Update last login
-    user.last_login_at = datetime.now(timezone.utc)
+    user.last_login_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
         
     return Token(

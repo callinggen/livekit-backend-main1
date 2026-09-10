@@ -6,6 +6,7 @@ import wave
 import re
 import socket
 import sys
+sys.setrecursionlimit(5000)
 
 from app.services.conversation_state import ACTIVE_CALLS
 from backend_client import notify_call_complete
@@ -638,6 +639,32 @@ async def entrypoint(ctx: JobContext):
     shutdown_event = asyncio.Event()
     call_answered_event = asyncio.Event()
     customer_disconnected_event = asyncio.Event()
+    sip_disc_event = asyncio.Event()
+    start_monotonic = time.monotonic()
+
+    # Store early session in ACTIVE_CALLS so track_subscribed & participant_connected find it
+    ACTIVE_CALLS[room_name] = {
+        "session": None,
+        "call_id": call_id,
+        "call_phase": "waiting_for_answer",
+        "job_id": campaign_info.get("job_id"),
+        "campaign_id": campaign_info.get("campaign_id"),
+        "agent_id": campaign_info.get("agent_id"),
+        "agent_name": campaign_info.get("agent_type"),
+        "script": "",
+        "voice_profile": "",
+        "lines": [],
+        "answered_at": None,
+        "start_time": start_monotonic,
+        "disconnected_event": customer_disconnected_event,
+        "customer_has_spoken": False,
+        "first_audio_received": False,
+        "speech_started_at": None,
+        "first_audio_frame_at": None,
+        "sip_ended_at": None,
+        "duration_source": None,
+        "sip_disconnected_event": sip_disc_event,
+    }
 
     def _mark_call_answered(source: str):
         if not call_answered_event.is_set():
@@ -998,28 +1025,35 @@ async def entrypoint(ctx: JobContext):
                         state["customer_has_spoken"] = True
                         state["call_phase"] = "conversation"
 
-        # Store session in ACTIVE_CALLS so finish_call can find it
-        ACTIVE_CALLS[room_name] = {
-            "session": None,
-            "call_id": call_id,
-            "call_phase": "waiting_for_answer",
-            "job_id": campaign_info.get("job_id"),
-            "campaign_id": campaign_info.get("campaign_id"),
-            "agent_id": campaign_info.get("agent_id"),
-            "agent_name": agent_type,
-            "script": custom_script[:50] + "..." if custom_script else "",
-            "voice_profile": raw_db_voice,
-            "lines": transcript_lines,
-            "answered_at": None,
-            "disconnected_event": customer_disconnected_event,
-            "customer_has_spoken": False,
-            "first_audio_received": False,
-            "speech_started_at": None,
-            "first_audio_frame_at": None,
-            "sip_ended_at": None,
-            "duration_source": None,
-            "sip_disconnected_event": asyncio.Event(),
-        }
+        # Update session metadata in ACTIVE_CALLS without resetting answered_at or events
+        state = ACTIVE_CALLS.get(room_name)
+        if state:
+            state["script"] = custom_script[:50] + "..." if custom_script else ""
+            state["voice_profile"] = raw_db_voice
+            state["lines"] = transcript_lines
+        else:
+            ACTIVE_CALLS[room_name] = {
+                "session": None,
+                "call_id": call_id,
+                "call_phase": "waiting_for_answer",
+                "job_id": campaign_info.get("job_id"),
+                "campaign_id": campaign_info.get("campaign_id"),
+                "agent_id": campaign_info.get("agent_id"),
+                "agent_name": agent_type,
+                "script": custom_script[:50] + "..." if custom_script else "",
+                "voice_profile": raw_db_voice,
+                "lines": transcript_lines,
+                "answered_at": None,
+                "start_time": time.monotonic(),
+                "disconnected_event": customer_disconnected_event,
+                "customer_has_spoken": False,
+                "first_audio_received": False,
+                "speech_started_at": None,
+                "first_audio_frame_at": None,
+                "sip_ended_at": None,
+                "duration_source": None,
+                "sip_disconnected_event": asyncio.Event(),
+            }
 
 
         # Build the actual greeting text to speak (goes to TTS directly via session.say)

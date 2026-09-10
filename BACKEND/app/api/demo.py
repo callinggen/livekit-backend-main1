@@ -173,6 +173,10 @@ async def trigger_outbound_call_task_async(
                 print(f"Demo Call {call.id} successfully dispatched to LiveKit.")
             else:
                 call.status = "failed"
+                lead_fail_res = await db.execute(select(DemoLead).where(DemoLead.id == lead_id))
+                lead_fail = lead_fail_res.scalars().first()
+                if lead_fail:
+                    lead_fail.status = "failed"
                 await db.commit()
                 print(f"SIP dial failed for demo call: {result.get('error')}")
 
@@ -220,7 +224,70 @@ async def get_demo_leads(db: AsyncSession = Depends(get_db)):
     try:
         result = await db.execute(select(DemoLead).order_by(DemoLead.created_at.desc()))
         leads = result.scalars().all()
-        return leads
+        
+        lead_list = []
+        needs_commit = False
+        for lead in leads:
+            status = lead.status or "pending"
+            if lead.call_id:
+                call_res = await db.execute(select(Call).where(Call.id == lead.call_id))
+                call = call_res.scalars().first()
+                if call:
+                    if call.status == "completed" or call.answered_at or (call.duration and call.duration > 0) or call.outcome in ("answered", "customer_hangup"):
+                        status = "completed"
+                    elif call.status == "in_progress":
+                        status = "calling"
+                    elif call.status == "failed":
+                        status = "failed"
+                    elif call.outcome in ("no_answer", "declined", "busy"):
+                        status = "no_answer"
+                    elif call.status == "ended":
+                        status = "completed" if (call.duration and call.duration > 0) else "no_answer"
+            elif status == "calling":
+                call_res = await db.execute(
+                    select(Call).where(Call.phone == lead.phone).order_by(Call.started_at.desc()).limit(1)
+                )
+                c_fallback = call_res.scalars().first()
+                if c_fallback:
+                    lead.call_id = c_fallback.id
+                    if c_fallback.status == "completed" or c_fallback.answered_at or (c_fallback.duration and c_fallback.duration > 0) or c_fallback.outcome in ("answered", "customer_hangup"):
+                        status = "completed"
+                    elif c_fallback.status == "failed":
+                        status = "failed"
+                    elif c_fallback.status == "ended":
+                        status = "completed" if (c_fallback.duration and c_fallback.duration > 0) else "no_answer"
+
+            if status != lead.status:
+                lead.status = status
+                needs_commit = True
+
+            created_iso = ""
+            if lead.created_at:
+                if isinstance(lead.created_at, datetime):
+                    created_iso = lead.created_at.replace(tzinfo=timezone.utc).isoformat()
+                else:
+                    c_str = str(lead.created_at).strip()
+                    if not c_str.endswith("Z") and "+" not in c_str:
+                        created_iso = f"{c_str.replace(' ', 'T')}Z"
+                    else:
+                        created_iso = c_str
+
+            lead_list.append({
+                "id": lead.id,
+                "name": lead.name,
+                "company": lead.company,
+                "email": lead.email,
+                "phone": lead.phone,
+                "industry": lead.industry,
+                "status": status,
+                "call_id": lead.call_id,
+                "created_at": created_iso,
+            })
+
+        if needs_commit:
+            await db.commit()
+
+        return lead_list
     except Exception as e:
         print(f"Error fetching demo leads: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch leads")

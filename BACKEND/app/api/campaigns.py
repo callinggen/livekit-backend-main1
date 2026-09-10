@@ -66,6 +66,54 @@ async def launch_campaign(
     }
 
 
+# ── POST /api/campaigns/{campaign_id}/pause ──────────────────────────────
+
+@router.post("/campaigns/{campaign_id}/pause")
+async def pause_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await CampaignService.pause_campaign(db=db, campaign_id=campaign_id)
+    return {
+        "message": "Campaign paused successfully. Ongoing calls have been disconnected.",
+        "campaign_id": campaign.id,
+        "status": _map_status(campaign.status),
+    }
+
+
+# ── POST /api/campaigns/{campaign_id}/resume ─────────────────────────────
+
+@router.post("/campaigns/{campaign_id}/resume")
+async def resume_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await CampaignService.resume_campaign(db=db, campaign_id=campaign_id)
+    return {
+        "message": "Campaign resumed successfully.",
+        "campaign_id": campaign.id,
+        "status": _map_status(campaign.status),
+    }
+
+
+# ── POST /api/campaigns/{campaign_id}/stop ───────────────────────────────
+
+@router.post("/campaigns/{campaign_id}/stop")
+async def stop_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await CampaignService.stop_campaign(db=db, campaign_id=campaign_id)
+    return {
+        "message": "Campaign stopped successfully. All ongoing and pending calls have been terminated.",
+        "campaign_id": campaign.id,
+        "status": _map_status(campaign.status),
+    }
+
+
 # ── GET /api/campaigns ─────────────────────────────────────────────────────
 
 @router.get("/campaigns")

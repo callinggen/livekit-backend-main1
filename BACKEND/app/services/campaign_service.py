@@ -1,11 +1,34 @@
+import os
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update, func
 from app.services.queue_service import QueueService
 from app.models.job import Job
 from app.models.campaign import Campaign
 from app.models.contact import Contact
+from app.models.call import Call
 from app.schemas.campaign import CampaignCreate
+
+
+async def _terminate_livekit_room(room_name: str):
+    """Deletes a LiveKit room to forcibly disconnect and hang up SIP call."""
+    if not room_name:
+        return
+    try:
+        from livekit import api
+        lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+        lk_key = os.getenv("LIVEKIT_API_KEY")
+        lk_secret = os.getenv("LIVEKIT_API_SECRET")
+        if lk_url and lk_key and lk_secret:
+            lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
+            try:
+                await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_name))
+                print(f"[CampaignService] LiveKit room '{room_name}' deleted successfully.")
+            finally:
+                await lkapi.aclose()
+    except Exception as e:
+        print(f"[CampaignService] Warning: Error deleting LiveKit room '{room_name}': {e}")
 
 
 class CampaignService:
@@ -155,7 +178,6 @@ class CampaignService:
             whatsapp_automation=getattr(data, "whatsapp_automation", None),
         )
 
-
         db.add(campaign)
         await db.flush()
 
@@ -226,4 +248,188 @@ class CampaignService:
         await db.commit()
         await db.refresh(campaign)
 
+        return campaign
+
+    @staticmethod
+    async def pause_campaign(
+        db: AsyncSession,
+        campaign_id: int,
+    ) -> Campaign:
+        from app.services.call_service import CallService
+
+        campaign = await db.get(Campaign, campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        if campaign.status not in ("running", "scheduled", "pending"):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot pause campaign with status '{campaign.status}'"
+            )
+
+        campaign.status = "paused"
+
+        # 1. Pause any queued or processing jobs
+        job_result = await db.execute(
+            select(Job).where(
+                Job.campaign_id == campaign_id,
+                Job.status.in_(["queued", "processing"])
+            )
+        )
+        jobs = job_result.scalars().all()
+        for j in jobs:
+            j.status = "paused"
+
+        # 2. Terminate any ongoing calls immediately
+        call_result = await db.execute(
+            select(Call).where(
+                Call.campaign_id == campaign_id,
+                Call.status.in_(["dialing", "in_progress"])
+            )
+        )
+        ongoing_calls = call_result.scalars().all()
+        print(f"[CampaignService] Pausing campaign {campaign_id}: Terminating {len(ongoing_calls)} ongoing call(s)...")
+
+        for call in ongoing_calls:
+            # Drop LiveKit room to immediately hang up telecom call
+            if call.room_name:
+                await _terminate_livekit_room(call.room_name)
+
+            if call.status == "in_progress" or call.sip_was_active:
+                await CallService.complete_call(
+                    db=db, 
+                    call_id=call.id, 
+                    outcome="campaign_paused"
+                )
+            else:
+                # Call was dialing; end call and restore contact to pending so it will be retried upon resume
+                await CallService.fail_call(
+                    db=db, 
+                    call_id=call.id, 
+                    outcome="interrupted", 
+                    failure_reason="campaign_paused"
+                )
+                if call.contact_id:
+                    contact = await db.get(Contact, call.contact_id)
+                    if contact:
+                        contact.status = "pending"
+                        contact.response = ""
+
+        await db.commit()
+        await db.refresh(campaign)
+        return campaign
+
+    @staticmethod
+    async def resume_campaign(
+        db: AsyncSession,
+        campaign_id: int,
+    ) -> Campaign:
+        campaign = await db.get(Campaign, campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        if campaign.status != "paused":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Campaign is not paused (current status: '{campaign.status}')"
+            )
+
+        campaign.status = "running"
+
+        # Check if there are paused jobs to resume
+        job_result = await db.execute(
+            select(Job).where(
+                Job.campaign_id == campaign_id,
+                Job.status == "paused"
+            ).order_by(Job.id.desc())
+        )
+        paused_job = job_result.scalars().first()
+        if paused_job:
+            paused_job.status = "queued"
+        else:
+            # Count pending contacts to see if a new job is required
+            pending_res = await db.execute(
+                select(func.count(Contact.id)).where(
+                    Contact.campaign_id == campaign_id,
+                    Contact.status == "pending"
+                )
+            )
+            pending_count = pending_res.scalar() or 0
+            if pending_count > 0:
+                await CampaignService.queue_campaign_job(db, campaign, pending_count)
+
+        await db.commit()
+        await db.refresh(campaign)
+        return campaign
+
+    @staticmethod
+    async def stop_campaign(
+        db: AsyncSession,
+        campaign_id: int,
+    ) -> Campaign:
+        from app.services.call_service import CallService
+
+        campaign = await db.get(Campaign, campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        if campaign.status in ("completed", "stopped"):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Campaign is already {campaign.status}"
+            )
+
+        campaign.status = "stopped"
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        # 1. Stop any active or paused jobs
+        job_result = await db.execute(
+            select(Job).where(
+                Job.campaign_id == campaign_id,
+                Job.status.in_(["queued", "processing", "paused"])
+            )
+        )
+        jobs = job_result.scalars().all()
+        for j in jobs:
+            j.status = "stopped"
+            j.finished_at = now
+
+        # 2. Terminate all ongoing calls
+        call_result = await db.execute(
+            select(Call).where(
+                Call.campaign_id == campaign_id,
+                Call.status.in_(["dialing", "in_progress"])
+            )
+        )
+        ongoing_calls = call_result.scalars().all()
+        print(f"[CampaignService] Stopping campaign {campaign_id}: Terminating {len(ongoing_calls)} ongoing call(s)...")
+
+        for call in ongoing_calls:
+            if call.room_name:
+                await _terminate_livekit_room(call.room_name)
+
+            if call.status == "in_progress" or call.sip_was_active:
+                await CallService.complete_call(
+                    db=db, 
+                    call_id=call.id, 
+                    outcome="campaign_stopped"
+                )
+            else:
+                await CallService.fail_call(
+                    db=db, 
+                    call_id=call.id, 
+                    outcome="interrupted", 
+                    failure_reason="campaign_stopped"
+                )
+
+        # 3. Mark all remaining pending and dialing contacts as stopped
+        await db.execute(
+            update(Contact)
+            .where(Contact.campaign_id == campaign_id)
+            .where(Contact.status.in_(["pending", "dialing"]))
+            .values(status="failed", response="Campaign Stopped")
+        )
+
+        await db.commit()
+        await db.refresh(campaign)
         return campaign

@@ -59,7 +59,7 @@ class Campaign(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
     
     voicemail_detection: Mapped[dict | None] = mapped_column(

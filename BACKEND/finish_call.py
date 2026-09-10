@@ -248,8 +248,8 @@ async def terminate_call_once(
     # Determine accurate outcome for silence / no response / unanswered
     if not outcome and sip_was_active:
         if customer_lines == 0 and not customer_has_spoken:
-            outcome = "no_answer"
-            print("-> Reclassifying outcome to: no_answer (no customer speech detected - call was unanswered)")
+            outcome = "customer_hangup" if reason in ("customer_disconnect", "customer_hangup") else "customer_no_response"
+            print(f"-> Outcome set to: {outcome} (SIP was active, customer answered but spoke 0 lines)")
         elif reason == "customer_silence":
             if first_audio_received and not customer_has_spoken:
                 outcome = "customer_no_response"
@@ -260,9 +260,9 @@ async def terminate_call_once(
             else:
                 outcome = "customer_no_response"
                 print("-> Reclassifying outcome to: customer_no_response")
-    elif outcome == "customer_hangup" and customer_lines == 0 and not customer_has_spoken:
-        outcome = "no_answer"
-        print("-> Reclassifying customer_hangup to no_answer because customer never spoke or answered")
+    elif outcome == "customer_hangup":
+        # Customer answered and hung up in between the call - preserve customer_hangup
+        print(f"-> Preserving customer_hangup (customer_lines={customer_lines}, customer_has_spoken={customer_has_spoken})")
 
     # ── Step 4: Mix WAV tracks ────────
     if call_id != -1:
@@ -475,12 +475,22 @@ async def finish_call(
                 print(f"[finish_call] Database lookup failed for room {room_str}: {db_err}")
                 call_id = -1
 
+        ans_at = state.get("answered_at") if state else None
+        start_t = state.get("start_time") if state else None
+        ref_time = ans_at or start_t
+        duration = max(1, int(time.monotonic() - ref_time)) if ref_time else 0
+
+        has_appointment = bool((appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()))
+        outcome = "appointment_booked" if has_appointment else "completed"
+
         payload = {
             "transcript": transcript or None,
             "customer_name": customer_name or None,
             "appointment_date": appointment_date or None,
             "appointment_time": appointment_time or None,
             "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+            "duration": duration,
+            "outcome": outcome,
         }
 
         with open("finish_call_debug.log", "a") as f:
