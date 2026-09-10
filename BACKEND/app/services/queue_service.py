@@ -111,10 +111,20 @@ class QueueService:
                             req = api.ListRoomsRequest(names=[active_call.room_name])
                             res = await lkapi.room.list_rooms(list=req)
                             if not res.rooms:
-                                # Room does not exist. If call has exceeded standard telecom ringing duration (75s), clean it up.
-                                if call_age > timedelta(seconds=75):
-                                    print(f"Watchdog: Room '{active_call.room_name}' does not exist and call {active_call.id} age ({int(call_age.total_seconds())}s) > 75s. Failing call.")
-                                    timeout_triggered = True
+                                if not active_call.sip_was_active:
+                                    # Room does not exist. If call has exceeded standard telecom ringing duration (75s), clean it up.
+                                    if call_age > timedelta(seconds=75):
+                                        print(f"Watchdog: Room '{active_call.room_name}' does not exist and call {active_call.id} age ({int(call_age.total_seconds())}s) > 75s without answering. Failing call.")
+                                        timeout_triggered = True
+                                else:
+                                    # Call was answered and active in LiveKit. Room closed because call hung up.
+                                    # Give agent a 45s grace period to mix audio and invoke /complete before failing.
+                                    if not active_call.ended_at:
+                                        active_call.ended_at = now
+                                        await db.commit()
+                                    elif (now - active_call.ended_at) > timedelta(seconds=45):
+                                        print(f"Watchdog: Active call {active_call.id} room closed > 45s ago with no complete received. Failing call.")
+                                        timeout_triggered = True
                             else:
                                 # Room exists. Keep call active indefinitely as long as room is alive.
                                 pass
