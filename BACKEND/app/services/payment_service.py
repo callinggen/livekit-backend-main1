@@ -7,8 +7,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 try:
-    import razorpay
-    from razorpay.errors import SignatureVerificationError
+    import razorpay  # type: ignore
+    from razorpay.errors import SignatureVerificationError  # type: ignore
 except ImportError:
     razorpay = None
     class SignatureVerificationError(Exception):
@@ -78,7 +78,7 @@ class PaymentService:
         if custom_credits and custom_credits >= 100:
             credits = custom_credits
             # ₹1.5 per credit = 150 paise
-            amount = int(round(credits * 1.5 * 100))
+            amount = round(credits * 1.5 * 100)
             plan_name = f"Custom ({credits} Credits)"
         elif plan_name in PLANS:
             plan = PLANS[plan_name]
@@ -370,8 +370,8 @@ class PaymentService:
                 asyncio.create_task(
                     asyncio.to_thread(
                         email_service.send_payment_invoice_email,
-                        to_email=str(user.email),
-                        full_name=str(user.full_name or "Valued Customer"),
+                        to_email=user.email,
+                        full_name=user.full_name or "Valued Customer",
                         plan_name=payment.plan_name,
                         amount=payment.amount,
                         credits=payment.credits,
