@@ -72,6 +72,7 @@ async def login(
     await db.commit()
         
     return Token(
+        id=user.id,
         access_token=create_access_token(
             subject=user.id, 
             is_first_login=user.is_first_login, 
