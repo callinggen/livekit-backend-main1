@@ -949,7 +949,11 @@ async def entrypoint(ctx: JobContext):
                 min_silence_duration=0.35,
                 activation_threshold=0.35,
             ),
-            stt=sarvam.STT(),
+            stt=sarvam.STT(
+                api_key=os.getenv("SARVAM_API_KEY"),
+                language="en-IN",
+                model="saarika:v2.5",
+            ),
 
             llm=openai.LLM(
                 model="deepseek-chat",
@@ -958,6 +962,7 @@ async def entrypoint(ctx: JobContext):
             ),
 
             tts=sarvam.TTS(
+                api_key=os.getenv("SARVAM_API_KEY"),
                 model="bulbul:v3",
                 speaker=speaker_voice,
                 speech_sample_rate=16000,
@@ -1014,12 +1019,14 @@ async def entrypoint(ctx: JobContext):
         @session.on("user_input_transcribed")
         def _on_user_speech(ev: Any):
             text = getattr(ev, "transcript", "")
+            is_final = getattr(ev, "is_final", True)
             if text and text.strip():
                 clean_t = text.strip()
                 if not any(h in clean_t.lower() for h in ["wave of covid", "second wave", "third wave"]):
                     _mark_call_answered("user_speech")
-                    print(f"[STT] call_id={call_id} customer_track=True speech_start=None speech_end=None transcript_received=True text='{clean_t}'")
-                    transcript_lines.append(f"user: {clean_t}")
+                    print(f"[STT] call_id={call_id} customer_track=True is_final={is_final} text='{clean_t}'")
+                    if is_final:
+                        transcript_lines.append(f"user: {clean_t}")
                     state = ACTIVE_CALLS.get(room_name)
                     if state:
                         state["customer_has_spoken"] = True
