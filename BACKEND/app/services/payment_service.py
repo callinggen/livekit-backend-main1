@@ -6,8 +6,13 @@ from typing import Optional, Dict, Any, List
 from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-import razorpay
-from razorpay.errors import SignatureVerificationError
+try:
+    import razorpay
+    from razorpay.errors import SignatureVerificationError
+except ImportError:
+    razorpay = None
+    class SignatureVerificationError(Exception):
+        pass
 
 from app.models.payment import Payment
 from app.models.user import User
@@ -20,11 +25,11 @@ RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "mock_key_id").strip()
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "mock_key_secret").strip()
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "mock_webhook_secret").strip()
 
-
 # Determine Mock Mode status
-# We default to mock mode if real keys aren't set or are default placeholders
+# We default to mock mode if razorpay is not installed, real keys aren't set, or are default placeholders
 IS_MOCK_MODE = (
-    not RAZORPAY_KEY_ID
+    razorpay is None
+    or not RAZORPAY_KEY_ID
     or not RAZORPAY_KEY_SECRET
     or RAZORPAY_KEY_ID.startswith("mock_")
     or RAZORPAY_KEY_SECRET.startswith("mock_")
@@ -71,10 +76,10 @@ class PaymentService:
     ) -> dict:
         # Validate custom credits or standard plan
         if custom_credits and custom_credits >= 100:
-            credits = int(custom_credits)
+            credits = custom_credits
             # ₹1.5 per credit = 150 paise
             amount = int(round(credits * 1.5 * 100))
-            plan_name = f"Add-on ({credits} Credits)"
+            plan_name = f"Custom ({credits} Credits)"
         elif plan_name in PLANS:
             plan = PLANS[plan_name]
             amount = plan["amount"]
@@ -85,6 +90,7 @@ class PaymentService:
                 detail="Invalid plan or credit quantity selected (Minimum 100 credits)"
             )
 
+        razorpay_order_id = ""
         if IS_MOCK_MODE:
             # Generate a mock razorpay order ID
             razorpay_order_id = f"order_mock_{uuid.uuid4().hex[:12]}"
@@ -106,6 +112,7 @@ class PaymentService:
                     "payment_capture": 1
                 }
                 order = client.order.create(data=order_data)
+                razorpay_order_id = order.get("id") or f"order_{uuid.uuid4().hex[:12]}"
             except Exception as e:
                 print(f"Razorpay Order Creation Failed: {e}")
                 if "authentication failed" in str(e).lower():
@@ -323,14 +330,15 @@ class PaymentService:
         )
         res = await db.execute(stmt)
         
-        if res.rowcount == 0:
+        rowcount = getattr(res, "rowcount", -1)
+        if rowcount == 0:
             # This transaction was a runner-up (another verification thread won).
             # Retrieve the already-updated database record to return E2E values safely.
             stmt_select = select(Payment).where(Payment.id == payment.id)
             res_select = await db.execute(stmt_select)
             updated_payment = res_select.scalars().first()
             print(f"Idempotency: Order {payment.razorpay_order_id} was already processed.")
-            return updated_payment
+            return updated_payment or payment
 
         # We are the winner! Safely add credits to user account.
         user_stmt = select(User).where(User.id == payment.user_id)
@@ -355,24 +363,25 @@ class PaymentService:
         await db.refresh(payment)
 
         # Trigger confirmation email in the background to prevent blocking uvicorn
-        try:
-            import asyncio
-            from app.services.email_service import email_service
-            asyncio.create_task(
-                asyncio.to_thread(
-                    email_service.send_payment_invoice_email,
-                    to_email=user.email,
-                    full_name=user.full_name,
-                    plan_name=payment.plan_name,
-                    amount=payment.amount,
-                    credits=payment.credits,
-                    order_id=payment.razorpay_order_id,
-                    payment_id=payment_id
+        if user.email:
+            try:
+                import asyncio
+                from app.services.email_service import email_service
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        email_service.send_payment_invoice_email,
+                        to_email=str(user.email),
+                        full_name=str(user.full_name or "Valued Customer"),
+                        plan_name=payment.plan_name,
+                        amount=payment.amount,
+                        credits=payment.credits,
+                        order_id=payment.razorpay_order_id,
+                        payment_id=payment_id
+                    )
                 )
-            )
-            print(f"Dispatched purchase confirmation email task in background to {user.email}")
-        except Exception as email_err:
-            print(f"Failed to dispatch payment confirmation email: {email_err}")
+                print(f"Dispatched purchase confirmation email task in background to {user.email}")
+            except Exception as email_err:
+                print(f"Failed to dispatch payment confirmation email: {email_err}")
 
         return payment
 
