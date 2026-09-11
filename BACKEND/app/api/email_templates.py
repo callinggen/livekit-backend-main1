@@ -50,7 +50,10 @@ async def list_templates(
     List all accessible marketing email templates:
     Includes global curated system templates + current user's custom templates.
     """
-    await ensure_default_templates_seeded(db)
+    try:
+        await ensure_default_templates_seeded(db)
+    except Exception as seed_err:
+        print(f"[email_templates] Seeding notice: {seed_err}")
 
     query = select(EmailMarketingTemplate).where(
         EmailMarketingTemplate.status == "active",

@@ -131,7 +131,7 @@ async def list_campaigns(
     if type == "pending":
         query = query.where(Campaign.campaign_type == "pending")
     elif type == "normal":
-        query = query.where(Campaign.campaign_type == "normal")
+        query = query.where(or_(Campaign.campaign_type != "pending", Campaign.campaign_type.is_(None)))
         
     query = query.order_by(Campaign.id.desc())
     

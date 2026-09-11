@@ -145,7 +145,7 @@ async def create_mailbox(
         is_verified=is_verified,
         is_active=True,
         is_default=set_default,
-        last_tested_at=datetime.now(timezone.utc) if is_verified else None,
+        last_tested_at=datetime.now(timezone.utc).replace(tzinfo=None) if is_verified else None,
         error_message=error_msg,
     )
     db.add(mailbox)
@@ -181,7 +181,7 @@ async def test_existing_mailbox(
         sender_email=mailbox.sender_email,
     )
 
-    mailbox.last_tested_at = datetime.now(timezone.utc)
+    mailbox.last_tested_at = datetime.now(timezone.utc).replace(tzinfo=None)
     mailbox.is_verified = res["success"]
     mailbox.error_message = None if res["success"] else res["message"][:500]
     await db.commit()
