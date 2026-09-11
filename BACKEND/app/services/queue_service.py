@@ -215,6 +215,7 @@ class QueueService:
             contact_id=contact.id,
             phone=phone_to_dial,
             status="dialing",
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db.add(call)
 

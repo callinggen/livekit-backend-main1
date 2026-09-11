@@ -614,24 +614,38 @@ async def update_user_by_admin(
             user.is_active = False
             status_changed_to_inactive = True
 
+    # Handle agent fields if provided directly
+    if update_data.agent_script is not None:
+        user.agent_script = update_data.agent_script
+    if update_data.agent_name is not None:
+        user.agent_name = update_data.agent_name
+    if update_data.agent_language is not None:
+        user.agent_language = update_data.agent_language
+    if update_data.agent_voice is not None:
+        user.agent_voice = update_data.agent_voice
+
     # Handle agent list updates
     if update_data.agents is not None:
-        existing_agents_res = await db.execute(select(Agent).where(Agent.user_id == user.id))
-        existing_agents = existing_agents_res.scalars().all()
-        for old_agent in existing_agents:
-            await db.delete(old_agent)
-        await db.commit()
+        existing_agents_res = await db.execute(select(Agent).where(Agent.user_id == user.id).order_by(Agent.id))
+        existing_agents = list(existing_agents_res.scalars().all())
 
-        for agent_data in update_data.agents:
-            new_ag = Agent(
-                user_id=user.id,
-                name=agent_data.name,
-                language=agent_data.language or "English",
-                voice=agent_data.voice or "Meera",
-                script=agent_data.script or ""
-            )
-            db.add(new_ag)
-        await db.commit()
+        for idx, agent_data in enumerate(update_data.agents):
+            if idx < len(existing_agents):
+                # Update existing agent in-place to preserve FK references in calls
+                curr_ag = existing_agents[idx]
+                curr_ag.name = agent_data.name
+                curr_ag.language = agent_data.language or "English"
+                curr_ag.voice = agent_data.voice or "Meera"
+                curr_ag.script = agent_data.script or ""
+            else:
+                new_ag = Agent(
+                    user_id=user.id,
+                    name=agent_data.name,
+                    language=agent_data.language or "English",
+                    voice=agent_data.voice or "Meera",
+                    script=agent_data.script or ""
+                )
+                db.add(new_ag)
 
         if update_data.agents:
             primary = update_data.agents[0]
@@ -639,6 +653,17 @@ async def update_user_by_admin(
             user.agent_language = primary.language or "English"
             user.agent_voice = primary.voice or "Meera"
             user.agent_script = primary.script or ""
+    elif update_data.agent_script is not None:
+        existing_agents_res = await db.execute(select(Agent).where(Agent.user_id == user.id).order_by(Agent.id))
+        existing_agents = list(existing_agents_res.scalars().all())
+        if existing_agents:
+            existing_agents[0].script = update_data.agent_script
+            if update_data.agent_name:
+                existing_agents[0].name = update_data.agent_name
+            if update_data.agent_voice:
+                existing_agents[0].voice = update_data.agent_voice
+            if update_data.agent_language:
+                existing_agents[0].language = update_data.agent_language
 
     await db.commit()
     await db.refresh(user)
@@ -694,116 +719,6 @@ async def delete_user_by_admin(
 
     return {"message": f"User {user_id} deleted successfully"}
 
-@router.put("/users/{user_id}")
-async def update_user_by_admin(
-    user_id: str,
-    update_data: UserUpdateRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    # Strip USR- prefix if passed
-    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
-    
-    stmt = select(User).where(User.id == raw_id)
-    res = await db.execute(stmt)
-    user = res.scalars().first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    old_credits = user.credits or 0
-    credits_changed = False
-    plan_changed = False
-    status_changed_to_active = False
-    status_changed_to_inactive = False
-
-    if update_data.full_name is not None:
-        user.full_name = update_data.full_name
-    if update_data.email is not None:
-        user.email = update_data.email
-    if update_data.phone_number is not None:
-        user.phone_number = update_data.phone_number
-    if update_data.credits is not None and update_data.credits != user.credits:
-        user.credits = update_data.credits
-        credits_changed = True
-    if update_data.subscription_plan is not None and update_data.subscription_plan != user.subscription_plan:
-        user.subscription_plan = update_data.subscription_plan
-        plan_changed = True
-    if update_data.company_name is not None:
-        user.company_name = update_data.company_name
-    if update_data.industry is not None:
-        user.industry = update_data.industry
-
-    # Handle status toggles
-    if update_data.is_active is not None:
-        if update_data.is_active and not getattr(user, "is_active", True):
-            user.is_active = True
-            status_changed_to_active = True
-        elif not update_data.is_active and getattr(user, "is_active", True):
-            user.is_active = False
-            status_changed_to_inactive = True
-
-    if update_data.status is not None:
-        new_status = update_data.status.strip().lower()
-        if new_status == "active" and not getattr(user, "is_active", True):
-            user.is_active = True
-            status_changed_to_active = True
-        elif new_status in ("inactive", "suspended", "deactivated") and getattr(user, "is_active", True):
-            user.is_active = False
-            status_changed_to_inactive = True
-
-    await db.commit()
-    await db.refresh(user)
-
-    # Trigger notification events
-    if credits_changed or plan_changed:
-        # If credits were increased/topped up or plan updated, send confirmation email
-        if plan_changed or (update_data.credits is not None and update_data.credits > old_credits):
-            notification_service.notify_plan_credit_updated(user)
-        try:
-            await notification_service.check_and_trigger_credit_notifications(db, user)
-        except Exception as e:
-            print(f"Error checking credit notifications on admin update: {e}")
-
-    if status_changed_to_active:
-        notification_service.notify_account_activated(user)
-    elif status_changed_to_inactive:
-        notification_service.notify_account_deactivated(user)
-
-
-    return {
-        "message": "User updated successfully",
-        "user": {
-            "id": f"USR-{user.id}",
-            "raw_id": user.id,
-            "name": user.full_name,
-            "email": user.email,
-            "company_name": getattr(user, "company_name", "CallingGen Corp"),
-            "industry": getattr(user, "industry", "Technology & Software"),
-            "credits": user.credits,
-            "plan": user.subscription_plan,
-            "status": "Active" if getattr(user, "is_active", True) else "Inactive"
-        }
-    }
-
-
-@router.delete("/users/{user_id}")
-async def delete_user_by_admin(
-    user_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
-    
-    stmt = select(User).where(User.id == raw_id)
-    res = await db.execute(stmt)
-    user = res.scalars().first()
-
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    await db.delete(user)
-    await db.commit()
-
-    return {"message": f"User {user_id} deleted successfully"}
 
 
 @router.get("/contact-users")

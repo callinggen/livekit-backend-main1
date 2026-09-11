@@ -90,7 +90,7 @@ class Call(Base):
 
     started_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     ended_at: Mapped[datetime | None] = mapped_column(

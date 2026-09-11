@@ -50,26 +50,51 @@ async def _get_credit_owner_for_call(db: AsyncSession, call: Call) -> Optional[U
     """
     Resolve the user owning this call for credit deduction.
     Traces: call → job → campaign → user
-    Or for inbound: call → tenant_id
+    Or: call → campaign → user
+    Or: call → contact → campaign → user
+    Or: call → tenant_id / user_id
     """
     from sqlalchemy import select
+    from app.models.job import Job
+    from app.models.campaign import Campaign
+    from app.models.contact import Contact
+
     if call.direction == "inbound" and call.tenant_id:
         result = await db.execute(select(User).where(User.id == call.tenant_id))
         return result.scalars().first()
 
-    if not call.job_id:
-        return None
+    # 1. Tracing via job
+    if call.job_id:
+        job = await db.get(Job, call.job_id)
+        if job and job.campaign_id:
+            campaign = await db.get(Campaign, job.campaign_id)
+            if campaign and campaign.user_id:
+                result = await db.execute(select(User).where(User.id == campaign.user_id))
+                user = result.scalars().first()
+                if user:
+                    return user
 
-    from app.models.job import Job
-    from app.models.campaign import Campaign
-    job = await db.get(Job, call.job_id)
-    if job is None:
-        return None
-    campaign = await db.get(Campaign, job.campaign_id)
-    if campaign is None or campaign.user_id is None:
-        return None
-    result = await db.execute(select(User).where(User.id == campaign.user_id))
-    return result.scalars().first()
+    # 2. Direct campaign lookup
+    campaign_id = getattr(call, "campaign_id", None)
+    if not campaign_id and call.contact_id:
+        contact = await db.get(Contact, call.contact_id)
+        if contact:
+            campaign_id = contact.campaign_id
+    if campaign_id:
+        campaign = await db.get(Campaign, campaign_id)
+        if campaign and campaign.user_id:
+            result = await db.execute(select(User).where(User.id == campaign.user_id))
+            user = result.scalars().first()
+            if user:
+                return user
+
+    # 3. Direct user_id or tenant_id on call
+    user_id = getattr(call, "user_id", None) or getattr(call, "tenant_id", None)
+    if user_id:
+        result = await db.execute(select(User).where(User.id == user_id))
+        return result.scalars().first()
+
+    return None
 
 
 async def _analyze_and_update_summary(call_id: int, transcript: str, business_outcome: str, is_opt_out: bool):
@@ -258,21 +283,53 @@ class CallService:
             print(f"[CallService] Call {call_id} is ALREADY completed")
             return call
 
-        # ── Calculate timestamps and duration FIRST ───────────────────
+        # ── Pre-calculate signals from transcript & appointments ──────
+        customer_lines = 0
+        if transcript:
+            for line in transcript.strip().splitlines():
+                if line.strip().lower().startswith("user:"):
+                    customer_lines += 1
+
+        # Normalize appointment_date if passed in ISO or other formats
+        if appointment_date and isinstance(appointment_date, str):
+            appointment_date = appointment_date.strip()
+            if "T" in appointment_date:
+                appointment_date = appointment_date.split("T")[0]
+            elif " " in appointment_date and len(appointment_date.split(" ")[0]) == 10 and "-" in appointment_date.split(" ")[0]:
+                appointment_date = appointment_date.split(" ")[0]
+
+        has_valid_appointment = (
+            appointment_date is not None 
+            and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
+        )
+
+        connected = bool(
+            call.sip_was_active 
+            or call.answered_at 
+            or (duration is not None and duration > 0)
+            or (call.duration and call.duration > 0)
+            or customer_lines > 0
+            or has_valid_appointment
+        )
+
+        # ── Calculate timestamps and duration ─────────────────────────
         now = datetime.now(timezone.utc).replace(tzinfo=None)  # store as naive UTC to match existing rows
         call.ended_at = now
         
-        if duration is not None:
+        if duration is not None and duration > 0:
             call.duration = duration
-        elif call.sip_was_active or call.answered_at:
+        elif connected:
             ans_time = call.answered_at or call.started_at
             if ans_time:
                 ans_time = ans_time.replace(tzinfo=None) if (hasattr(ans_time, "tzinfo") and ans_time.tzinfo) else ans_time
-                call.duration = max(0, int((now - ans_time).total_seconds()))
+                call.duration = max(1, int((now - ans_time).total_seconds()))
             else:
-                call.duration = 0
+                call.duration = max(1, call.duration or 1)
         else:
             call.duration = 0
+
+        if connected:
+            call.sip_was_active = True
 
         if recording_url:
             call.recording_url = recording_url
@@ -320,19 +377,6 @@ class CallService:
             "call later", "call after", "reach me later", "later this week", "next week", "would work better"
         ])
 
-        # Normalize appointment_date if passed in ISO or other formats
-        if appointment_date and isinstance(appointment_date, str):
-            appointment_date = appointment_date.strip()
-            if "T" in appointment_date:
-                appointment_date = appointment_date.split("T")[0]
-            elif " " in appointment_date and len(appointment_date.split(" ")[0]) == 10 and "-" in appointment_date.split(" ")[0]:
-                appointment_date = appointment_date.split(" ")[0]
-
-        has_valid_appointment = (
-            appointment_date is not None 
-            and appointment_date.strip().lower() not in ("", "none", "null", "n/a", "undefined", "false")
-        )
-
         outcome_override = outcome
         if is_voicemail:
             outcome_override = "voicemail"
@@ -350,12 +394,6 @@ class CallService:
         if outcome in ("customer_hangup", "agent_hangup"):
             disconnect_reason = outcome
 
-        customer_lines = 0
-        if transcript:
-            for line in transcript.strip().splitlines():
-                if line.strip().lower().startswith("user:"):
-                    customer_lines += 1
-
         final_status, final_outcome, final_failure = classify_call_end(
             sip_was_active=call.sip_was_active,
             disconnect_reason=disconnect_reason,
@@ -363,18 +401,17 @@ class CallService:
             failure_reason=failure_reason
         )
 
-        connected = bool(call.sip_was_active or call.answered_at or (call.duration and call.duration > 0))
-
         # A call that was never answered is only one where neither SIP was active nor answered_at was recorded
         if not connected and not is_voicemail and not has_valid_appointment:
             final_status = "ended"
             final_outcome = "no_answer"
-
-        # Connected calls: if customer ended in between, outcome is customer_hangup or answered (NEVER no_answer)
-        if connected and final_outcome in ("no_answer", "unknown", None):
+        else:
             final_status = "completed"
-            final_outcome = "customer_hangup" if disconnect_reason == "customer_disconnect" or outcome in ("customer_hangup", "customer_silence") else "answered"
-            print(f"[CLASSIFICATION] Connected call {call_id} auto-resolved outcome to '{final_outcome}' (status: {final_status})")
+            if outcome_override:
+                final_outcome = outcome_override
+            elif final_outcome in ("no_answer", "unknown", None):
+                final_outcome = "customer_hangup" if disconnect_reason == "customer_disconnect" or outcome in ("customer_hangup", "customer_silence") else "answered"
+                print(f"[CLASSIFICATION] Connected call {call_id} auto-resolved outcome to '{final_outcome}' (status: {final_status})")
         
         print(f"\n[CLASSIFICATION INVARIANT]")
         print(f"call_id={call_id}")
@@ -490,6 +527,22 @@ class CallService:
                     if job.completed_contacts == 0 and job.failed_contacts > 0:
                         campaign.status = "incomplete"
                     else:
+                        campaign.status = "completed"
+
+        if not job and contact and contact.campaign_id:
+            campaign = await db.get(Campaign, contact.campaign_id)
+            if campaign and campaign.status in ("running", "scheduled", "pending"):
+                from sqlalchemy import select, func, case
+                contact_count_res = await db.execute(
+                    select(
+                        func.count(Contact.id),
+                        func.count(case((Contact.status.in_(["pending", "dialing"]), Contact.id)))
+                    ).where(Contact.campaign_id == campaign.id)
+                )
+                row = contact_count_res.first()
+                if row:
+                    total_cnt, remaining_cnt = row
+                    if remaining_cnt == 0 and total_cnt > 0:
                         campaign.status = "completed"
 
         # ── BACKEND GUARD ─────────────────────────────────────────────

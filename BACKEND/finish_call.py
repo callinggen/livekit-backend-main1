@@ -507,12 +507,22 @@ async def finish_call(
             except Exception as mix_err:
                 print(f"Warning – mixing audio failed: {mix_err}")
 
+        ans_at = state.get("answered_at") if state else None
+        start_t = state.get("start_time") if state else None
+        ref_time = ans_at or start_t
+        duration = max(1, int(time.monotonic() - ref_time)) if ref_time else 0
+
+        has_appointment = bool((appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()))
+        outcome = "appointment_booked" if has_appointment else "completed"
+
         payload = {
             "transcript": transcript or None,
             "customer_name": customer_name or None,
             "appointment_date": appointment_date or None,
             "appointment_time": appointment_time or None,
             "recording_url": (s3_url or f"/api/recordings/call_{call_id}.wav") if call_id != -1 else None,
+            "duration": duration,
+            "outcome": outcome,
         }
 
         with open("finish_call_debug.log", "a") as f:
