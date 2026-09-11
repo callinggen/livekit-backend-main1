@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, RedirectResponse
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -263,7 +264,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.mount("/api/recordings", StaticFiles(directory="recordings"), name="recordings")
+@app.get("/api/recordings/{filename}")
+async def get_recording_audio(filename: str):
+    local_path = os.path.join("recordings", filename)
+    if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+        return FileResponse(local_path, media_type="audio/wav")
+    
+    # Fallback to AWS S3 if offloaded to cloud storage
+    bucket = os.getenv("AWS_S3_BUCKET_NAME", "callinggen-recordings")
+    region = os.getenv("AWS_REGION", "ap-south-2")
+    s3_url = f"https://{bucket}.s3.{region}.amazonaws.com/recordings/{filename}"
+    return RedirectResponse(url=s3_url, status_code=307)
 
 app.add_middleware(
     CORSMiddleware,

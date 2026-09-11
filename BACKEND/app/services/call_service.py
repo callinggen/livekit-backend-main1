@@ -332,7 +332,11 @@ class CallService:
             call.sip_was_active = True
 
         if recording_url:
-            call.recording_url = recording_url
+            # Never overwrite an existing valid S3 / HTTP URL with a local relative /api/ path
+            if call.recording_url and call.recording_url.startswith("http") and not recording_url.startswith("http"):
+                print(f"[CallService] Preserving existing cloud recording URL for call {call_id}: {call.recording_url}")
+            else:
+                call.recording_url = recording_url
 
         # ── Fallback Voicemail Detection ───────────────────────────────
         if not is_voicemail and transcript:

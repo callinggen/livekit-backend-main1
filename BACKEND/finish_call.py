@@ -266,7 +266,9 @@ async def terminate_call_once(
         # Customer answered and hung up in between the call - preserve customer_hangup
         print(f"-> Preserving customer_hangup (customer_lines={customer_lines}, customer_has_spoken={customer_has_spoken})")
 
-    # ── Step 4: Mix WAV tracks ────────
+    # ── Step 4: Mix WAV tracks & Upload to S3 ────────
+    local_wav = f"recordings/call_{call_id}.wav"
+    s3_url = None
     if call_id != -1:
         try:
             await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
@@ -274,8 +276,16 @@ async def terminate_call_once(
             mix_wav_files(
                 f"recordings/call_{call_id}_customer.wav",
                 f"recordings/call_{call_id}_agent.wav",
-                f"recordings/call_{call_id}.wav"
+                local_wav
             )
+            # Try S3 upload if configured
+            try:
+                from app.services.s3_service import upload_to_s3_and_delete_local, cleanup_track_files
+                s3_url = upload_to_s3_and_delete_local(local_wav)
+                if s3_url:
+                    cleanup_track_files(call_id, recordings_dir="recordings")
+            except Exception as s3_err:
+                print(f"[finish_call] S3 upload skipped/failed: {s3_err}")
         except Exception as mix_err:
             print(f"Warning – mixing audio failed: {mix_err}")
 
@@ -292,7 +302,7 @@ async def terminate_call_once(
         "customer_name": customer_name or None,
         "appointment_date": appointment_date or None,
         "appointment_time": appointment_time or None,
-        "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+        "recording_url": (s3_url or f"/api/recordings/call_{call_id}.wav") if call_id != -1 else None,
         "duration": duration,
     }
     if is_voicemail:
@@ -508,12 +518,34 @@ async def finish_call(
         has_appointment = bool((appointment_date and appointment_date.strip()) or (appointment_time and appointment_time.strip()))
         outcome = "appointment_booked" if has_appointment else "completed"
 
+        # Mix WAV tracks & Upload to S3 — sleep briefly so recorder coroutine can close file handles
+        local_wav = f"recordings/call_{call_id}.wav"
+        s3_url = None
+        if call_id != -1:
+            try:
+                await asyncio.sleep(1.0)
+                from agent import mix_wav_files
+                mix_wav_files(
+                    f"recordings/call_{call_id}_customer.wav",
+                    f"recordings/call_{call_id}_agent.wav",
+                    local_wav
+                )
+                try:
+                    from app.services.s3_service import upload_to_s3_and_delete_local, cleanup_track_files
+                    s3_url = upload_to_s3_and_delete_local(local_wav)
+                    if s3_url:
+                        cleanup_track_files(call_id, recordings_dir="recordings")
+                except Exception as s3_err:
+                    print(f"[finish_call] S3 upload skipped/failed: {s3_err}")
+            except Exception as mix_err:
+                print(f"Warning – mixing audio failed: {mix_err}")
+
         payload = {
             "transcript": transcript or None,
             "customer_name": customer_name or None,
             "appointment_date": appointment_date or None,
             "appointment_time": appointment_time or None,
-            "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
+            "recording_url": (s3_url or f"/api/recordings/call_{call_id}.wav") if call_id != -1 else None,
             "duration": duration,
             "outcome": outcome,
         }
@@ -523,19 +555,6 @@ async def finish_call(
             f.write(f"Room: {room_str}\n")
             f.write(f"Transcript generated: '{transcript}'\n")
             f.write(f"Payload: {payload}\n")
-
-        # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
-        if call_id != -1:
-            try:
-                await asyncio.sleep(0.5)
-                from agent import mix_wav_files
-                mix_wav_files(
-                    f"recordings/call_{call_id}_customer.wav",
-                    f"recordings/call_{call_id}_agent.wav",
-                    f"recordings/call_{call_id}.wav"
-                )
-            except Exception as mix_err:
-                print(f"Warning – mixing audio failed: {mix_err}")
 
         try:
             print("Notifying backend that the call is complete...")
