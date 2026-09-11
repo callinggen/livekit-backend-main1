@@ -3,6 +3,7 @@ from typing import List, Optional
 from app.schemas.agent import AgentCreate
 
 class Token(BaseModel):
+    id: Optional[int] = None
     access_token: str
     token_type: str
     full_name: str | None = None

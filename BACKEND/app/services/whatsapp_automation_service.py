@@ -15,7 +15,7 @@ from app.models.whatsapp_send_job import WhatsAppSendJob
 from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
 from app.services.whatsapp_credit_service import WhatsAppCreditService
 from whatsapp import service as evolution_service
-from whatsapp.config import EVOLUTION_INSTANCE_NAME
+from whatsapp.config import resolve_instance_name, EVOLUTION_INSTANCE_NAME
 
 
 def normalize_whatsapp_phone(raw_phone: str) -> str:
@@ -410,7 +410,7 @@ class WhatsAppAutomationService:
             await db.commit()
 
             # 9. Execute Send via Evolution API Service
-            inst = EVOLUTION_INSTANCE_NAME or "callinggen"
+            inst = resolve_instance_name(None, user_id=user.id)
             item_results = []
             credits_spent = 0
             has_error = False
@@ -563,7 +563,7 @@ class WhatsAppAutomationService:
             if user.credits < total_required_credits:
                 return {"status": "error", "message": "Insufficient WhatsApp credits"}
 
-            inst = EVOLUTION_INSTANCE_NAME or "callinggen"
+            inst = resolve_instance_name(None, user_id=user.id)
             has_error = False
             last_error = None
             credits_spent = 0

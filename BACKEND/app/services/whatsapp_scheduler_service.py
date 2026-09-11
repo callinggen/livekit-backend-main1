@@ -66,7 +66,7 @@ class WhatsAppSchedulerService:
                         )
                         recipients = rec_res.scalars().all()
 
-                        inst = resolve_instance_name(None)
+                        inst = resolve_instance_name(None, user_id=user.id if user else None)
                         backend_base_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
                         total_sent = 0

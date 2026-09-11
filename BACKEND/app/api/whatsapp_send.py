@@ -200,7 +200,7 @@ async def send_bulk_whatsapp(
     if not req.items:
         raise HTTPException(status_code=400, detail="No message content or attachments provided.")
 
-    inst = resolve_instance_name(req.instance_name)
+    inst = resolve_instance_name(req.instance_name, user_id=current_user.id)
     backend_base_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
     # Filter recipients with valid phone numbers
