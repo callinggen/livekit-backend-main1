@@ -32,7 +32,7 @@ async def dry_run():
             calculated_duration = duration
         elif call.sip_was_active or call.answered_at:
             ans_time = call.answered_at or call.started_at
-            if ans_time:
+            if ans_time and call.ended_at:
                 calculated_duration = max(0, int((call.ended_at - ans_time).total_seconds()))
         print(f"Calculated Duration: {calculated_duration} seconds")
         

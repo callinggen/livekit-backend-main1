@@ -111,10 +111,20 @@ class QueueService:
                             req = api.ListRoomsRequest(names=[active_call.room_name])
                             res = await lkapi.room.list_rooms(list=req)
                             if not res.rooms:
-                                # Room does not exist. If call has exceeded standard telecom ringing duration (75s), clean it up.
-                                if call_age > timedelta(seconds=75):
-                                    print(f"Watchdog: Room '{active_call.room_name}' does not exist and call {active_call.id} age ({int(call_age.total_seconds())}s) > 75s. Failing call.")
-                                    timeout_triggered = True
+                                if not active_call.sip_was_active:
+                                    # Room does not exist. If call has exceeded standard telecom ringing duration (75s), clean it up.
+                                    if call_age > timedelta(seconds=75):
+                                        print(f"Watchdog: Room '{active_call.room_name}' does not exist and call {active_call.id} age ({int(call_age.total_seconds())}s) > 75s without answering. Failing call.")
+                                        timeout_triggered = True
+                                else:
+                                    # Call was answered and active in LiveKit. Room closed because call hung up.
+                                    # Give agent a 45s grace period to mix audio and invoke /complete before failing.
+                                    if not active_call.ended_at:
+                                        active_call.ended_at = now
+                                        await db.commit()
+                                    elif (now - active_call.ended_at) > timedelta(seconds=45):
+                                        print(f"Watchdog: Active call {active_call.id} room closed > 45s ago with no complete received. Failing call.")
+                                        timeout_triggered = True
                             else:
                                 # Room exists. Keep call active indefinitely as long as room is alive.
                                 pass
@@ -180,6 +190,43 @@ class QueueService:
 
             if campaign:
                 campaign.status = "completed"
+
+                # Dispatch Campaign Completed notification email to user profile email
+                if not getattr(campaign, "completed_notified", False):
+                    campaign.completed_notified = True
+                    if campaign.user_id:
+                        try:
+                            from app.models.user import User
+                            user = await db.get(User, campaign.user_id)
+                            if user and user.email:
+                                # Fetch all calls for accurate summary
+                                calls_res = await db.execute(
+                                    select(Call).join(Contact, Call.contact_id == Contact.id)
+                                    .where(Contact.campaign_id == campaign.id)
+                                )
+                                calls = calls_res.scalars().all()
+                                total_calls = len(calls)
+                                completed_calls = sum(1 for c in calls if c.status == "completed")
+                                failed_calls = sum(1 for c in calls if c.status in ("failed", "no_answer"))
+                                hot_leads = sum(1 for c in calls if c.category == "HOT")
+
+                                import asyncio
+                                from app.services.email_service import email_service
+                                asyncio.create_task(
+                                    asyncio.to_thread(
+                                        email_service.send_campaign_completed_email,
+                                        to_email=user.email,
+                                        user_name=user.full_name or "Client",
+                                        campaign_name=campaign.campaign_name,
+                                        total_calls=total_calls,
+                                        completed=completed_calls,
+                                        failed=failed_calls,
+                                        hot_leads=hot_leads,
+                                    )
+                                )
+                                print(f"[QueueService] Dispatched campaign completion email to {user.email} for '{campaign.campaign_name}'")
+                        except Exception as comp_notify_err:
+                            print(f"[QueueService] Warning: Failed to send campaign completion email: {comp_notify_err}")
 
             await db.commit()
 

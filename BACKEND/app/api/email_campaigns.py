@@ -217,3 +217,37 @@ async def delete_email_campaign(
     await db.delete(campaign)
     await db.commit()
     return {"message": "Email campaign deleted"}
+
+
+# ── POST /api/email-campaigns/ai-generate ──────────────────────────────────
+
+from app.schemas.email_ai import EmailAIGenerateRequest, EmailAIGenerateResponse
+from app.services.email_ai_service import EmailAIService
+
+@router.post("/email-campaigns/ai-generate", response_model=EmailAIGenerateResponse)
+async def generate_email_with_ai(
+    data: EmailAIGenerateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    AI-powered email content generation for campaigns and templates.
+    Produces high-converting Subject line, Heading, HTML Body, and CTA.
+    """
+    if not data.prompt or not data.prompt.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt description cannot be empty.",
+        )
+
+    try:
+        response = await EmailAIService.generate_email_content(
+            request=data,
+            user_company_name=current_user.company_name or None,
+        )
+        return response
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI generation failed: {str(e)}",
+        )
+

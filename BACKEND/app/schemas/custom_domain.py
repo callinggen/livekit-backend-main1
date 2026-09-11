@@ -55,3 +55,6 @@ class VerifiedSenderOut(BaseModel):
     domain: str
     is_default: bool
     is_verified: bool
+    is_smtp: bool = False
+    provider: Optional[str] = None
+    mailbox_id: Optional[int] = None

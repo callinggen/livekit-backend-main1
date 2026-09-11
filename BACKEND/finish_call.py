@@ -1,4 +1,6 @@
 import asyncio
+import time
+import os
 from typing import Any
 
 from livekit.agents import function_tool
@@ -172,8 +174,8 @@ async def terminate_call_once(
 
     # ── Step 1: Delay room deletion to allow final TTS to play ──
     if reason == "llm_tool":
-        print("Waiting 4.5 seconds to allow final agent response to play before hanging up...")
-        await asyncio.sleep(4.5)
+        print("Waiting 1.2 seconds to allow final agent response to play before hanging up...")
+        await asyncio.sleep(1.2)
         print("Grace period finished. Proceeding to hang up.")
 
     # ── Step 2: ALWAYS delete the LiveKit room to hang up the call FIRST ──
@@ -248,8 +250,8 @@ async def terminate_call_once(
     # Determine accurate outcome for silence / no response / unanswered
     if not outcome and sip_was_active:
         if customer_lines == 0 and not customer_has_spoken:
-            outcome = "no_answer"
-            print("-> Reclassifying outcome to: no_answer (no customer speech detected - call was unanswered)")
+            outcome = "customer_hangup" if reason in ("customer_disconnect", "customer_hangup") else "customer_no_response"
+            print(f"-> Outcome set to: {outcome} (SIP was active, customer answered but spoke 0 lines)")
         elif reason == "customer_silence":
             if first_audio_received and not customer_has_spoken:
                 outcome = "customer_no_response"
@@ -260,13 +262,11 @@ async def terminate_call_once(
             else:
                 outcome = "customer_no_response"
                 print("-> Reclassifying outcome to: customer_no_response")
-    elif outcome == "customer_hangup" and customer_lines == 0 and not customer_has_spoken:
-        outcome = "no_answer"
-        print("-> Reclassifying customer_hangup to no_answer because customer never spoke or answered")
+    elif outcome == "customer_hangup":
+        # Customer answered and hung up in between the call - preserve customer_hangup
+        print(f"-> Preserving customer_hangup (customer_lines={customer_lines}, customer_has_spoken={customer_has_spoken})")
 
     # ── Step 4: Mix WAV tracks ────────
-    local_wav = f"recordings/call_{call_id}.wav"
-    s3_url = None
     if call_id != -1:
         try:
             await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
@@ -274,16 +274,8 @@ async def terminate_call_once(
             mix_wav_files(
                 f"recordings/call_{call_id}_customer.wav",
                 f"recordings/call_{call_id}_agent.wav",
-                local_wav
+                f"recordings/call_{call_id}.wav"
             )
-            # Try S3 upload if configured
-            try:
-                from app.services.s3_service import upload_to_s3_and_delete_local, cleanup_track_files
-                s3_url = upload_to_s3_and_delete_local(local_wav)
-                if s3_url:
-                    cleanup_track_files(call_id, recordings_dir="recordings")
-            except Exception as s3_err:
-                print(f"[finish_call] S3 upload skipped/failed: {s3_err}")
         except Exception as mix_err:
             print(f"Warning – mixing audio failed: {mix_err}")
 
@@ -300,7 +292,7 @@ async def terminate_call_once(
         "customer_name": customer_name or None,
         "appointment_date": appointment_date or None,
         "appointment_time": appointment_time or None,
-        "recording_url": (s3_url or f"/api/recordings/call_{call_id}.wav") if call_id != -1 else None,
+        "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
         "duration": duration,
     }
     if is_voicemail:
@@ -433,20 +425,43 @@ async def finish_call(
                 speech = session.say(goodbye_phrase, allow_interruptions=False)
                 if speech:
                     try:
-                        await asyncio.wait_for(speech, timeout=6.0)
+                        await asyncio.wait_for(speech, timeout=3.0)
                     except Exception:
                         pass
-                play_buffer = max(2.5, min(5.0, len(goodbye_phrase) * 0.08 + 1.0))
-                print(f"Waiting {play_buffer:.1f}s for goodbye audio streaming...")
-                await asyncio.sleep(play_buffer)
+                await asyncio.sleep(1.0)
                 print("Goodbye spoken successfully.")
             except Exception as e:
                 print(f"Warning – could not speak goodbye (non-fatal): {e}")
         else:
-            print("Assistant already spoke goodbye during conversation turn. Waiting 1.8s for SIP audio buffer...")
-            await asyncio.sleep(1.8)
+            print("Assistant already spoke goodbye during conversation turn. Brief 0.8s buffer for SIP audio...")
+            await asyncio.sleep(0.8)
 
-        # ── Step 2: Build transcript (after goodbye is in history) ────────
+        # ── Step 2: HANG UP THE SIP CALL IMMEDIATELY (Delete LiveKit room FIRST) ──
+        try:
+            print("Deleting LiveKit room (hanging up SIP call immediately)...")
+            import os
+            lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
+            lk_key = os.getenv("LIVEKIT_API_KEY")
+            lk_secret = os.getenv("LIVEKIT_API_SECRET")
+            
+            if lk_url:
+                lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
+            else:
+                lkapi = api.LiveKitAPI()
+
+            try:
+                await lkapi.room.delete_room(
+                    api.DeleteRoomRequest(room=room_str)
+                )
+                with open("finish_call_debug.log", "a") as f: f.write(f"Room deleted successfully — call hung up.\n")
+                print("Room deleted successfully — call hung up immediately.")
+            finally:
+                await lkapi.aclose()
+        except Exception as e:
+            with open("finish_call_debug.log", "a") as f: f.write(f"Warning – room deletion error: {e}\n")
+            print(f"Warning – room deletion error: {e}")
+
+        # ── Step 3: Build transcript (after goodbye is in history) ────────
         res_end = _build_transcript(session)
         if isinstance(res_end, tuple) and len(res_end) == 3:
             lines_end, _, _ = res_end
@@ -455,15 +470,15 @@ async def finish_call(
             transcript = str(res_end or "")
         print(f"Transcript lines: {len(transcript.splitlines())}")
 
-        # ── Step 3: Close the agent session ──────────────────────────────
+        # ── Step 4: Close the agent session ──────────────────────────────
         try:
             print("Closing AgentSession...")
-            await asyncio.wait_for(session.aclose(), timeout=5.0)
+            await asyncio.wait_for(session.aclose(), timeout=2.0)
             print("AgentSession closed.")
         except Exception as e:
             print(f"Warning – session.aclose() error (non-fatal): {e}")
 
-        # ── Step 4: Notify backend with full payload ──────────────────────
+        # ── Step 5: Notify backend with full payload ──────────────────────
         call_id = state.get("call_id", -1) if state else -1
         if call_id == -1 or call_id is None:
             try:
@@ -485,28 +500,6 @@ async def finish_call(
                 print(f"[finish_call] Database lookup failed for room {room_str}: {db_err}")
                 call_id = -1
 
-        # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
-        local_wav = f"recordings/call_{call_id}.wav"
-        s3_url = None
-        if call_id != -1:
-            try:
-                await asyncio.sleep(1.0)  # give recorder time to flush & close
-                from agent import mix_wav_files
-                mix_wav_files(
-                    f"recordings/call_{call_id}_customer.wav",
-                    f"recordings/call_{call_id}_agent.wav",
-                    local_wav
-                )
-                try:
-                    from app.services.s3_service import upload_to_s3_and_delete_local, cleanup_track_files
-                    s3_url = upload_to_s3_and_delete_local(local_wav)
-                    if s3_url:
-                        cleanup_track_files(call_id, recordings_dir="recordings")
-                except Exception as s3_err:
-                    print(f"[finish_call] S3 upload skipped/failed: {s3_err}")
-            except Exception as mix_err:
-                print(f"Warning – mixing audio failed: {mix_err}")
-
         ans_at = state.get("answered_at") if state else None
         start_t = state.get("start_time") if state else None
         ref_time = ans_at or start_t
@@ -520,7 +513,7 @@ async def finish_call(
             "customer_name": customer_name or None,
             "appointment_date": appointment_date or None,
             "appointment_time": appointment_time or None,
-            "recording_url": (s3_url or f"/api/recordings/call_{call_id}.wav") if call_id != -1 else None,
+            "recording_url": f"/api/recordings/call_{call_id}.wav" if call_id != -1 else None,
             "duration": duration,
             "outcome": outcome,
         }
@@ -531,6 +524,19 @@ async def finish_call(
             f.write(f"Transcript generated: '{transcript}'\n")
             f.write(f"Payload: {payload}\n")
 
+        # Mix WAV tracks — sleep briefly so recorder coroutine can close file handles
+        if call_id != -1:
+            try:
+                await asyncio.sleep(0.5)
+                from agent import mix_wav_files
+                mix_wav_files(
+                    f"recordings/call_{call_id}_customer.wav",
+                    f"recordings/call_{call_id}_agent.wav",
+                    f"recordings/call_{call_id}.wav"
+                )
+            except Exception as mix_err:
+                print(f"Warning – mixing audio failed: {mix_err}")
+
         try:
             print("Notifying backend that the call is complete...")
             success = await notify_call_complete(room_str, payload=payload)
@@ -540,30 +546,22 @@ async def finish_call(
             print(f"[finish_call] ERROR notifying backend: {e}")
 
     finally:
-        # ── Step 5: ALWAYS delete the LiveKit room to hang up the call ──
+        # Failsafe cleanup: ensure room is deleted if not already done
         try:
-            print("Deleting LiveKit room (hanging up SIP call)...")
             import os
             lk_url = os.getenv("LIVEKIT_URL", "").replace("ws://", "http://").replace("wss://", "https://")
             lk_key = os.getenv("LIVEKIT_API_KEY")
             lk_secret = os.getenv("LIVEKIT_API_SECRET")
-            
             if lk_url:
                 lkapi = api.LiveKitAPI(url=lk_url, api_key=lk_key, api_secret=lk_secret)
-            else:
-                lkapi = api.LiveKitAPI()
-
-            try:
-                await lkapi.room.delete_room(
-                    api.DeleteRoomRequest(room=room_str)
-                )
-                with open("finish_call_debug.log", "a") as f: f.write(f"Room deleted successfully — call hung up.\n")
-                print("Room deleted successfully — call hung up.")
-            finally:
-                await lkapi.aclose()
-        except Exception as e:
-            with open("finish_call_debug.log", "a") as f: f.write(f"Warning – room deletion error: {e}\n")
-            print(f"Warning – room deletion error: {e}")
+                try:
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=room_str))
+                except Exception:
+                    pass
+                finally:
+                    await lkapi.aclose()
+        except Exception:
+            pass
 
         # Remove active call state
         ACTIVE_CALLS.pop(room_str, None)

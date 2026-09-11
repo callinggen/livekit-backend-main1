@@ -374,3 +374,93 @@ def get_payment_invoice_html(
     return _wrap_email_layout("Payment Invoice Receipt - CallingGen", body, button_text="Open Dashboard", button_url="#/dashboard")
 
 
+def get_campaign_started_html(
+    full_name: str,
+    campaign_name: str,
+    total_contacts: int,
+    agent_name: str,
+    is_pre_alert: bool = False
+) -> str:
+    name_str = html.escape(full_name or "Client")
+    campaign_str = html.escape(campaign_name or "Calling Campaign")
+    agent_str = html.escape(agent_name or "AI Voice Agent")
+    
+    title = f"Campaign Starting Soon: {campaign_str}" if is_pre_alert else f"Campaign Launched: {campaign_str}"
+    heading = "Starting in 2 Minutes" if is_pre_alert else "Currently Running"
+    banner_color = "#6366f1"
+    
+    body = f"""
+    <p>Hello <strong>{name_str}</strong>,</p>
+    <p>Your AI voice calling campaign <strong>{campaign_str}</strong> { "is scheduled to begin dialing in approximately 2 minutes" if is_pre_alert else "has officially started dialing" }.</p>
+    
+    <div style="background-color: #f8fafc; border-left: 4px solid {banner_color}; padding: 18px; border-radius: 8px; margin: 20px 0; border: 1px solid #e2e8f0;">
+        <div style="font-size: 12px; color: #4338ca; font-weight: bold; text-transform: uppercase; margin-bottom: 8px;">Campaign Overview</div>
+        <div style="font-size: 20px; font-weight: bold; color: #0f172a;">{campaign_str}</div>
+        <table style="width: 100%; margin-top: 14px; font-size: 13px; color: #475569; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 6px 0; font-weight: 600; width: 140px;">Total Contacts:</td>
+                <td style="padding: 6px 0; font-family: monospace; font-size: 14px; font-weight: bold; color: #0f172a;">{total_contacts:,}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: 600;">Assigned AI Agent:</td>
+                <td style="padding: 6px 0; color: #0f172a; font-weight: 500;">{agent_str}</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-weight: 600;">Status:</td>
+                <td style="padding: 6px 0;"><span style="background: #e0e7ff; color: #4338ca; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 4px;">{heading}</span></td>
+            </tr>
+        </table>
+    </div>
+
+    <p>You can monitor live calls, transcripts, and customer responses in real-time from your CallingGen dashboard.</p>
+    """
+    return _wrap_email_layout(title, body, button_text="View Live Campaign", button_url="https://callinggen.in/campaign")
+
+
+def get_campaign_completed_html(
+    full_name: str,
+    campaign_name: str,
+    total_calls: int,
+    completed: int,
+    failed: int,
+    hot_leads: int,
+) -> str:
+    name_str = html.escape(full_name or "Client")
+    campaign_str = html.escape(campaign_name or "Calling Campaign")
+    
+    title = f"Campaign Completed: {campaign_str}"
+    
+    body = f"""
+    <p>Hello <strong>{name_str}</strong>,</p>
+    <p>All calls for your campaign <strong>{campaign_str}</strong> have finished successfully.</p>
+    
+    <div style="background-color: #f8fafc; border-left: 4px solid #10b981; padding: 18px; border-radius: 8px; margin: 20px 0; border: 1px solid #e2e8f0;">
+        <div style="font-size: 12px; color: #065f46; font-weight: bold; text-transform: uppercase; margin-bottom: 8px;">Campaign Performance Summary</div>
+        <div style="font-size: 20px; font-weight: bold; color: #0f172a;">{campaign_str}</div>
+        
+        <table style="width: 100%; margin-top: 14px; font-size: 13px; color: #475569; border-collapse: collapse;">
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 7px 0; font-weight: 600;">Total Calls Dialed:</td>
+                <td style="padding: 7px 0; text-align: right; font-family: monospace; font-size: 14px; font-weight: bold; color: #0f172a;">{total_calls:,}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 7px 0; font-weight: 600;">Answered / Completed:</td>
+                <td style="padding: 7px 0; text-align: right; font-family: monospace; font-size: 14px; font-weight: bold; color: #059669;">{completed:,}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 7px 0; font-weight: 600;">Unanswered / Failed:</td>
+                <td style="padding: 7px 0; text-align: right; font-family: monospace; font-size: 14px; font-weight: bold; color: #dc2626;">{failed:,}</td>
+            </tr>
+            <tr>
+                <td style="padding: 7px 0; font-weight: 600;">Hot Leads Identified:</td>
+                <td style="padding: 7px 0; text-align: right; font-family: monospace; font-size: 14px; font-weight: bold; color: #d97706;">🔥 {hot_leads:,}</td>
+            </tr>
+        </table>
+    </div>
+
+    <p>Detailed call recordings, transcripts, and AI analysis reports are now ready to view or export on your dashboard.</p>
+    """
+    return _wrap_email_layout(title, body, button_text="View Call Logs & Reports", button_url="https://callinggen.in/call-logs")
+
+
+

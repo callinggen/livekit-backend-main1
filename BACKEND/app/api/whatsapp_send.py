@@ -1,4 +1,6 @@
 import os
+import re
+import httpx
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,9 +17,9 @@ from app.models.whatsapp_material import WhatsAppMaterial
 from app.models.whatsapp_send_job import WhatsAppSendJob
 from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
 from app.services.whatsapp_credit_service import WhatsAppCreditService
-from app.core.security import get_current_user
+from app.core.security import get_optional_current_user
 from whatsapp import service as evolution_service
-from whatsapp.config import EVOLUTION_INSTANCE_NAME
+from whatsapp.config import resolve_instance_name, EVOLUTION_INSTANCE_NAME
 
 router = APIRouter()
 
@@ -28,6 +30,28 @@ def normalize_whatsapp_phone(raw_phone: str) -> str:
     if len(clean) == 10:
         clean = "91" + clean
     return clean
+
+
+def extract_error_detail(err: Exception) -> str:
+    """Extract clear human-readable error from Evolution API responses."""
+    if hasattr(err, "response") and getattr(err, "response", None) is not None:
+        try:
+            raw_text = err.response.text
+            if "exists': false" in raw_text.lower() or 'exists": false' in raw_text.lower() or '"exists":false' in raw_text.lower():
+                return "Phone number is not registered on WhatsApp"
+            data = err.response.json()
+            if isinstance(data, dict):
+                resp_inner = data.get("response", {}) if isinstance(data, dict) else {}
+                msg = (resp_inner.get("message") if isinstance(resp_inner, dict) else None) or data.get("message") or data.get("error")
+                if isinstance(msg, list) and len(msg) > 0:
+                    return str(msg[0])
+                if msg:
+                    return str(msg)
+            return raw_text[:200]
+        except Exception:
+            pass
+    return str(err)
+
 
 
 class RecipientItem(BaseModel):
@@ -54,6 +78,7 @@ class SendBulkRequest(BaseModel):
     source_type: Optional[str] = "manual"  # "campaign_manual", "excel_csv", "manual"
     source_name: Optional[str] = None
     campaign_id: Optional[int] = None
+    scheduled_for: Optional[str] = None  # ISO timestamp string for scheduling
 
 
 # ── GET /api/whatsapp/campaign-contacts-filtered ───────────────────────────
@@ -62,7 +87,7 @@ class SendBulkRequest(BaseModel):
 async def get_campaign_contacts_filtered(
     campaign_id: int = Query(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Fetch contacts for a campaign with rich call logs and outcome data
@@ -163,7 +188,7 @@ async def get_campaign_contacts_filtered(
 async def send_bulk_whatsapp(
     req: SendBulkRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Execute controlled bulk WhatsApp sending to selected contacts.
@@ -175,7 +200,7 @@ async def send_bulk_whatsapp(
     if not req.items:
         raise HTTPException(status_code=400, detail="No message content or attachments provided.")
 
-    inst = req.instance_name or EVOLUTION_INSTANCE_NAME or "callinggen"
+    inst = resolve_instance_name(req.instance_name, user_id=current_user.id)
     backend_base_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
     # Filter recipients with valid phone numbers
@@ -253,7 +278,64 @@ async def send_bulk_whatsapp(
             "mime_type": m.mime_type,
         })
 
-    # Create Send Job record
+    # Parse scheduled_for timestamp if provided
+    scheduled_dt = None
+    if req.scheduled_for and req.scheduled_for.strip():
+        try:
+            cleaned_iso = req.scheduled_for.replace("Z", "+00:00")
+            parsed_dt = datetime.fromisoformat(cleaned_iso)
+            # Ensure future time
+            if parsed_dt:
+                scheduled_dt = parsed_dt
+        except Exception as dt_err:
+            print(f"[SendBulk] Error parsing scheduled_for: {dt_err}")
+
+    # If scheduled for future, create scheduled job and recipients without sending now
+    if scheduled_dt:
+        send_job = WhatsAppSendJob(
+            user_id=current_user.id,
+            source_type=req.source_type or "manual",
+            source_name=source_name,
+            campaign_id=req.campaign_id,
+            content_type=content_type_str,
+            message_text=main_text,
+            attachments=attachments_meta,
+            total_contacts=len(valid_recipients),
+            sent_count=0,
+            failed_count=0,
+            credits_deducted=0,
+            status="scheduled",
+            scheduled_for=scheduled_dt,
+        )
+        db.add(send_job)
+        await db.flush()
+
+        for rec in valid_recipients:
+            rec_log = WhatsAppSendRecipient(
+                send_job_id=send_job.id,
+                contact_id=rec.get("contact_id"),
+                name=rec["name"],
+                phone=rec["phone"],
+                status="scheduled",
+                error_message=None,
+                details={"items": [{"type": item.type, "status": "scheduled"} for item in req.items]},
+                sent_at=None,
+            )
+            db.add(rec_log)
+
+        await db.commit()
+
+        return {
+            "success": True,
+            "status": "scheduled",
+            "job_id": send_job.id,
+            "scheduled_for": scheduled_dt.isoformat(),
+            "total_recipients": len(valid_recipients),
+            "total_credits_deducted": 0,
+            "message": f"Broadcast successfully scheduled for {scheduled_dt.strftime('%d %b %Y, %I:%M %p')}.",
+        }
+
+    # Create Immediate Send Job record
     send_job = WhatsAppSendJob(
         user_id=current_user.id,
         source_type=req.source_type or "manual",
@@ -308,11 +390,12 @@ async def send_bulk_whatsapp(
                         total_failed += 1
                         rec_has_error = True
                 except Exception as send_err:
-                    print(f"[SendBulk] Text send error for {rec_phone}: {send_err}")
-                    rec_item_statuses.append({"type": "text", "status": "failed", "error": str(send_err)})
+                    err_clean = extract_error_detail(send_err)
+                    print(f"[SendBulk] Text send error for {rec_phone}: {err_clean}")
+                    rec_item_statuses.append({"type": "text", "status": "failed", "error": err_clean})
                     total_failed += 1
                     rec_has_error = True
-                    last_rec_error = str(send_err)
+                    last_rec_error = err_clean
 
             # ── 2. Image or Document Message ─────────────────────────────────
             elif item.type in ("image", "document"):
@@ -349,11 +432,12 @@ async def send_bulk_whatsapp(
                         total_failed += 1
                         rec_has_error = True
                 except Exception as media_err:
-                    print(f"[SendBulk] Media send error for {rec_phone}: {media_err}")
-                    rec_item_statuses.append({"type": item.type, "status": "failed", "error": str(media_err)})
+                    err_clean = extract_error_detail(media_err)
+                    print(f"[SendBulk] Media send error for {rec_phone}: {err_clean}")
+                    rec_item_statuses.append({"type": item.type, "status": "failed", "error": err_clean})
                     total_failed += 1
                     rec_has_error = True
-                    last_rec_error = str(media_err)
+                    last_rec_error = err_clean
 
         # Create recipient log linked to send job
         rec_status = "sent" if not rec_has_error else ("partial" if any(i.get("status") == "sent" for i in rec_item_statuses) else "failed")
@@ -397,3 +481,71 @@ async def send_bulk_whatsapp(
         "remaining_credits": current_user.credits,
         "details": recipient_results,
     }
+
+
+# ── POST /api/whatsapp/import-google-sheet ──────────────────────────────────
+
+class GoogleSheetImportRequest(BaseModel):
+    sheet_url: str
+
+
+@router.post("/import-google-sheet")
+async def import_google_sheet(req: GoogleSheetImportRequest):
+    """
+    Fetch and parse contacts from a public or shared Google Sheets URL.
+    Converts Google Sheet link into a direct CSV export and parses rows into name and phone fields.
+    """
+    url = req.sheet_url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Please provide a valid Google Sheet URL.")
+
+    # Extract Sheet ID
+    sheet_match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
+    if not sheet_match:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Google Sheet URL. Format should be: https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit",
+        )
+
+    sheet_id = sheet_match.group(1)
+    gid_match = re.search(r"[#&]gid=([0-9]+)", url)
+    gid = gid_match.group(1) if gid_match else "0"
+
+    export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(export_url)
+            if resp.status_code != 200:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not access Google Sheet. Please make sure the sheet is shared with 'Anyone with the link can view'.",
+                )
+
+            csv_text = resp.text
+            # Check if Google returned an HTML login page instead of CSV
+            if "<html" in csv_text.lower() or "<!doctype html" in csv_text.lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Google Sheet requires Google Login. Please set sharing settings to 'Anyone with the link can view'.",
+                )
+
+            import io
+            import csv
+
+            csv_reader = csv.DictReader(io.StringIO(csv_text))
+            rows = []
+            for row in csv_reader:
+                rows.append({k: (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None})
+
+            return {
+                "success": True,
+                "total": len(rows),
+                "rows": rows,
+                "sheet_id": sheet_id,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[GoogleSheetImport] Error: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch Google Sheet: {str(e)}")

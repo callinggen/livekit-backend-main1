@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.password_reset import PasswordReset
 from app.models.agent import Agent
+from app.models.user_phone_number import UserPhoneNumber
 from app.schemas.auth import LoginRequest, Token, ForgotPasswordRequest, VerifyResetCodeRequest, ResetPasswordRequest, ChangePasswordRequest, UserCreateRequest, RegisterRequest, ProfileUpdateRequest
 from app.core.security import verify_password, create_access_token, get_password_hash, get_current_user
 from app.services.email_service import email_service
@@ -87,6 +88,7 @@ async def login(
     await db.commit()
         
     return Token(
+        id=user.id,
         access_token=create_access_token(
             subject=user.id, 
             is_first_login=user.is_first_login, 
@@ -393,7 +395,15 @@ async def register_user(
 
 
 @router.get("/me")
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Fetch user agents
+    agents_res = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+    user_agents = agents_res.scalars().all()
+
+    # Fetch user provisioned phone numbers
+    phones_res = await db.execute(select(UserPhoneNumber).where(UserPhoneNumber.user_id == current_user.id))
+    user_phones = phones_res.scalars().all()
+
     return {
         "id": current_user.id,
         "email": current_user.email,
@@ -404,11 +414,39 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "credits": current_user.credits,
         "is_first_login": current_user.is_first_login,
         "is_admin": current_user.is_admin,
-        "subscription_plan": current_user.subscription_plan,
+        "is_active": getattr(current_user, "is_active", True),
+        "created_at": current_user.created_at.isoformat() if getattr(current_user, "created_at", None) else None,
+        "last_login_at": current_user.last_login_at.isoformat() if getattr(current_user, "last_login_at", None) else None,
+        "subscription_plan": current_user.subscription_plan or "Starter",
         "agent_name": getattr(current_user, "agent_name", None),
         "agent_language": getattr(current_user, "agent_language", None),
         "agent_voice": getattr(current_user, "agent_voice", None),
         "agent_script": getattr(current_user, "agent_script", None),
+        "agents": [
+            {
+                "id": a.id,
+                "name": a.name,
+                "language": a.language,
+                "voice": a.voice,
+                "script": a.script,
+                "created_at": a.created_at.isoformat() if getattr(a, "created_at", None) else None,
+            }
+            for a in user_agents
+        ],
+        "phone_numbers": [
+            {
+                "id": p.id,
+                "phone_number": p.phone_number,
+                "provider_name": p.provider_name,
+                "number_type": p.number_type,
+                "region": p.region,
+                "status": p.status,
+                "is_default": p.is_default,
+                "max_concurrent_calls": p.max_concurrent_calls,
+                "inbound_enabled": p.inbound_enabled,
+            }
+            for p in user_phones
+        ],
     }
 
 @router.put("/profile")

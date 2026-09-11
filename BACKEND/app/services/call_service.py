@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func, case
 
 from app.models.call import Call
 from app.models.contact import Contact
@@ -431,9 +431,10 @@ class CallService:
         if detection_metadata:
             call.detection_metadata = detection_metadata
             
-        # Determine if we should deduct a credit (transitioning to completed and billing is pending)
-        if call.billing_status == "pending":
-            if is_success and not is_voicemail:
+        # Determine if we should deduct credits
+        # Deduct if billing is pending OR if the call succeeded and hasn't been billed yet (e.g. premature watchdog status transition)
+        if is_success and not is_voicemail:
+            if call.billing_status != "billed" or not call.credits_deducted:
                 import math
                 credits_to_deduct = math.floor(max(0, call.duration) / 4)
                 
@@ -449,7 +450,8 @@ class CallService:
                             print(f"Error checking credit notifications: {e}")
                 
                 call.billing_status = "billed"
-            else:
+        else:
+            if call.billing_status == "pending":
                 call.billing_status = "not_billable"
 
         # Default fallbacks before async background LLM enrichment
@@ -532,7 +534,6 @@ class CallService:
         if not job and contact and contact.campaign_id:
             campaign = await db.get(Campaign, contact.campaign_id)
             if campaign and campaign.status in ("running", "scheduled", "pending"):
-                from sqlalchemy import select, func, case
                 contact_count_res = await db.execute(
                     select(
                         func.count(Contact.id),

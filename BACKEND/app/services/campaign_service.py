@@ -59,6 +59,32 @@ class CampaignService:
         )
         db.add(job)
         campaign.status = "running"
+
+        # Dispatch Campaign Started notification email to user profile email
+        if not getattr(campaign, "start_notified", False):
+            campaign.start_notified = True
+            if campaign.user_id:
+                try:
+                    from app.models.user import User
+                    user = await db.get(User, campaign.user_id)
+                    if user and user.email:
+                        import asyncio
+                        from app.services.email_service import email_service
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                email_service.send_campaign_started_email,
+                                to_email=user.email,
+                                user_name=user.full_name or "Client",
+                                campaign_name=campaign.campaign_name,
+                                total_contacts=total_contacts,
+                                agent_name=campaign.agent or "AI Voice Agent",
+                                is_pre_alert=False,
+                            )
+                        )
+                        print(f"[CampaignService] Dispatched campaign start notification email to {user.email}")
+                except Exception as notify_err:
+                    print(f"[CampaignService] Warning: Failed to send start notification: {notify_err}")
+
         await db.commit()
         await db.refresh(job)
         return job
@@ -152,7 +178,6 @@ class CampaignService:
             whatsapp_automation=getattr(data, "whatsapp_automation", None),
         )
 
-
         db.add(campaign)
         await db.flush()
 
@@ -160,11 +185,18 @@ class CampaignService:
         subset = data.contacts
         remaining = []
 
-        if data.selection_type == "range" and data.start_row and data.end_row:
+        if data.upload_source != "single" and data.selection_type == "range" and data.start_row and data.end_row:
             start_idx = max(0, data.start_row - 1)
             end_idx = min(len(data.contacts), data.end_row)
-            subset = data.contacts[start_idx:end_idx]
-            remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
+            if start_idx < end_idx and start_idx < len(data.contacts):
+                subset = data.contacts[start_idx:end_idx]
+                remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
+            else:
+                subset = data.contacts
+                remaining = []
+        else:
+            subset = data.contacts
+            remaining = []
 
         for item in subset:
             contact = Contact(
@@ -400,4 +432,4 @@ class CampaignService:
 
         await db.commit()
         await db.refresh(campaign)
-        return campaign
+        return campaign

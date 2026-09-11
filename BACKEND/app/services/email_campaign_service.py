@@ -34,29 +34,42 @@ class EmailCampaignService:
             )
             email_domain = clean_email.split("@")[-1].lower().strip()
             
-            # Check if using custom domain vs default platform domain
-            default_from = email_service.from_email
-            default_domain = (
-                default_from.split("@")[-1].replace(">", "").strip().lower()
-                if "@" in default_from
-                else "callinggen.in"
-            )
-            if email_domain != default_domain and email_domain != "callinggen.in":
-                from app.models.custom_domain import CustomEmailDomain
-                from sqlalchemy import and_
-                stmt = select(CustomEmailDomain).where(
-                    and_(
-                        CustomEmailDomain.user_id == user_id,
-                        CustomEmailDomain.domain == email_domain,
-                        CustomEmailDomain.is_verified == True,
-                    )
+            # 1. Check if matches a connected SMTP mailbox on the user's account (Method 2)
+            from app.models.user_smtp_config import UserSmtpConfig
+            from sqlalchemy import and_
+            smtp_stmt = select(UserSmtpConfig).where(
+                and_(
+                    UserSmtpConfig.user_id == user_id,
+                    UserSmtpConfig.sender_email.ilike(clean_email),
+                    UserSmtpConfig.is_active == True,
+                    UserSmtpConfig.is_verified == True,
                 )
-                verified_dom = (await db.execute(stmt)).scalars().first()
-                if not verified_dom:
-                    raise ValueError(
-                        f"Domain '@{email_domain}' is not verified for sending on your account. "
-                        "Please add and verify this domain in Sending Domains first."
+            )
+            smtp_mailbox = (await db.execute(smtp_stmt)).scalars().first()
+
+            if not smtp_mailbox:
+                # 2. Check if using verified custom domain (Method 1) vs default platform domain
+                default_from = email_service.from_email
+                default_domain = (
+                    default_from.split("@")[-1].replace(">", "").strip().lower()
+                    if "@" in default_from
+                    else "callinggen.in"
+                )
+                if email_domain != default_domain and email_domain != "callinggen.in":
+                    from app.models.custom_domain import CustomEmailDomain
+                    stmt = select(CustomEmailDomain).where(
+                        and_(
+                            CustomEmailDomain.user_id == user_id,
+                            CustomEmailDomain.domain == email_domain,
+                            CustomEmailDomain.is_verified == True,
+                        )
                     )
+                    verified_dom = (await db.execute(stmt)).scalars().first()
+                    if not verified_dom:
+                        raise ValueError(
+                            f"Email '{clean_email}' is not connected or verified on your account. "
+                            "Please connect your email in 'Connected Mailboxes' or verify your domain in 'Sending Domains'."
+                        )
             from_email_val = clean_email
 
         campaign = EmailCampaign(
@@ -124,13 +137,24 @@ class EmailCampaignService:
         contacts: List[EmailContact],
     ):
         """
-        Send emails to all contacts, throttled at ~5/sec, updating status in a
+        Send emails to all contacts, throttled at ~2/sec, updating status in a
         fresh DB session per contact to avoid session conflicts.
+        Routes via client's connected SMTP mailbox if available, or platform mailer.
         """
         from app.database import AsyncSessionLocal
+        from app.services.smtp_mailbox_service import smtp_mailbox_service
+        from app.models.user_smtp_config import UserSmtpConfig
 
         sent = 0
         failed = 0
+
+        # Check if campaign sender is connected via SMTP
+        smtp_config = None
+        if campaign.from_email and campaign.user_id:
+            async with AsyncSessionLocal() as db:
+                smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
+                    db, user_id=campaign.user_id, sender_email=campaign.from_email
+                )
 
         for contact in contacts:
             try:
@@ -149,14 +173,28 @@ class EmailCampaignService:
                     title=personalized_subject,
                     subtitle=campaign.from_name or "AI Voice Calling & Automation Platform"
                 )
-                email_service.send_marketing_email(
-                    to_email=contact.email,
-                    subject=personalized_subject,
-                    html_content=final_html_body,
-                    from_name=campaign.from_name,
-                    from_email=campaign.from_email,
-                    reply_to=campaign.reply_to,
-                )
+
+                if smtp_config:
+                    # Method 2: Dispatched directly through client's real authenticated mailbox
+                    await smtp_mailbox_service.send_email_via_smtp(
+                        smtp_config=smtp_config,
+                        to_email=contact.email,
+                        subject=personalized_subject,
+                        html_content=final_html_body,
+                        from_name=campaign.from_name,
+                        reply_to=campaign.reply_to,
+                    )
+                else:
+                    # Platform fallback (Resend)
+                    email_service.send_marketing_email(
+                        to_email=contact.email,
+                        subject=personalized_subject,
+                        html_content=final_html_body,
+                        from_name=campaign.from_name,
+                        from_email=campaign.from_email,
+                        reply_to=campaign.reply_to,
+                    )
+
                 async with AsyncSessionLocal() as db:
                     ec = await db.get(EmailContact, contact.id)
                     if ec:
@@ -178,6 +216,7 @@ class EmailCampaignService:
 
         # Update campaign totals + mark completed
         async with AsyncSessionLocal() as db:
+
             c = await db.get(EmailCampaign, campaign_id)
             if c:
                 c.total_sent = sent
