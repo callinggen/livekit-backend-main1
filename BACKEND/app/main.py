@@ -264,7 +264,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-@app.get("/api/recordings/{filename}")
+@app.api_route("/api/recordings/{filename}", methods=["GET", "HEAD"])
 async def get_recording_audio(filename: str):
     local_path = os.path.join("recordings", filename)
     if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
