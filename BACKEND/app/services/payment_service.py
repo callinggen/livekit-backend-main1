@@ -289,7 +289,7 @@ class PaymentService:
             print(f"CRITICAL: Webhook captured amount {webhook_amount} does not match order amount {payment.amount}!")
             # Mark transaction as failed due to pricing spoof/discrepancy
             payment.status = "failed"
-            payment.updated_at = datetime.now(timezone.utc)
+            payment.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -325,7 +325,7 @@ class PaymentService:
                 status="success",
                 razorpay_payment_id=payment_id,
                 razorpay_signature=signature,
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
             )
         )
         res = await db.execute(stmt)

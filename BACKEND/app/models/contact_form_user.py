@@ -14,4 +14,4 @@ class ContactFormUser(Base):
     appointment_time = Column(DateTime)
     status = Column(String, default="booked")
     admin_notes = Column(String, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))

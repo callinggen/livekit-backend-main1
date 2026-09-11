@@ -63,7 +63,7 @@ class WhatsAppAction(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     sent_at: Mapped[datetime | None] = mapped_column(

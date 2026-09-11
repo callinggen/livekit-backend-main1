@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
 
-from sqlalchemy import event
+from datetime import datetime
+from sqlalchemy import event, DateTime, TypeDecorator
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
@@ -11,6 +12,20 @@ from sqlalchemy.orm import DeclarativeBase
 
 DB_PATH = (Path(__file__).resolve().parent.parent / "callinggen.db").as_posix()
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite+aiosqlite:///{DB_PATH}"
+
+class SafeDateTime(TypeDecorator):
+    """
+    Guarantees that timezone-aware datetimes are safely stripped of tzinfo
+    before being passed to PostgreSQL/asyncpg, preventing:
+    'can't subtract offset-naive and offset-aware datetimes'
+    """
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is not None and isinstance(value, datetime) and getattr(value, "tzinfo", None) is not None:
+            return value.replace(tzinfo=None)
+        return value
 
 class Base(DeclarativeBase):
     pass

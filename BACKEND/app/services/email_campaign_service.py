@@ -199,7 +199,7 @@ class EmailCampaignService:
                     ec = await db.get(EmailContact, contact.id)
                     if ec:
                         ec.status = "sent"
-                        ec.sent_at = datetime.now(timezone.utc)
+                        ec.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
                         await db.commit()
                 sent += 1
             except Exception as e:

@@ -153,14 +153,14 @@ class WhatsAppSchedulerService:
                             rec.status = rec_status
                             rec.error_message = last_error
                             rec.details = {"items": rec_item_statuses}
-                            rec.sent_at = datetime.now(timezone.utc)
+                            rec.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
                         # Update Job summary
                         job.sent_count = total_sent
                         job.failed_count = total_failed
                         job.credits_deducted = total_credits_deducted
                         job.status = "completed" if total_failed == 0 else ("partial" if total_sent > 0 else "failed")
-                        job.completed_at = datetime.now(timezone.utc)
+                        job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
                         await db.commit()
                         print(f"[WhatsAppScheduler] ✓ Job #{job.id} completed! Sent: {total_sent}, Failed: {total_failed}, Credits: {total_credits_deducted}")

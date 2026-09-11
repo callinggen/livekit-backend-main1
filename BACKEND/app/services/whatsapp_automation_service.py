@@ -361,7 +361,7 @@ class WhatsAppAutomationService:
                     failed_count=1,
                     credits_deducted=0,
                     status="failed",
-                    completed_at=datetime.now(timezone.utc),
+                    completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
                 )
                 db.add(send_job)
                 await db.flush()
@@ -453,13 +453,13 @@ class WhatsAppAutomationService:
             recipient_record.status = "sent" if not has_error else ("partial" if credits_spent > 0 else "failed")
             recipient_record.error_message = last_error
             recipient_record.details = {"items": item_results}
-            recipient_record.sent_at = datetime.now(timezone.utc)
+            recipient_record.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
             send_job.sent_count = 1 if not has_error else (1 if credits_spent > 0 else 0)
             send_job.failed_count = 0 if not has_error else (0 if credits_spent > 0 else 1)
             send_job.credits_deducted = credits_spent
             send_job.status = "completed" if not has_error else ("partial" if credits_spent > 0 else "failed")
-            send_job.completed_at = datetime.now(timezone.utc)
+            send_job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
             await db.commit()
             print(f"[WhatsAppAutomation] Automation complete for Call {call_id}: Job {send_job.id}, Credits: {credits_spent}")
@@ -614,7 +614,7 @@ class WhatsAppAutomationService:
                 failed_count=0 if not has_error else 1,
                 credits_deducted=credits_spent,
                 status="completed" if not has_error else "failed",
-                completed_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
             db.add(send_job)
             await db.flush()
@@ -628,7 +628,7 @@ class WhatsAppAutomationService:
                 status="sent" if not has_error else "failed",
                 error_message=last_error,
                 details={"items": item_results},
-                sent_at=datetime.now(timezone.utc),
+                sent_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
             db.add(rec)
             await db.commit()

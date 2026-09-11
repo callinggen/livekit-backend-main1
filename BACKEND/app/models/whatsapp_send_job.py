@@ -95,7 +95,7 @@ class WhatsAppSendJob(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     completed_at: Mapped[datetime | None] = mapped_column(

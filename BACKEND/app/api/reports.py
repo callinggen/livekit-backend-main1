@@ -208,7 +208,7 @@ async def generate_report(
             end_date=end_date,
             content=report_text,
             stats=stats_data,
-            generated_at=datetime.now(timezone.utc)
+            generated_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
         db.add(db_report)
         await db.commit()

@@ -126,7 +126,7 @@ class CustomDomainService:
             is_verified=False,
             sending_enabled=False,
             region=region,
-            last_checked_at=datetime.now(timezone.utc),
+            last_checked_at=datetime.now(timezone.utc).replace(tzinfo=None),
             error_message=error_msg,
         )
         db.add(domain_obj)
@@ -170,7 +170,7 @@ class CustomDomainService:
             updated_records.append(updated_record)
 
         domain_obj.dns_records = updated_records
-        domain_obj.last_checked_at = datetime.now(timezone.utc)
+        domain_obj.last_checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # Check with Resend if domain has a valid Resend domain ID
         if (
@@ -201,7 +201,7 @@ class CustomDomainService:
                     domain_obj.is_verified = True
                     domain_obj.sending_enabled = True
                     domain_obj.status = "verified"
-                    domain_obj.verified_at = datetime.now(timezone.utc)
+                    domain_obj.verified_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     domain_obj.error_message = None
             except Exception as e:
                 print(f"[CustomDomainService] Resend sync error on verify: {e}")
@@ -209,14 +209,14 @@ class CustomDomainService:
                     domain_obj.is_verified = True
                     domain_obj.sending_enabled = True
                     domain_obj.status = "verified"
-                    domain_obj.verified_at = datetime.now(timezone.utc)
+                    domain_obj.verified_at = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
             # When in DNS-independent mode
             if all_dns_matched and len(updated_records) > 0:
                 domain_obj.is_verified = True
                 domain_obj.sending_enabled = True
                 domain_obj.status = "verified"
-                domain_obj.verified_at = datetime.now(timezone.utc)
+                domain_obj.verified_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 domain_obj.error_message = None
             else:
                 domain_obj.status = "pending"

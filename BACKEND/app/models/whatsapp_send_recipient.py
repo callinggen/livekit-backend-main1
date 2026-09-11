@@ -59,7 +59,7 @@ class WhatsAppSendRecipient(Base):
 
     sent_at: Mapped[datetime | None] = mapped_column(
         DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     details: Mapped[dict | None] = mapped_column(
