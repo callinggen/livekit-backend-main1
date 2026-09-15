@@ -183,6 +183,12 @@ class EmailAutomationService:
                     or getattr(contact, "customer_email", None)
                     or getattr(contact, "contact_email", None)
                 )
+                if not dest_email and contact.metadata_fields and isinstance(contact.metadata_fields, dict):
+                    for k in ("email", "Email", "email_address", "Email Address", "mail", "Mail", "contact_email", "customer_email"):
+                        val = contact.metadata_fields.get(k)
+                        if val and isinstance(val, str) and "@" in val:
+                            dest_email = val.strip()
+                            break
             if not dest_email:
                 print(f"[EmailAutomation] No email address for contact on Call {call_id}. Skipping.")
                 return None
