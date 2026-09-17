@@ -23,6 +23,7 @@ from app.api.payments import router as payment_router
 from app.api.whatsapp_send import router as whatsapp_send_router
 from app.api.whatsapp_materials import router as whatsapp_materials_router
 from app.api.whatsapp_history import router as whatsapp_history_router
+from app.api.contacts_book import router as contacts_book_router
 from whatsapp.routes import router as whatsapp_router
 
 
@@ -54,6 +55,7 @@ from app.models.whatsapp_action import WhatsAppAction
 from app.models.whatsapp_material import WhatsAppMaterial
 from app.models.whatsapp_send_job import WhatsAppSendJob
 from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
+from app.models.saved_contact import SavedContact
 
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
@@ -252,10 +254,36 @@ async def schedule_poller():
             except Exception as wa_sched_err:
                 print(f"WhatsApp scheduler error: {wa_sched_err}")
 
+            # 4. Periodic Google Sheet Auto-Sync (Runs automatically every ~5 minutes)
+            if int(now.timestamp()) % 300 < SCHEDULER_POLL_INTERVAL:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        sheet_stmt = select(SavedContact.user_id, SavedContact.tag, SavedContact.metadata_fields).where(
+                            SavedContact.source == "Google Sheet",
+                            SavedContact.metadata_fields.isnot(None),
+                        )
+                        sheet_res = await db.execute(sheet_stmt)
+                        seen_pairs = set()
+                        for u_id, tag_name, mf in sheet_res.all():
+                            if (u_id, tag_name) in seen_pairs:
+                                continue
+                            seen_pairs.add((u_id, tag_name))
+                            if isinstance(mf, dict) and (mf.get("google_sheet_url") or mf.get("sheet_url")):
+                                sheet_url = mf.get("google_sheet_url") or mf.get("sheet_url")
+                                from app.services.google_sheet_service import sync_google_sheet_for_tag
+                                try:
+                                    await sync_google_sheet_for_tag(db, u_id, tag_name, sheet_url)
+                                    print(f"[GoogleSheetAutoSync] Synced tag '{tag_name}' for user {u_id}")
+                                except Exception as gs_err:
+                                    print(f"[GoogleSheetAutoSync] Error syncing tag '{tag_name}': {gs_err}")
+                except Exception as gs_loop_err:
+                    print(f"[GoogleSheetAutoSync] Loop error: {gs_loop_err}")
+
         except Exception as e:
             print(f"Scheduler loop error: {e}")
         
         await asyncio.sleep(SCHEDULER_POLL_INTERVAL)
+
 
 app = FastAPI(
     title="Calling Platform API",
@@ -292,6 +320,7 @@ app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
 app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
 app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
 app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
+app.include_router(contacts_book_router, prefix="/api", tags=["Contacts Book"])
 
 
 

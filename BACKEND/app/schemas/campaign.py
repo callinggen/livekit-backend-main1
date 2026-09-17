@@ -23,5 +23,7 @@ class CampaignCreate(BaseModel):
     voicemail_detection: dict | None = None
     whatsapp_automation: dict | None = None
     email_automation: dict | None = None
+    save_to_contacts_book: bool = False
+    contact_book_tag: str | None = None
 
     contacts: List[ContactCreate]
