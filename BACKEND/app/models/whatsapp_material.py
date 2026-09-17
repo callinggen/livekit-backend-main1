@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
+from app.database import Base, SafeDateTime
 
 
 class WhatsAppMaterial(Base):
@@ -26,10 +26,20 @@ class WhatsAppMaterial(Base):
         nullable=False,
     )
 
+    name: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
     type: Mapped[str] = mapped_column(
         String,
         nullable=False,  # "text", "image", "document"
         index=True,
+    )
+
+    file_type: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
     )
 
     content: Mapped[str | None] = mapped_column(
@@ -63,12 +73,12 @@ class WhatsAppMaterial(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        SafeDateTime,
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        SafeDateTime,
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )

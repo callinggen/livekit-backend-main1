@@ -234,12 +234,15 @@ async def send_bulk_whatsapp(
                 mat = WhatsAppMaterial(
                     user_id=current_user.id,
                     title=title.strip(),
+                    name=title.strip(),
                     type="text",
+                    file_type="text",
                     content=item.text.strip(),
                 )
                 db.add(mat)
                 await db.commit()
             except Exception as mat_err:
+                await db.rollback()
                 print(f"[SendBulk] Notice: Could not save material template: {mat_err}")
 
     # Determine Content Type & Extract Main Message Text

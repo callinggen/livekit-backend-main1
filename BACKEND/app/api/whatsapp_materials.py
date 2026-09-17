@@ -73,8 +73,8 @@ async def list_materials(
     return [
         {
             "id": m.id,
-            "title": m.title,
-            "type": m.type,
+            "title": m.title or m.name or "",
+            "type": m.type or m.file_type or "text",
             "content": m.content,
             "file_path": m.file_path,
             "file_url": m.file_url,
@@ -119,13 +119,19 @@ async def create_text_material(
     material = WhatsAppMaterial(
         user_id=current_user.id,
         title=req.title.strip(),
+        name=req.title.strip(),
         type="text",
+        file_type="text",
         content=req.content.strip(),
         tags=req.tags.strip() if req.tags else None,
     )
-    db.add(material)
-    await db.commit()
-    await db.refresh(material)
+    try:
+        db.add(material)
+        await db.commit()
+        await db.refresh(material)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error saving text material: {str(e)}")
 
     return {
         "success": True,
@@ -222,16 +228,22 @@ async def upload_material(
     material = WhatsAppMaterial(
         user_id=current_user.id,
         title=title.strip(),
+        name=title.strip(),
         type=mat_type,
+        file_type=mat_type,
         file_path=stored_path,
         file_url=file_url,
         mime_type=mime_type,
         file_size=file_size,
         tags=tags.strip() if tags else None,
     )
-    db.add(material)
-    await db.commit()
-    await db.refresh(material)
+    try:
+        db.add(material)
+        await db.commit()
+        await db.refresh(material)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error saving material: {str(e)}")
 
     return {
         "success": True,
@@ -306,6 +318,7 @@ async def update_material(
         if not req.title.strip():
             raise HTTPException(status_code=400, detail="Title cannot be empty")
         material.title = req.title.strip()
+        material.name = req.title.strip()
 
     if req.content is not None:
         material.content = req.content.strip()
@@ -314,8 +327,12 @@ async def update_material(
         material.tags = req.tags.strip() if req.tags else None
 
     material.updated_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(material)
+    try:
+        await db.commit()
+        await db.refresh(material)
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error updating material: {str(e)}")
 
     return {
         "success": True,
