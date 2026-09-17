@@ -246,8 +246,10 @@ async def delete_custom_domain(
         and not domain_obj.resend_domain_id.startswith("restricted_")
     ):
         try:
-            resend.api_key = email_service.api_key
-            resend.Domains.remove(domain_obj.resend_domain_id)
+            import importlib
+            resend_mod = importlib.import_module("resend")
+            resend_mod.api_key = email_service.api_key
+            resend_mod.Domains.remove(domain_obj.resend_domain_id)
         except Exception as e:
             print(f"[CustomDomainRouter] Resend delete note: {e}")
 
