@@ -247,7 +247,8 @@ async def delete_custom_domain(
     ):
         try:
             import importlib
-            resend_mod = importlib.import_module("resend")
+            from typing import Any
+            resend_mod: Any = importlib.import_module("resend")
             resend_mod.api_key = email_service.api_key
             resend_mod.Domains.remove(domain_obj.resend_domain_id)
         except Exception as e:
