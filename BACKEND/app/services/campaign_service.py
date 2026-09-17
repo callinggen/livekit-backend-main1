@@ -245,6 +245,70 @@ class CampaignService:
             
             db.add_all(pending_contacts)
 
+        # Auto-save to Contact Book if requested
+        if user_id and getattr(data, "save_to_contacts_book", False):
+            try:
+                from app.models.saved_contact import SavedContact
+                from app.api.contacts_book import normalize_phone
+                from datetime import datetime, timezone
+                
+                now = datetime.now(timezone.utc)
+                tag_name = (getattr(data, "contact_book_tag", None) or data.campaign_name or "Campaign").strip()
+                source_label = f"Campaign: {data.campaign_name}"
+
+                existing_res = await db.execute(
+                    select(SavedContact).where(SavedContact.user_id == user_id)
+                )
+                existing_map = {c.phone: c for c in existing_res.scalars().all()}
+                
+                new_saved = []
+                seen_phones = set()
+                for item in data.contacts:
+                    norm_p = normalize_phone(item.phone)
+                    if len(norm_p) < 7 or norm_p in seen_phones:
+                        continue
+                    seen_phones.add(norm_p)
+
+                    email_val = None
+                    if item.metadata_fields and isinstance(item.metadata_fields, dict):
+                        for k in ("email", "Email", "email_address", "Email Address", "mail", "Mail"):
+                            if item.metadata_fields.get(k):
+                                email_val = str(item.metadata_fields[k]).strip()
+                                break
+
+                    if norm_p in existing_map:
+                        sc = existing_map[norm_p]
+                        if item.name and item.name != "Unknown":
+                            sc.name = item.name
+                        if email_val:
+                            sc.email = email_val
+                        if tag_name:
+                            sc.tag = tag_name
+                        sc.source = source_label
+                        if item.metadata_fields:
+                            sc.metadata_fields = {**(sc.metadata_fields or {}), **item.metadata_fields}
+                        sc.updated_at = now
+                    else:
+                        new_sc = SavedContact(
+                            user_id=user_id,
+                            name=item.name or "Unknown",
+                            phone=norm_p,
+                            email=email_val,
+                            source=source_label,
+                            tag=tag_name,
+                            metadata_fields=item.metadata_fields or {},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        new_saved.append(new_sc)
+                        existing_map[norm_p] = new_sc
+
+                if new_saved:
+                    db.add_all(new_saved)
+                print(f"[CampaignService] Saved {len(data.contacts)} contacts to Contact Book under tag '{tag_name}'")
+            except Exception as save_err:
+                print(f"[CampaignService] Warning: Failed to save to Contact Book: {save_err}")
+
         await db.commit()
         await db.refresh(campaign)
 
