@@ -166,6 +166,13 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+        # Call Manager automation columns auto-migrations
+        for col_name in ["voicemail_detection", "whatsapp_automation", "email_automation"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} JSON;"))
+            except Exception:
+                pass
+
     # Ensure default admin user exists
     async with AsyncSessionLocal() as db:
         res = await db.execute(select(User).where(User.email == "admin@example.com"))
