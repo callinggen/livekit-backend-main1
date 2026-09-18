@@ -120,7 +120,7 @@ async def send_text_message(instance_name: str, number: str, text: str) -> Dict[
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
 
-    clean_number = "".join(c for c in number if c.isdigit())
+    clean_number = number if "@" in number else "".join(c for c in number if c.isdigit())
     url = f"{EVOLUTION_API_URL}/message/sendText/{instance_name}"
     payload = {
         "number": clean_number,
@@ -146,7 +146,7 @@ async def send_media_message(
     if not EVOLUTION_API_URL:
         raise ValueError("EVOLUTION_API_URL is not set")
 
-    clean_number = "".join(c for c in number if c.isdigit())
+    clean_number = number if "@" in number else "".join(c for c in number if c.isdigit())
     url = f"{EVOLUTION_API_URL}/message/sendMedia/{instance_name}"
     payload: Dict[str, Any] = {
         "number": clean_number,
@@ -163,4 +163,26 @@ async def send_media_message(
         response = await client.post(url, headers=get_headers(), json=payload)
         response.raise_for_status()
         return response.json()
+
+
+async def set_webhook(instance_name: str, webhook_url: str) -> Dict[str, Any]:
+    """Configure webhook in Evolution API to route incoming messages to our backend."""
+    if not EVOLUTION_API_URL:
+        raise ValueError("EVOLUTION_API_URL is not set")
+
+    url = f"{EVOLUTION_API_URL}/webhook/set/{instance_name}"
+    payload = {
+        "webhook": {
+            "enabled": True,
+            "url": webhook_url,
+            "byEvents": False,
+            "events": ["MESSAGES_UPSERT"],
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(url, headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
 
