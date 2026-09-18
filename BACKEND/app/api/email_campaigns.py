@@ -251,3 +251,64 @@ async def generate_email_with_ai(
             detail=f"AI generation failed: {str(e)}",
         )
 
+
+# ── GET /api/email/automation/templates ────────────────────────────────────
+
+@router.get("/email/automation/templates")
+async def get_email_automation_templates(
+    current_user: User = Depends(get_current_user),
+):
+    """Return the list of predefined email automation templates."""
+    from app.services.email_automation_service import EMAIL_AUTOMATION_TEMPLATES
+    return {"templates": EMAIL_AUTOMATION_TEMPLATES}
+
+
+# ── GET /api/email/automation/connection-status ─────────────────────────────
+
+@router.get("/email/automation/connection-status")
+async def get_email_connection_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Check whether the current user has a working email connection.
+    Returns connected=True if Resend API key is configured OR a SMTP mailbox is saved.
+    Frontend uses this to enable/disable the Email Automation toggle.
+    """
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    # Method 1: Resend API key
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    resend_connected = bool(
+        resend_key
+        and not resend_key.startswith("re_your_")
+        and resend_key != "re_your_api_key_here"
+    )
+
+    # Method 2: Check for saved SMTP mailboxes (if model exists)
+    smtp_connected = False
+    try:
+        from app.models.mailbox import Mailbox  # type: ignore[import-untyped]
+        from sqlalchemy import select
+        result = await db.execute(
+            select(Mailbox).where(Mailbox.user_id == current_user.id).limit(1)
+        )
+        smtp_connected = result.scalars().first() is not None
+    except Exception:
+        smtp_connected = False
+
+    connected = resend_connected or smtp_connected
+    method = None
+    if resend_connected:
+        method = "resend"
+    elif smtp_connected:
+        method = "smtp"
+
+    return {
+        "connected": connected,
+        "method": method,
+        "resend_configured": resend_connected,
+        "smtp_configured": smtp_connected,
+    }
