@@ -317,8 +317,8 @@ async def send_text_message(instance_name: str, number: str, text: str) -> Dict[
     if not api_url:
         raise ValueError("EVOLUTION_API_URL is not set")
 
-    clean_number = "".join(c for c in number if c.isdigit())
-    if len(clean_number) == 10:
+    clean_number = number if "@" in number else "".join(c for c in number if c.isdigit())
+    if "@" not in number and len(clean_number) == 10:
         clean_number = "91" + clean_number
 
     url = f"{api_url}/message/sendText/{instance_name}"
@@ -412,8 +412,8 @@ async def send_media_message(
     if not api_url:
         raise ValueError("EVOLUTION_API_URL is not set")
 
-    clean_number = "".join(c for c in number if c.isdigit())
-    if len(clean_number) == 10:
+    clean_number = number if "@" in number else "".join(c for c in number if c.isdigit())
+    if "@" not in number and len(clean_number) == 10:
         clean_number = "91" + clean_number
 
     # Convert media to raw Base64 payload so Evolution API avoids outbound stream fetch failures
@@ -432,6 +432,26 @@ async def send_media_message(
         payload["fileName"] = file_name
 
     async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, headers=get_headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+async def set_webhook(instance_name: str, webhook_url: str) -> Dict[str, Any]:
+    """Configure webhook in Evolution API to route incoming messages to our backend."""
+    api_url = get_api_url()
+    if not api_url:
+        raise ValueError("EVOLUTION_API_URL is not set")
+
+    url = f"{api_url}/webhook/set/{instance_name}"
+    payload = {
+        "webhook": {
+            "enabled": True,
+            "url": webhook_url,
+            "byEvents": False,
+            "events": ["MESSAGES_UPSERT"],
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, headers=get_headers(), json=payload)
         response.raise_for_status()
         return response.json()

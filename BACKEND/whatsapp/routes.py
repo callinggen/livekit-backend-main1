@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -336,3 +336,67 @@ async def send_media(req: SendMediaMessageRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/webhook")
+async def webhook_verification():
+    """Webhook verification/health check endpoint."""
+    return {"status": "active", "message": "WhatsApp webhook endpoint is ready"}
+
+
+@router.post("/webhook")
+async def handle_whatsapp_webhook(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+    """
+    Ingests inbound WhatsApp webhooks from Evolution API and triggers the bot pipeline.
+    Returns HTTP 200 immediately and processes LLM in the background.
+    """
+    from .bot_adapter import whatsapp_bot_pipeline
+
+    async def _process_webhook():
+        try:
+            await whatsapp_bot_pipeline.process_incoming_message(payload)
+        except Exception as e:
+            print(f"[whatsapp_routes] Error processing webhook async: {e}")
+
+    background_tasks.add_task(_process_webhook)
+    return {"success": True, "message": "Webhook queued for processing"}
+
+
+class BotInteractRequest(BaseModel):
+    phone: str
+    message: str
+    customer_name: Optional[str] = ""
+    agent_type: Optional[str] = "Meera (Morning Tax)"
+
+
+@router.post("/bot/interact")
+async def bot_interact(req: BotInteractRequest):
+    """
+    Direct test / programmatic interface to interact with the bot pipeline for a specific phone number.
+    """
+    try:
+        from .bot_adapter import whatsapp_bot_pipeline
+        response_text = await whatsapp_bot_pipeline.generate_response(
+            phone=req.phone,
+            user_message=req.message,
+            customer_name=req.customer_name or "",
+            agent_type=req.agent_type or "Meera (Morning Tax)",
+        )
+        return {"success": True, "reply": response_text, "phone": req.phone}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class WebhookConfigRequest(BaseModel):
+    instance_name: Optional[str] = "callinggen"
+    webhook_url: Optional[str] = "http://host.docker.internal:8000/api/whatsapp/webhook"
+
+
+@router.post("/webhook/configure")
+async def configure_webhook(req: WebhookConfigRequest):
+    """Configures the webhook URL in Evolution API so incoming messages trigger the bot."""
+    try:
+        instance = req.instance_name or "callinggen"
+        url = req.webhook_url or "http://host.docker.internal:8000/api/whatsapp/webhook"
+        data = await service.set_webhook(instance, url)
+        return {"success": True, "data": data}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
