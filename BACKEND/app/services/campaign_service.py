@@ -273,7 +273,7 @@ class CampaignService:
                     if item.metadata_fields and isinstance(item.metadata_fields, dict):
                         for k in ("email", "Email", "email_address", "Email Address", "mail", "Mail"):
                             if item.metadata_fields.get(k):
-                                email_val = str(item.metadata_fields[k]).strip()
+                                email_val = item.metadata_fields[k].strip()
                                 break
 
                     if norm_p in existing_map:

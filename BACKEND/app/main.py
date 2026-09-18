@@ -268,14 +268,16 @@ async def schedule_poller():
                             if (u_id, tag_name) in seen_pairs:
                                 continue
                             seen_pairs.add((u_id, tag_name))
-                            if isinstance(mf, dict) and (mf.get("google_sheet_url") or mf.get("sheet_url")):
-                                sheet_url = mf.get("google_sheet_url") or mf.get("sheet_url")
-                                from app.services.google_sheet_service import sync_google_sheet_for_tag
-                                try:
-                                    await sync_google_sheet_for_tag(db, u_id, tag_name, sheet_url)
-                                    print(f"[GoogleSheetAutoSync] Synced tag '{tag_name}' for user {u_id}")
-                                except Exception as gs_err:
-                                    print(f"[GoogleSheetAutoSync] Error syncing tag '{tag_name}': {gs_err}")
+                            if isinstance(mf, dict):
+                                raw_url = mf.get("google_sheet_url") or mf.get("sheet_url")
+                                if raw_url and tag_name and u_id:
+                                    sheet_url = str(raw_url).strip()
+                                    from app.services.google_sheet_service import sync_google_sheet_for_tag
+                                    try:
+                                        await sync_google_sheet_for_tag(db, int(u_id), str(tag_name), sheet_url)
+                                        print(f"[GoogleSheetAutoSync] Synced tag '{tag_name}' for user {u_id}")
+                                    except Exception as gs_err:
+                                        print(f"[GoogleSheetAutoSync] Error syncing tag '{tag_name}': {gs_err}")
                 except Exception as gs_loop_err:
                     print(f"[GoogleSheetAutoSync] Loop error: {gs_loop_err}")
 
