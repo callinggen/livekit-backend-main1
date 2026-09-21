@@ -193,10 +193,7 @@ class EmailAutomationService:
                 print(f"[EmailAutomation] No email address for contact on Call {call_id}. Skipping.")
                 return None
 
-            # Check email service is configured
-            if not email_service.is_configured():
-                print(f"[EmailAutomation] Email service not configured. Skipping Call {call_id}.")
-                return None
+            # Destination email resolved successfully
 
             # 2. Extract call outcome attributes (same as WhatsApp)
             cat = (call.category or "UNCATEGORIZED").upper()
@@ -328,22 +325,85 @@ class EmailAutomationService:
             body_text = resolve_email_personalization(raw_body, variables)
             body_html = text_to_html(body_text)
 
-            # 6. Send via Resend
+            # 6. Send via connected User SMTP Mailbox (or fallback)
             try:
-                email_service._send_email(
-                    to_email=dest_email,
-                    subject=subject,
-                    body=body_html,
-                    is_html=True,
+                from app.models.user_smtp_config import UserSmtpConfig
+                from app.services.smtp_mailbox_service import smtp_mailbox_service
+                from sqlalchemy import select, and_
+
+                smtp_config = None
+                if campaign.user_id:
+                    # 1. Try matching rule-specific or automation config sender_email
+                    target_email = (
+                        matched_rule.get("from_email")
+                        or automation_config.get("sender_email")
+                        or automation_config.get("from_email")
+                    )
+                    if target_email:
+                        smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
+                            db, user_id=campaign.user_id, sender_email=target_email
+                        )
+
+                    # 2. If not found, lookup user's default/active verified SMTP config
+                    if not smtp_config:
+                        stmt = (
+                            select(UserSmtpConfig)
+                            .where(
+                                and_(
+                                    UserSmtpConfig.user_id == campaign.user_id,
+                                    UserSmtpConfig.is_active == True,
+                                    UserSmtpConfig.is_verified == True,
+                                )
+                            )
+                            .order_by(UserSmtpConfig.is_default.desc(), UserSmtpConfig.id.asc())
+                            .limit(1)
+                        )
+                        res = await db.execute(stmt)
+                        smtp_config = res.scalars().first()
+
+                from_name = (
+                    matched_rule.get("from_name")
+                    or automation_config.get("from_name")
+                    or (campaign.from_name if hasattr(campaign, "from_name") else None)
+                    or (smtp_config.sender_name if smtp_config else None)
+                    or "Follow-up Team"
                 )
-                print(f"[EmailAutomation] Email sent to {dest_email} for Call {call_id} | template={template_id}")
-                return {
-                    "success": True,
-                    "call_id": call_id,
-                    "to": dest_email,
-                    "subject": subject,
-                    "template_id": template_id,
-                }
+                reply_to = (
+                    matched_rule.get("reply_to")
+                    or automation_config.get("reply_to")
+                    or (smtp_config.sender_email if smtp_config else None)
+                )
+
+                if smtp_config:
+                    # Dispatched directly through client's connected authenticated mailbox (Gmail / Outlook / Zoho / Custom SMTP)
+                    await smtp_mailbox_service.send_email_via_smtp(
+                        smtp_config=smtp_config,
+                        to_email=dest_email,
+                        subject=subject,
+                        html_content=body_html,
+                        from_name=from_name,
+                        reply_to=reply_to,
+                    )
+                    print(
+                        f"[EmailAutomation] Email sent to {dest_email} via user SMTP ({smtp_config.sender_email}) for Call {call_id} | template={template_id}"
+                    )
+                    return {
+                        "success": True,
+                        "call_id": call_id,
+                        "to": dest_email,
+                        "sender": smtp_config.sender_email,
+                        "sender_name": from_name,
+                        "method": "smtp",
+                        "subject": subject,
+                        "template_id": template_id,
+                    }
+                else:
+                    err_msg = (
+                        f"No active verified SMTP mailbox configured for user {campaign.user_id}. "
+                        "Email automation skipped. Please connect your SMTP mailbox in Connected Mailboxes."
+                    )
+                    print(f"[EmailAutomation] {err_msg}")
+                    return {"success": False, "call_id": call_id, "error": err_msg}
             except Exception as e:
                 print(f"[EmailAutomation] Failed to send email for Call {call_id}: {e}")
                 return {"success": False, "call_id": call_id, "error": str(e)}
