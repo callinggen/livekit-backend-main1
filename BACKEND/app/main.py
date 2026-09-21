@@ -169,7 +169,10 @@ async def lifespan(app: FastAPI):
         # Call Manager automation columns auto-migrations
         for col_name in ["voicemail_detection", "whatsapp_automation", "email_automation"]:
             try:
-                await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} JSON;"))
+                if "postgresql" in str(engine.url):
+                    await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col_name} JSONB;"))
+                else:
+                    await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} JSON;"))
             except Exception:
                 pass
 

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, SafeDateTime
 
 
 class SavedContact(Base):
@@ -57,7 +57,7 @@ class SavedContact(Base):
     )
 
     last_called_at: Mapped[datetime | None] = mapped_column(
-        DateTime,
+        SafeDateTime,
         nullable=True,
     )
 
@@ -72,12 +72,12 @@ class SavedContact(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        SafeDateTime,
         default=lambda: datetime.now(timezone.utc),
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
+        SafeDateTime,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
