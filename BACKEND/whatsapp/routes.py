@@ -62,13 +62,16 @@ async def get_info(
         inst_name = resolve_instance_name(instance_name, user_id=user_id)
         status_data = await service.get_connection_status(inst_name)
         state = status_data.get("instance", {}).get("state", "disconnected")
-        phone = status_data.get("instance", {}).get("owner", "Unknown")
+        raw_phone = status_data.get("instance", {}).get("owner", None)
+        
+        is_truly_connected = state in ("open", "connected")
+        phone = raw_phone if is_truly_connected else None
         
         info = {
             "instance_name": inst_name,
             "connected_phone": phone,
             "last_connected": "Unknown",
-            "status": state
+            "status": state if is_truly_connected else "disconnected"
         }
         return {"success": True, "data": info}
     except Exception as e:
