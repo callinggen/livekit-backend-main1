@@ -121,8 +121,9 @@ def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_
 
     header_title = sender_name or campaign_name or "Follow-up Notification"
     
-    # Check if content has HTML tags
-    has_html_tags = "<p>" in content or "<div>" in content or "<table>" in content or "<br" in content
+    # Robust check if content contains HTML tags (e.g. <p>, <p class="...">, <div>, <br>, etc.)
+    import re
+    has_html_tags = bool(re.search(r"<[a-zA-Z/][^>]*>", content))
     if not has_html_tags:
         import html as html_lib
         escaped = html_lib.escape(content)
@@ -130,10 +131,26 @@ def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_
         html_parts = []
         for para in paragraphs:
             lines = para.split("\n")
-            html_parts.append("<p style='margin: 0 0 16px 0;'>" + "<br>".join(lines) + "</p>")
+            html_parts.append("<p style='margin: 0 0 16px 0; line-height: 1.65;'>" + "<br>".join(lines) + "</p>")
         body_content = "\n".join(html_parts)
     else:
         body_content = content
+        # Ensure Quill alignment classes translate into inline styles for email client compatibility
+        body_content = re.sub(
+            r'class="([^"]*ql-align-center[^"]*)"',
+            r'class="\1" style="text-align: center; margin: 0 0 16px 0;"',
+            body_content
+        )
+        body_content = re.sub(
+            r'class="([^"]*ql-align-right[^"]*)"',
+            r'class="\1" style="text-align: right; margin: 0 0 16px 0;"',
+            body_content
+        )
+        body_content = re.sub(
+            r'class="([^"]*ql-align-justify[^"]*)"',
+            r'class="\1" style="text-align: justify; margin: 0 0 16px 0;"',
+            body_content
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -146,6 +163,10 @@ def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_
             -webkit-text-size-adjust: 100%;
             -ms-text-size-adjust: 100%;
         }}
+        p {{ margin: 0 0 16px 0; line-height: 1.65; }}
+        .ql-align-center {{ text-align: center !important; }}
+        .ql-align-right {{ text-align: right !important; }}
+        .ql-align-justify {{ text-align: justify !important; }}
         table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
         img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
         @media screen and (max-width: 620px) {{
