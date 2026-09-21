@@ -110,8 +110,14 @@ def resolve_email_personalization(text: str, variables: Dict[str, str]) -> str:
     return result
 
 
-def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_name: str = "") -> str:
-    """Ensure email content is rendered in a responsive, beautifully styled email template."""
+def wrap_email_html(
+    content: str,
+    subject: str,
+    sender_name: str = "",
+    campaign_name: str = "",
+    branding: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Ensure email content is rendered in a responsive, beautifully styled email template identical to web live preview."""
     if not content:
         return ""
     
@@ -119,10 +125,62 @@ def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_
     if "<!DOCTYPE" in content or "<html" in content.lower():
         return content
 
-    header_title = sender_name or campaign_name or "Follow-up Notification"
-    
+    branding = branding or {}
+    header_type = branding.get("headerType") or ("logo" if branding.get("logoUrl") else "text")
+    logo_url = branding.get("logoUrl", "")
+    header_title = branding.get("headerTitle") or sender_name or campaign_name or "GenX Reality"
+    header_subtitle = branding.get("headerSubtitle", "")
+    header_align = branding.get("headerAlign", "center")
+    show_social = branding.get("showSocial", True)
+    company_footer = branding.get("companyFooter") or header_title or "GenX Reality"
+    social = branding.get("socialLinks") or {}
+
+    # Build social buttons
+    social_icons = []
+    if social.get("linkedin"):
+        social_icons.append(f'<a href="{social["linkedin"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #0077b5; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">in</a>')
+    if social.get("twitter"):
+        social_icons.append(f'<a href="{social["twitter"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #000000; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">𝕏</a>')
+    if social.get("instagram"):
+        social_icons.append(f'<a href="{social["instagram"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #e1306c; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">📸</a>')
+    if social.get("facebook"):
+        social_icons.append(f'<a href="{social["facebook"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #1877f2; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">f</a>')
+    if social.get("youtube"):
+        social_icons.append(f'<a href="{social["youtube"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #ff0000; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">▶</a>')
+    if social.get("whatsapp"):
+        social_icons.append(f'<a href="{social["whatsapp"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #25d366; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">💬</a>')
+    if social.get("website"):
+        social_icons.append(f'<a href="{social["website"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #6366f1; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">🌐</a>')
+
+    social_html = "".join(social_icons)
+
+    align_style = "text-align: left;" if header_align == "left" else ("text-align: right;" if header_align == "right" else "text-align: center;")
+    margin_style = "margin: 0;" if header_align == "left" else ("margin: 0 0 0 auto;" if header_align == "right" else "margin: 0 auto;")
+
+    header_html = ""
+    if header_type == "logo" and logo_url:
+        subtitle_html = f'<div style="font-size: 11px; color: #6366f1; margin-top: 6px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 700;">{header_subtitle}</div>' if header_subtitle else ''
+        header_html = f'''
+        <tr>
+          <td style="background-color: #ffffff; padding: 22px 24px 18px 24px; {align_style} border-bottom: 2px solid #6366f1;">
+            <img src="{logo_url}" alt="{header_title}" style="max-height: 54px; max-width: 240px; width: auto; height: auto; object-fit: contain; {margin_style} display: inline-block; border: 0;" />
+            {subtitle_html}
+          </td>
+        </tr>'''
+    elif header_title:
+        subtitle_html = f'<div style="font-size: 11px; color: #6366f1; margin-top: 4px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 700;">{header_subtitle}</div>' if header_subtitle else ''
+        header_html = f'''
+        <tr>
+          <td style="background-color: #ffffff; padding: 20px 24px 16px 24px; {align_style} border-bottom: 2px solid #6366f1;">
+            <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: #0f172a;">
+              {header_title}
+            </div>
+            {subtitle_html}
+          </td>
+        </tr>'''
+
     # Check if content has HTML tags
-    has_html_tags = bool("<p>" in content or "<div>" in content or "<table>" in content or "<br" in content)
+    has_html_tags = bool("<p" in content or "<div" in content or "<table" in content or "<br" in content or "<h" in content or "<span" in content)
     if not has_html_tags:
         import html as html_lib
         escaped = html_lib.escape(content)
@@ -130,63 +188,84 @@ def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_
         html_parts = []
         for para in paragraphs:
             lines = para.split("\n")
-            html_parts.append("<p style='margin: 0 0 16px 0;'>" + "<br>".join(lines) + "</p>")
+            html_parts.append("<p style='margin: 0 0 12px 0;'>" + "<br>".join(lines) + "</p>")
         body_content = "\n".join(html_parts)
     else:
         body_content = content
 
+    import datetime
+    current_year = datetime.datetime.now().year
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{subject}</title>
-    <style>
-        body, table, td, p, a, li, blockquote {{
-            -webkit-text-size-adjust: 100%;
-            -ms-text-size-adjust: 100%;
-        }}
-        table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
-        img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
-        @media screen and (max-width: 620px) {{
-            .email-container {{ width: 100% !important; border-radius: 0 !important; }}
-            .content-padding {{ padding: 24px 18px !important; }}
-        }}
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{subject}</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+    table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+    img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; max-width: 100%; height: auto; }}
+    body {{
+      margin: 0;
+      padding: 14px 8px;
+      background-color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: #334155;
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.55;
+      word-break: break-word;
+    }}
+    p {{ margin: 0 0 12px 0; }}
+    ul {{ margin: 0 0 12px 0; padding-left: 22px; }}
+    li {{ margin-bottom: 5px; }}
+    h1, h2, h3 {{ color: #0f172a; margin: 0 0 12px 0; font-weight: 700; }}
+    h1 {{ font-size: 19px; }}
+    h2 {{ font-size: 16px; }}
+    a {{ color: #6366f1; }}
+    .email-btn {{
+      background-color: #6366f1;
+      color: #ffffff !important;
+      padding: 11px 26px;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      display: inline-block;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+    }}
+    @media screen and (max-width: 620px) {{
+      .email-wrapper {{ width: 100% !important; border-radius: 0 !important; }}
+      .content-padding {{ padding: 20px 16px !important; }}
+    }}
+  </style>
 </head>
-<body style="margin: 0; padding: 32px 10px; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #334155; line-height: 1.65;">
-    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc;">
-        <tr>
-            <td align="center">
-                <table role="presentation" class="email-container" width="580" border="0" cellspacing="0" cellpadding="0" style="max-width: 580px; width: 100%; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05); text-align: left;">
-                    <!-- Header -->
-                    <tr>
-                        <td style="background-color: #ffffff; padding: 24px 32px 16px 32px; border-bottom: 2px solid #2563eb;">
-                            <div style="font-size: 18px; font-weight: 700; color: #0f172a; letter-spacing: -0.3px;">
-                                {header_title}
-                            </div>
-                        </td>
-                    </tr>
-                    
-                    <!-- Content Area -->
-                    <tr>
-                        <td class="content-padding" style="padding: 28px 32px 24px 32px; font-size: 14.5px; color: #334155; line-height: 1.7;">
-                            {body_content}
-                        </td>
-                    </tr>
-                    
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: #f8fafc; padding: 18px 32px; border-top: 1px solid #f1f5f9; font-size: 11.5px; color: #94a3b8; text-align: center;">
-                            <p style="margin: 0;">
-                                Sent automatically following our conversation &bull; {sender_name or 'Support Team'}
-                            </p>
-                        </td>
-                    </tr>
-                </table>
+<body>
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="width: 100%; background-color: #f8fafc; padding: 12px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="email-wrapper" width="580" border="0" cellspacing="0" cellpadding="0" style="width: 100%; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.06); text-align: left;">
+          {header_html}
+          <tr>
+            <td class="content-padding" style="padding: 24px 28px 20px 28px; font-size: 14px; color: #334155; line-height: 1.65;">
+              {body_content}
             </td>
-        </tr>
-    </table>
+          </tr>
+          <tr>
+            <td style="background-color: #f8fafc; padding: 18px 24px; border-top: 1px solid #f1f5f9; text-align: center;">
+              {f'<div style="margin-bottom: 12px;">{social_html}</div>' if show_social and social_html else ''}
+              <p style="margin: 0 0 4px 0; font-size: 11.5px; color: #64748b; font-weight: 500;">
+                &copy; {current_year} {company_footer}. All rights reserved.
+              </p>
+              <p style="margin: 0; font-size: 10.5px; color: #94a3b8;">
+                Sent automatically following our conversation &bull; <a href="#" style="color: #94a3b8; text-decoration: underline;">Unsubscribe</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>"""
 
@@ -447,11 +526,17 @@ class EmailAutomationService:
                     or (smtp_config.sender_email if smtp_config else None)
                 )
 
+                branding_opts = (
+                    matched_rule.get("branding")
+                    or automation_config.get("branding")
+                    or {}
+                )
                 body_html = wrap_email_html(
                     body_text,
                     subject=subject,
                     sender_name=from_name,
                     campaign_name=campaign.campaign_name,
+                    branding=branding_opts,
                 )
 
                 if smtp_config:
