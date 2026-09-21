@@ -151,8 +151,10 @@ async def _analyze_and_update_summary(call_id: int, transcript: str, business_ou
                     print(f"[CallService] WhatsApp automation error after AI classification for Call {call_id}: {wa_err}")
                 # Trigger email automation rules (independent, non-blocking)
                 try:
-                    from app.services.email_automation_service import EmailAutomationService
-                    await EmailAutomationService.process_call_automation(call_id)
+                    import importlib
+                    import app.services.email_automation_service as eas
+                    importlib.reload(eas)
+                    await eas.EmailAutomationService.process_call_automation(call_id)
                 except Exception as ea_err:
                     print(f"[CallService] Email automation error after AI classification for Call {call_id}: {ea_err}")
     except Exception as e:
@@ -459,8 +461,10 @@ class CallService:
             except Exception as wa_err:
                 print(f"[CallService] Error dispatching WhatsApp automation for Call {call.id}: {wa_err}")
             try:
-                from app.services.email_automation_service import EmailAutomationService
-                asyncio.create_task(EmailAutomationService.process_call_automation(call.id))
+                import importlib
+                import app.services.email_automation_service as eas
+                importlib.reload(eas)
+                asyncio.create_task(eas.EmailAutomationService.process_call_automation(call.id))
             except Exception as ea_err:
                 print(f"[CallService] Error dispatching email automation for Call {call.id}: {ea_err}")
 
@@ -554,8 +558,10 @@ class CallService:
         except Exception as wa_err:
             print(f"[CallService] Error dispatching WhatsApp automation for failed Call {call_id}: {wa_err}")
         try:
-            from app.services.email_automation_service import EmailAutomationService
-            asyncio.create_task(EmailAutomationService.process_call_automation(call_id))
+            import importlib
+            import app.services.email_automation_service as eas
+            importlib.reload(eas)
+            asyncio.create_task(eas.EmailAutomationService.process_call_automation(call_id))
         except Exception as ea_err:
             print(f"[CallService] Error dispatching email automation for failed Call {call_id}: {ea_err}")
 
