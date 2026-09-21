@@ -122,7 +122,7 @@ def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_
     header_title = sender_name or campaign_name or "Follow-up Notification"
     
     # Check if content has HTML tags
-    has_html_tags = bool("<p>" in content or "<div>" in content or "<table>" in content or "<br" in content)
+    has_html_tags = "<p>" in content or "<div>" in content or "<table>" in content or "<br" in content
     if not has_html_tags:
         import html as html_lib
         escaped = html_lib.escape(content)
@@ -263,6 +263,27 @@ class EmailAutomationService:
                         if val and isinstance(val, str) and "@" in val:
                             dest_email = val.strip()
                             break
+            if not dest_email and contact and contact.phone and campaign.user_id:
+                try:
+                    from app.models.saved_contact import SavedContact
+                    from app.api.contacts_book import normalize_phone
+                    from sqlalchemy import and_, select
+                    norm_phone = normalize_phone(contact.phone)
+                    if norm_phone:
+                        stmt = select(SavedContact).where(
+                            and_(
+                                SavedContact.user_id == campaign.user_id,
+                                SavedContact.phone == norm_phone,
+                            )
+                        ).limit(1)
+                        sc_res = await db.execute(stmt)
+                        sc = sc_res.scalars().first()
+                        if sc and sc.email and "@" in sc.email:
+                            dest_email = sc.email.strip()
+                            print(f"[EmailAutomation] Resolved destination email from SavedContact ({sc.email}) for Call {call_id}")
+                except Exception as ex:
+                    print(f"[EmailAutomation] SavedContact fallback lookup error: {ex}")
+
             if not dest_email:
                 print(f"[EmailAutomation] No email address for contact on Call {call_id}. Skipping.")
                 return None

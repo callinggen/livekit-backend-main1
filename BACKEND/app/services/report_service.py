@@ -37,6 +37,14 @@ class ReportRequest(BaseModel):
     remaining_credits: int = 0
     appointments_booked: int = 0
     call_summaries: List[str] = []
+    # Omnichannel & Follow-up fields
+    email_marketing_campaigns: int = 0
+    email_marketing_sent: int = 0
+    email_marketing_failed: int = 0
+    whatsapp_messages_sent: int = 0
+    whatsapp_messages_failed: int = 0
+    post_call_email_automations_active: int = 0
+    post_call_whatsapp_automations_active: int = 0
 
 SYSTEM_PROMPT = """You are an executive-level Voice AI Campaign Analyst and Performance Strategist.
 Your task is to analyze outbound voice AI call performance data and generate a clear, highly analytical, and actionable campaign performance report.
@@ -72,6 +80,12 @@ Bullet points covering:
 - **Warm Leads**: Count, % of total dials, and % of completed calls.
 - **Cold Leads / Opt-Outs**: Count, % of total dials, and % of completed calls.
 - **Conversion Efficiency**: Ratio of dials per qualified lead (Hot + Warm) and Cost Per Qualified Lead (CPQL) in credits.
+
+## Omnichannel Engagement (WhatsApp, Post-Call Email & Email Marketing)
+Structured analytical paragraphs covering:
+- **Post-Call WhatsApp Follow-ups**: Details on automated WhatsApp follow-ups dispatched after calls, message delivery rates, and how automated brochures/templates nurture interested contacts.
+- **Post-Call Automated Emails**: Details on automated post-call emails sent through connected SMTP mailboxes, conversion follow-up reach, and automated meeting confirmation collateral.
+- **Email Marketing Studio Campaigns**: Analysis of broadcast campaigns sent via the Email Studio, reach, deliverability, and omnichannel synergy reinforcing voice calling.
 
 ## Recommendations & Action Items
 Provide 4 to 5 prioritized, numbered, actionable recommendations:
@@ -162,6 +176,11 @@ During the reporting period from {data.start_date} to {data.end_date}, a total o
 - **Cold Leads / Opt-Outs**: {data.cold_leads} ({cold_pct}% of total dials).
 - **Conversion Efficiency**: 1 qualified lead generated for every {conv_ratio} connected calls, at a Cost Per Qualified Lead of {cpql} credits.
 
+## Omnichannel Engagement (WhatsApp, Post-Call Email & Email Marketing)
+- **Post-Call WhatsApp Follow-ups**: {data.post_call_whatsapp_automations_active} campaign(s) actively configured with automated post-call WhatsApp delivery. A total of {data.whatsapp_messages_sent} WhatsApp messages and brochures were dispatched to contacts immediately upon call conclusion, accelerating lead nurturing and response speed.
+- **Post-Call Automated Emails**: {data.post_call_email_automations_active} campaign(s) enabled with automated post-call email triggers. Follow-up emails are dispatched directly through your connected SMTP mailbox, ensuring appointment confirmations and qualification collateral reach high-intent prospects with zero manual delay.
+- **Email Marketing Studio Campaigns**: {data.email_marketing_campaigns} marketing broadcast campaign(s) executed during this timeframe, with {data.email_marketing_sent} emails dispatched ({data.email_marketing_failed} failed/bounced). Combining voice calling with targeted email marketing creates a multi-touchpoint flywheel that reinforces brand awareness and increases pipeline velocity.
+
 ## Recommendations & Action Items
 1. **Refine Opening Script Hook (Urgent)**: Tighten the value proposition within the initial 10-15 seconds to maximize engagement.
 2. **Optimize Calling Windows & Timing**: Target calling hours between 10:00 AM – 1:00 PM and 4:00 PM – 6:00 PM for peak connection rates.
@@ -206,6 +225,13 @@ OVERALL METRICS:
 - Total Credits Consumed: {data.credits_consumed} credits
 - Remaining Balance: {data.remaining_credits} credits
 
+OMNICHANNEL ENGAGEMENT & MARKETING:
+- Post-Call WhatsApp Automations Active: {data.post_call_whatsapp_automations_active} campaigns
+- WhatsApp Messages & Materials Dispatched: {data.whatsapp_messages_sent} sent ({data.whatsapp_messages_failed} failed)
+- Post-Call Email Automations Active: {data.post_call_email_automations_active} campaigns (via connected user SMTP)
+- Email Marketing Broadcast Campaigns: {data.email_marketing_campaigns} campaigns
+- Email Marketing Volume: {data.email_marketing_sent} emails dispatched ({data.email_marketing_failed} failed/bounced)
+
 INDIVIDUAL CAMPAIGN BREAKDOWNS:
 {campaign_breakdown_text}
 
@@ -217,7 +243,7 @@ OVERALL LEAD CLASSIFICATION & PIPELINE:
 SAMPLE CALL SUMMARIES & TRANSCRIPTS:
 {summaries_text}
 
-Analyze the data thoroughly, compute percentages/ratios, evaluate each campaign under '## Campaign-by-Campaign Performance Breakdown', and output the structured report."""
+Analyze the data thoroughly, compute percentages/ratios, evaluate each campaign under '## Campaign-by-Campaign Performance Breakdown', evaluate WhatsApp follow-ups and Email campaigns under '## Omnichannel Engagement (WhatsApp, Post-Call Email & Email Marketing)', and output the structured report."""
 
     client, model_name = get_ai_client()
     if not client or not model_name:

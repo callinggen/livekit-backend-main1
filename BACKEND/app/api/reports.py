@@ -14,6 +14,9 @@ from app.models.contact import Contact
 from app.models.report import Report
 from app.models.campaign import Campaign
 from app.models.user import User
+from app.models.email_campaign import EmailCampaign
+from app.models.whatsapp_send_job import WhatsAppSendJob
+from app.models.whatsapp_action import WhatsAppAction
 from app.core.security import get_current_user
 from app.services.report_service import generate_campaign_report, ReportRequest, CampaignMetric
 
@@ -162,6 +165,79 @@ async def generate_report(
             if (c.summary or c.transcript or (c.duration and c.duration > 0))
         ][:20]
 
+        # Omnichannel & Follow-up Engagement Metrics
+        try:
+            # 1. Email Marketing Broadcast Campaigns
+            email_camps_res = await db.execute(
+                select(EmailCampaign).where(
+                    and_(
+                        EmailCampaign.user_id == current_user.id,
+                        EmailCampaign.created_at >= start_dt,
+                        EmailCampaign.created_at <= end_dt,
+                    )
+                )
+            )
+            email_camps = email_camps_res.scalars().all()
+            email_marketing_campaigns = len(email_camps)
+            email_marketing_sent = sum((ec.total_sent or 0) for ec in email_camps)
+            email_marketing_failed = sum((ec.total_failed or 0) for ec in email_camps)
+        except Exception as e:
+            print(f"[Reports] Error querying email marketing campaigns: {e}")
+            email_marketing_campaigns = 0
+            email_marketing_sent = 0
+            email_marketing_failed = 0
+
+        try:
+            # 2. WhatsApp Broadcast Jobs
+            wa_jobs_res = await db.execute(
+                select(WhatsAppSendJob).where(
+                    and_(
+                        WhatsAppSendJob.user_id == current_user.id,
+                        WhatsAppSendJob.created_at >= start_dt,
+                        WhatsAppSendJob.created_at <= end_dt,
+                    )
+                )
+            )
+            wa_jobs = wa_jobs_res.scalars().all()
+            wa_broadcast_sent = sum((wj.sent_count or 0) for wj in wa_jobs)
+            wa_broadcast_failed = sum((wj.failed_count or 0) for wj in wa_jobs)
+        except Exception as e:
+            print(f"[Reports] Error querying WhatsApp broadcast jobs: {e}")
+            wa_broadcast_sent = 0
+            wa_broadcast_failed = 0
+
+        try:
+            # 3. WhatsApp Post-Call Actions
+            call_ids = [c.id for c in calls if c.id]
+            if call_ids:
+                wa_acts_res = await db.execute(
+                    select(WhatsAppAction).where(WhatsAppAction.call_id.in_(call_ids))
+                )
+                wa_acts = wa_acts_res.scalars().all()
+                wa_action_sent = sum(1 for a in wa_acts if a.status == "sent")
+                wa_action_failed = sum(1 for a in wa_acts if a.status == "failed")
+            else:
+                wa_action_sent = 0
+                wa_action_failed = 0
+        except Exception as e:
+            print(f"[Reports] Error querying WhatsApp actions: {e}")
+            wa_action_sent = 0
+            wa_action_failed = 0
+
+        whatsapp_messages_sent = wa_broadcast_sent + wa_action_sent
+        whatsapp_messages_failed = wa_broadcast_failed + wa_action_failed
+
+        # 4. Active Automations across unique campaigns
+        unique_cmp_map = {cmp.id: cmp for cmp in campaigns if cmp and cmp.id}
+        post_call_email_active = sum(
+            1 for cmp in unique_cmp_map.values()
+            if cmp.email_automation and isinstance(cmp.email_automation, dict) and cmp.email_automation.get("enabled")
+        )
+        post_call_wa_active = sum(
+            1 for cmp in unique_cmp_map.values()
+            if cmp.whatsapp_automation and isinstance(cmp.whatsapp_automation, dict) and cmp.whatsapp_automation.get("enabled")
+        )
+
         report_req = ReportRequest(
             start_date=start_date,
             end_date=end_date,
@@ -178,7 +254,14 @@ async def generate_report(
             campaign_breakdown=campaign_breakdown,
             credits_consumed=credits_consumed,
             remaining_credits=remaining_credits,
-            call_summaries=call_summaries
+            call_summaries=call_summaries,
+            email_marketing_campaigns=email_marketing_campaigns,
+            email_marketing_sent=email_marketing_sent,
+            email_marketing_failed=email_marketing_failed,
+            whatsapp_messages_sent=whatsapp_messages_sent,
+            whatsapp_messages_failed=whatsapp_messages_failed,
+            post_call_email_automations_active=post_call_email_active,
+            post_call_whatsapp_automations_active=post_call_wa_active,
         )
 
         report_text = await generate_campaign_report(report_req)
@@ -198,6 +281,13 @@ async def generate_report(
             "campaign_breakdown": [cb.model_dump() for cb in campaign_breakdown],
             "credits_consumed": credits_consumed,
             "remaining_credits": remaining_credits,
+            "email_marketing_campaigns": email_marketing_campaigns,
+            "email_marketing_sent": email_marketing_sent,
+            "email_marketing_failed": email_marketing_failed,
+            "whatsapp_messages_sent": whatsapp_messages_sent,
+            "whatsapp_messages_failed": whatsapp_messages_failed,
+            "post_call_email_automations_active": post_call_email_active,
+            "post_call_whatsapp_automations_active": post_call_wa_active,
         }
 
         # Save the report to the database
