@@ -131,16 +131,34 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         select(User).options(selectinload(User.agents)).order_by(User.created_at.desc()).limit(10)
     )
     recent_users_list = recent_users_res.scalars().all()
+    recent_user_ids = [u.id for u in recent_users_list]
 
-    recent_users = [
-        {
+    recent_phones_map = {}
+    if recent_user_ids:
+        r_pn_res = await db.execute(
+            select(UserPhoneNumber)
+            .where(UserPhoneNumber.user_id.in_(recent_user_ids))
+            .where(UserPhoneNumber.is_active == True)
+            .order_by(UserPhoneNumber.is_default.desc(), UserPhoneNumber.id.asc())
+        )
+        for p in r_pn_res.scalars().all():
+            recent_phones_map.setdefault(p.user_id, []).append(p)
+
+    recent_users = []
+    for u in recent_users_list:
+        u_phones = recent_phones_map.get(u.id, [])
+        u_def_phone = u_phones[0] if u_phones else None
+        recent_users.append({
             "id": f"USR-{u.id}",
             "raw_id": u.id,
-            "name": u.full_name or u.email or f"User #{u.id}",
+            "name": u.full_name or u.company_name or u.email or f"User #{u.id}",
             "email": u.email or "N/A",
             "mobile": u.phone_number or "N/A",
-            "phone": u.phone_number or "N/A",
-            "organization": u.full_name or "Independent",
+            "phone": (u_def_phone.phone_number if u_def_phone and u_def_phone.phone_number else u.phone_number) or "N/A",
+            "organization": u.company_name or u.full_name or "Independent",
+            "industry": u.industry or "General",
+            "provider": (u_def_phone.provider_name if u_def_phone and u_def_phone.provider_name else "Vobiz"),
+            "sip_trunk_id": (u_def_phone.sip_id if u_def_phone and u_def_phone.sip_id else "Not Configured"),
             "plan": u.subscription_plan or "Starter",
             "credits": u.credits or 0,
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
@@ -167,10 +185,20 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
                         "status": "Active"
                     }
                 ] if u.agent_name else []
-            )
-        }
-        for u in recent_users_list
-    ]
+            ),
+            "phones": [
+                {
+                    "region": p.region,
+                    "phone_number": p.phone_number,
+                    "number_type": p.number_type,
+                    "provider_name": p.provider_name,
+                    "sip_id": p.sip_id,
+                    "status": p.status,
+                    "is_default": p.is_default
+                }
+                for p in u_phones
+            ]
+        })
 
     # 9. Recent Activity
     recent_activities = []
@@ -205,16 +233,31 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
     """Return list of all registered users."""
     res = await db.execute(select(User).options(selectinload(User.agents)).order_by(User.id.desc()))
     users = res.scalars().all()
+    user_ids = [u.id for u in users]
+
+    phones_map = {}
+    if user_ids:
+        pn_res = await db.execute(
+            select(UserPhoneNumber)
+            .where(UserPhoneNumber.user_id.in_(user_ids))
+            .where(UserPhoneNumber.is_active == True)
+            .order_by(UserPhoneNumber.is_default.desc(), UserPhoneNumber.id.asc())
+        )
+        for p in pn_res.scalars().all():
+            phones_map.setdefault(p.user_id, []).append(p)
 
     return [
         {
             "id": f"USR-{u.id}",
             "raw_id": u.id,
-            "name": u.full_name or u.email or f"User #{u.id}",
+            "name": u.full_name or u.company_name or u.email or f"User #{u.id}",
             "email": u.email or "",
             "mobile": u.phone_number or "",
-            "phone": u.phone_number or "",
-            "organization": u.full_name or "Independent",
+            "phone": (phones_map.get(u.id, [None])[0].phone_number if phones_map.get(u.id) and phones_map.get(u.id)[0].phone_number else u.phone_number) or "",
+            "organization": u.company_name or u.full_name or "Independent",
+            "industry": u.industry or "General",
+            "provider": (phones_map.get(u.id, [None])[0].provider_name if phones_map.get(u.id) and phones_map.get(u.id)[0].provider_name else "Vobiz"),
+            "sip_trunk_id": (phones_map.get(u.id, [None])[0].sip_id if phones_map.get(u.id) and phones_map.get(u.id)[0].sip_id else "Not Configured"),
             "plan": u.subscription_plan or "Starter",
             "credits": u.credits or 0,
             "type": "Demo" if (u.credits or 0) <= 50 or u.subscription_plan == "Demo" else "Regular",
@@ -242,7 +285,19 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
                         "status": "Active"
                     }
                 ] if u.agent_name else []
-            )
+            ),
+            "phones": [
+                {
+                    "region": p.region,
+                    "phone_number": p.phone_number,
+                    "number_type": p.number_type,
+                    "provider_name": p.provider_name,
+                    "sip_id": p.sip_id,
+                    "status": p.status,
+                    "is_default": p.is_default
+                }
+                for p in phones_map.get(u.id, [])
+            ]
         }
         for u in users
     ]
@@ -435,6 +490,37 @@ async def create_user(
 
     if getattr(user_data, "phones", None):
         for phone_data in user_data.phones:
+            sip_id = phone_data.sip_id
+            prov = (phone_data.provider_name or "").lower()
+            if "vobiz" in prov and (not sip_id or sip_id == "AUTO_GENERATE"):
+                try:
+                    import os
+                    from livekit import api
+                    from livekit.protocol.sip import CreateSIPOutboundTrunkRequest, SIPOutboundTrunkInfo
+                    lkapi = api.LiveKitAPI(
+                        url=os.getenv("LIVEKIT_URL", "http://127.0.0.1:7880"),
+                        api_key=os.getenv("LIVEKIT_API_KEY", "APIuLp9KqY3tZxV"),
+                        api_secret=os.getenv("LIVEKIT_API_SECRET", "SECnRt8MwP2vLyK4jHgF6dQ1sAbXc5zE")
+                    )
+                    clean_p = "".join(c for c in (phone_data.phone_number or "") if c.isdigit() or c == "+")
+                    if clean_p and not clean_p.startswith("+"):
+                        clean_p = f"+{clean_p}"
+                    trunk = SIPOutboundTrunkInfo(
+                        name=f"Vobiz Trunk - {new_user.company_name or new_user.full_name or new_user.id}",
+                        address="9beeb252.sip.vobiz.ai",
+                        numbers=[clean_p] if clean_p else ["+917971442271"],
+                        auth_username=phone_data.sip_username or "livekit-deployment",
+                        auth_password=phone_data.sip_password or "Genx@12345"
+                    )
+                    req = CreateSIPOutboundTrunkRequest(trunk=trunk)
+                    res = await lkapi.sip.create_sip_outbound_trunk(req)
+                    sip_id = res.sip_trunk_id
+                    await lkapi.aclose()
+                    print(f"Dynamically generated Vobiz SIP Trunk: {sip_id} for User #{new_user.id}")
+                except Exception as trunk_err:
+                    print(f"Error auto-creating Vobiz SIP trunk: {trunk_err}")
+                    sip_id = "ST_yT4TSUgoEJD5"
+
             pn = UserPhoneNumber(
                 user_id=new_user.id,
                 region=phone_data.region,
@@ -443,7 +529,7 @@ async def create_user(
                 provider_name=phone_data.provider_name,
                 provider_account_id=phone_data.provider_account_id,
                 api_key_auth_token=phone_data.api_key_auth_token,
-                sip_id=phone_data.sip_id,
+                sip_id=sip_id,
                 sip_username=phone_data.sip_username,
                 sip_password=phone_data.sip_password,
                 status=phone_data.status,
