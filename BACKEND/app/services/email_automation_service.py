@@ -110,16 +110,90 @@ def resolve_email_personalization(text: str, variables: Dict[str, str]) -> str:
     return result
 
 
+def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_name: str = "") -> str:
+    """Ensure email content is rendered in a responsive, beautifully styled email template."""
+    if not content:
+        return ""
+    
+    # If already a full HTML document, return as-is
+    if "<!DOCTYPE" in content or "<html" in content.lower():
+        return content
+
+    header_title = sender_name or campaign_name or "Follow-up Notification"
+    
+    # Check if content has HTML tags
+    has_html_tags = bool("<p>" in content or "<div>" in content or "<table>" in content or "<br" in content)
+    if not has_html_tags:
+        import html as html_lib
+        escaped = html_lib.escape(content)
+        paragraphs = escaped.split("\n\n")
+        html_parts = []
+        for para in paragraphs:
+            lines = para.split("\n")
+            html_parts.append("<p style='margin: 0 0 16px 0;'>" + "<br>".join(lines) + "</p>")
+        body_content = "\n".join(html_parts)
+    else:
+        body_content = content
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{subject}</title>
+    <style>
+        body, table, td, p, a, li, blockquote {{
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }}
+        table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+        img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
+        @media screen and (max-width: 620px) {{
+            .email-container {{ width: 100% !important; border-radius: 0 !important; }}
+            .content-padding {{ padding: 24px 18px !important; }}
+        }}
+    </style>
+</head>
+<body style="margin: 0; padding: 32px 10px; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #334155; line-height: 1.65;">
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc;">
+        <tr>
+            <td align="center">
+                <table role="presentation" class="email-container" width="580" border="0" cellspacing="0" cellpadding="0" style="max-width: 580px; width: 100%; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05); text-align: left;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #ffffff; padding: 24px 32px 16px 32px; border-bottom: 2px solid #2563eb;">
+                            <div style="font-size: 18px; font-weight: 700; color: #0f172a; letter-spacing: -0.3px;">
+                                {header_title}
+                            </div>
+                        </td>
+                    </tr>
+                    
+                    <!-- Content Area -->
+                    <tr>
+                        <td class="content-padding" style="padding: 28px 32px 24px 32px; font-size: 14.5px; color: #334155; line-height: 1.7;">
+                            {body_content}
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f8fafc; padding: 18px 32px; border-top: 1px solid #f1f5f9; font-size: 11.5px; color: #94a3b8; text-align: center;">
+                            <p style="margin: 0;">
+                                Sent automatically following our conversation &bull; {sender_name or 'Support Team'}
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>"""
+
+
 def text_to_html(text: str) -> str:
-    """Convert plain-text body to simple HTML for email sending."""
-    import html as html_lib
-    escaped = html_lib.escape(text)
-    paragraphs = escaped.split("\n\n")
-    html_parts = []
-    for para in paragraphs:
-        lines = para.split("\n")
-        html_parts.append("<p>" + "<br>".join(lines) + "</p>")
-    return "\n".join(html_parts)
+    """Legacy helper for plain-text body."""
+    return wrap_email_html(text, "Follow-up")
 
 
 class EmailAutomationService:
@@ -323,7 +397,6 @@ class EmailAutomationService:
 
             subject = resolve_email_personalization(raw_subject, variables)
             body_text = resolve_email_personalization(raw_body, variables)
-            body_html = text_to_html(body_text)
 
             # 6. Send via connected User SMTP Mailbox (or fallback)
             try:
@@ -372,6 +445,13 @@ class EmailAutomationService:
                     matched_rule.get("reply_to")
                     or automation_config.get("reply_to")
                     or (smtp_config.sender_email if smtp_config else None)
+                )
+
+                body_html = wrap_email_html(
+                    body_text,
+                    subject=subject,
+                    sender_name=from_name,
+                    campaign_name=campaign.campaign_name,
                 )
 
                 if smtp_config:
