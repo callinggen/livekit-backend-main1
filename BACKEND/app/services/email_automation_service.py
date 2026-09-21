@@ -1,4 +1,4 @@
-﻿import json
+import json
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -23,7 +23,7 @@ email_service = EmailService()
 EMAIL_AUTOMATION_TEMPLATES: List[Dict[str, Any]] = [
     {
         "id": "hot_lead_followup",
-        "name": "≡ƒöÑ Hot Lead Follow-Up",
+        "name": "🔥 Hot Lead Follow-Up",
         "description": "Sent to hot leads immediately after the call.",
         "subject": "Great speaking with you, {{name}}!",
         "body": (
@@ -37,7 +37,7 @@ EMAIL_AUTOMATION_TEMPLATES: List[Dict[str, Any]] = [
     },
     {
         "id": "appointment_confirmation",
-        "name": "≡ƒôà Appointment Confirmed",
+        "name": "📅 Appointment Confirmed",
         "description": "Sent when an appointment is booked during the call.",
         "subject": "Your appointment is confirmed, {{name}}!",
         "body": (
@@ -53,7 +53,7 @@ EMAIL_AUTOMATION_TEMPLATES: List[Dict[str, Any]] = [
     },
     {
         "id": "callback_reminder",
-        "name": "≡ƒöü Callback Scheduled",
+        "name": "🔁 Callback Scheduled",
         "description": "Sent when the contact requests a callback.",
         "subject": "We'll call you back, {{name}}",
         "body": (
@@ -66,7 +66,7 @@ EMAIL_AUTOMATION_TEMPLATES: List[Dict[str, Any]] = [
     },
     {
         "id": "not_answered_followup",
-        "name": "≡ƒô╡ Missed Call Follow-Up",
+        "name": "📵 Missed Call Follow-Up",
         "description": "Sent when the call was not answered.",
         "subject": "We tried to reach you, {{name}}",
         "body": (
@@ -79,7 +79,7 @@ EMAIL_AUTOMATION_TEMPLATES: List[Dict[str, Any]] = [
     },
     {
         "id": "general_followup",
-        "name": "≡ƒæï General Thank You",
+        "name": "👋 General Thank You",
         "description": "Sent after any completed call as a thank-you.",
         "subject": "Thank you for your time, {{name}}",
         "body": (
@@ -92,7 +92,7 @@ EMAIL_AUTOMATION_TEMPLATES: List[Dict[str, Any]] = [
     },
     {
         "id": "custom",
-        "name": "Γ£Å∩╕Å Custom Template",
+        "name": "✏️ Custom Template",
         "description": "Write your own subject and email body.",
         "subject": "",
         "body": "",
@@ -110,22 +110,96 @@ def resolve_email_personalization(text: str, variables: Dict[str, str]) -> str:
     return result
 
 
+def wrap_email_html(content: str, subject: str, sender_name: str = "", campaign_name: str = "") -> str:
+    """Ensure email content is rendered in a responsive, beautifully styled email template."""
+    if not content:
+        return ""
+    
+    # If already a full HTML document, return as-is
+    if "<!DOCTYPE" in content or "<html" in content.lower():
+        return content
+
+    header_title = sender_name or campaign_name or "Follow-up Notification"
+    
+    # Check if content has HTML tags
+    has_html_tags = bool("<p>" in content or "<div>" in content or "<table>" in content or "<br" in content)
+    if not has_html_tags:
+        import html as html_lib
+        escaped = html_lib.escape(content)
+        paragraphs = escaped.split("\n\n")
+        html_parts = []
+        for para in paragraphs:
+            lines = para.split("\n")
+            html_parts.append("<p style='margin: 0 0 16px 0;'>" + "<br>".join(lines) + "</p>")
+        body_content = "\n".join(html_parts)
+    else:
+        body_content = content
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{subject}</title>
+    <style>
+        body, table, td, p, a, li, blockquote {{
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
+        }}
+        table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+        img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
+        @media screen and (max-width: 620px) {{
+            .email-container {{ width: 100% !important; border-radius: 0 !important; }}
+            .content-padding {{ padding: 24px 18px !important; }}
+        }}
+    </style>
+</head>
+<body style="margin: 0; padding: 32px 10px; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #334155; line-height: 1.65;">
+    <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc;">
+        <tr>
+            <td align="center">
+                <table role="presentation" class="email-container" width="580" border="0" cellspacing="0" cellpadding="0" style="max-width: 580px; width: 100%; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05); text-align: left;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #ffffff; padding: 24px 32px 16px 32px; border-bottom: 2px solid #2563eb;">
+                            <div style="font-size: 18px; font-weight: 700; color: #0f172a; letter-spacing: -0.3px;">
+                                {header_title}
+                            </div>
+                        </td>
+                    </tr>
+                    
+                    <!-- Content Area -->
+                    <tr>
+                        <td class="content-padding" style="padding: 28px 32px 24px 32px; font-size: 14.5px; color: #334155; line-height: 1.7;">
+                            {body_content}
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #f8fafc; padding: 18px 32px; border-top: 1px solid #f1f5f9; font-size: 11.5px; color: #94a3b8; text-align: center;">
+                            <p style="margin: 0;">
+                                Sent automatically following our conversation &bull; {sender_name or 'Support Team'}
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>"""
+
+
 def text_to_html(text: str) -> str:
-    """Convert plain-text body to simple HTML for email sending."""
-    import html as html_lib
-    escaped = html_lib.escape(text)
-    paragraphs = escaped.split("\n\n")
-    html_parts = []
-    for para in paragraphs:
-        lines = para.split("\n")
-        html_parts.append("<p>" + "<br>".join(lines) + "</p>")
-    return "\n".join(html_parts)
+    """Legacy helper for plain-text body."""
+    return wrap_email_html(text, "Follow-up")
 
 
 class EmailAutomationService:
     """
     Evaluates campaign-level Email automation rules after call completion.
-    Mirrors WhatsAppAutomationService exactly ΓÇö same 4-filter system.
+    Mirrors WhatsAppAutomationService exactly — same 4-filter system.
     Only fires if the campaign has email_automation.enabled = true AND
     the contact has a valid email address.
     """
@@ -193,10 +267,7 @@ class EmailAutomationService:
                 print(f"[EmailAutomation] No email address for contact on Call {call_id}. Skipping.")
                 return None
 
-            # Check email service is configured
-            if not email_service.is_configured():
-                print(f"[EmailAutomation] Email service not configured. Skipping Call {call_id}.")
-                return None
+            # Destination email resolved successfully
 
             # 2. Extract call outcome attributes (same as WhatsApp)
             cat = (call.category or "UNCATEGORIZED").upper()
@@ -215,7 +286,7 @@ class EmailAutomationService:
             is_not_answered = call_status in ("failed", "incomplete") or "no answer" in resp_lower or "unreached" in resp_lower
             is_cut = "cut" in resp_lower or "disconnected" in resp_lower
 
-            # 3. Match rules ΓÇö same 4-filter logic as WhatsApp
+            # 3. Match rules — same 4-filter logic as WhatsApp
             matched_rule = None
             for rule in rules:
                 if not rule.get("enabled", True):
@@ -326,24 +397,93 @@ class EmailAutomationService:
 
             subject = resolve_email_personalization(raw_subject, variables)
             body_text = resolve_email_personalization(raw_body, variables)
-            body_html = text_to_html(body_text)
 
-            # 6. Send via Resend
+            # 6. Send via connected User SMTP Mailbox (or fallback)
             try:
-                email_service._send_email(
-                    to_email=dest_email,
-                    subject=subject,
-                    body=body_html,
-                    is_html=True,
+                from app.models.user_smtp_config import UserSmtpConfig
+                from app.services.smtp_mailbox_service import smtp_mailbox_service
+                from sqlalchemy import select, and_
+
+                smtp_config = None
+                if campaign.user_id:
+                    # 1. Try matching rule-specific or automation config sender_email
+                    target_email = (
+                        matched_rule.get("from_email")
+                        or automation_config.get("sender_email")
+                        or automation_config.get("from_email")
+                    )
+                    if target_email:
+                        smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
+                            db, user_id=campaign.user_id, sender_email=target_email
+                        )
+
+                    # 2. If not found, lookup user's default/active verified SMTP config
+                    if not smtp_config:
+                        stmt = (
+                            select(UserSmtpConfig)
+                            .where(
+                                and_(
+                                    UserSmtpConfig.user_id == campaign.user_id,
+                                    UserSmtpConfig.is_active == True,
+                                    UserSmtpConfig.is_verified == True,
+                                )
+                            )
+                            .order_by(UserSmtpConfig.is_default.desc(), UserSmtpConfig.id.asc())
+                            .limit(1)
+                        )
+                        res = await db.execute(stmt)
+                        smtp_config = res.scalars().first()
+
+                from_name = (
+                    matched_rule.get("from_name")
+                    or automation_config.get("from_name")
+                    or (campaign.from_name if hasattr(campaign, "from_name") else None)
+                    or (smtp_config.sender_name if smtp_config else None)
+                    or "Follow-up Team"
                 )
-                print(f"[EmailAutomation] Email sent to {dest_email} for Call {call_id} | template={template_id}")
-                return {
-                    "success": True,
-                    "call_id": call_id,
-                    "to": dest_email,
-                    "subject": subject,
-                    "template_id": template_id,
-                }
+                reply_to = (
+                    matched_rule.get("reply_to")
+                    or automation_config.get("reply_to")
+                    or (smtp_config.sender_email if smtp_config else None)
+                )
+
+                body_html = wrap_email_html(
+                    body_text,
+                    subject=subject,
+                    sender_name=from_name,
+                    campaign_name=campaign.campaign_name,
+                )
+
+                if smtp_config:
+                    # Dispatched directly through client's connected authenticated mailbox (Gmail / Outlook / Zoho / Custom SMTP)
+                    await smtp_mailbox_service.send_email_via_smtp(
+                        smtp_config=smtp_config,
+                        to_email=dest_email,
+                        subject=subject,
+                        html_content=body_html,
+                        from_name=from_name,
+                        reply_to=reply_to,
+                    )
+                    print(
+                        f"[EmailAutomation] Email sent to {dest_email} via user SMTP ({smtp_config.sender_email}) for Call {call_id} | template={template_id}"
+                    )
+                    return {
+                        "success": True,
+                        "call_id": call_id,
+                        "to": dest_email,
+                        "sender": smtp_config.sender_email,
+                        "sender_name": from_name,
+                        "method": "smtp",
+                        "subject": subject,
+                        "template_id": template_id,
+                    }
+                else:
+                    err_msg = (
+                        f"No active verified SMTP mailbox configured for user {campaign.user_id}. "
+                        "Email automation skipped. Please connect your SMTP mailbox in Connected Mailboxes."
+                    )
+                    print(f"[EmailAutomation] {err_msg}")
+                    return {"success": False, "call_id": call_id, "error": err_msg}
             except Exception as e:
                 print(f"[EmailAutomation] Failed to send email for Call {call_id}: {e}")
                 return {"success": False, "call_id": call_id, "error": str(e)}

@@ -271,44 +271,51 @@ async def get_email_connection_status(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Check whether the current user has a working email connection.
-    Returns connected=True if Resend API key is configured OR a SMTP mailbox is saved.
-    Frontend uses this to enable/disable the Email Automation toggle.
+    Check whether the current user has a working SMTP mailbox connection.
+    Returns connected=True only if the user has at least one active & verified UserSmtpConfig.
+    Frontend uses this to gate the Email Automation toggle.
     """
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
+    from app.models.user_smtp_config import UserSmtpConfig
+    from sqlalchemy import select, and_
 
-    # Method 1: Resend API key
-    resend_key = os.getenv("RESEND_API_KEY", "").strip()
-    resend_connected = bool(
-        resend_key
-        and not resend_key.startswith("re_your_")
-        and resend_key != "re_your_api_key_here"
-    )
-
-    # Method 2: Check for saved SMTP mailboxes (if model exists)
-    smtp_connected = False
-    try:
-        from app.models.mailbox import Mailbox  # type: ignore[import-untyped]
-        from sqlalchemy import select
-        result = await db.execute(
-            select(Mailbox).where(Mailbox.user_id == current_user.id).limit(1)
+    stmt = (
+        select(UserSmtpConfig)
+        .where(
+            and_(
+                UserSmtpConfig.user_id == current_user.id,
+                UserSmtpConfig.is_active == True,
+                UserSmtpConfig.is_verified == True,
+            )
         )
-        smtp_connected = result.scalars().first() is not None
-    except Exception:
-        smtp_connected = False
+        .order_by(UserSmtpConfig.is_default.desc(), UserSmtpConfig.id.asc())
+    )
+    result = await db.execute(stmt)
+    smtp_configs = list(result.scalars().all())
 
-    connected = resend_connected or smtp_connected
-    method = None
-    if resend_connected:
-        method = "resend"
-    elif smtp_connected:
-        method = "smtp"
+    smtp_connected = len(smtp_configs) > 0
+    mailboxes = [
+        {
+            "id": s.id,
+            "email": s.sender_email,
+            "display_name": s.sender_name,
+            "provider": s.provider or "custom",
+            "is_default": s.is_default,
+            "host": s.smtp_host,
+        }
+        for s in smtp_configs
+    ]
 
     return {
-        "connected": connected,
-        "method": method,
-        "resend_configured": resend_connected,
+        "connected": smtp_connected,
+        "method": "smtp" if smtp_connected else None,
         "smtp_configured": smtp_connected,
+        "resend_configured": False,
+        "mailboxes": mailboxes,
+        "default_sender": mailboxes[0]["email"] if mailboxes else None,
+        "default_sender_name": mailboxes[0]["display_name"] if mailboxes else None,
+        "message": (
+            "SMTP mailbox connected and verified."
+            if smtp_connected
+            else "No verified SMTP mailbox connected. Please add your email mailbox in Settings or Email Campaign page."
+        ),
     }
