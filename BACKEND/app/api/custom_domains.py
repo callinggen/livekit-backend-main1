@@ -2,7 +2,6 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-import resend
 
 from app.database import get_db
 from app.models.user import User
@@ -247,8 +246,11 @@ async def delete_custom_domain(
         and not domain_obj.resend_domain_id.startswith("restricted_")
     ):
         try:
-            resend.api_key = email_service.api_key
-            resend.Domains.remove(domain_obj.resend_domain_id)
+            import importlib
+            from typing import Any
+            resend_mod: Any = importlib.import_module("resend")
+            resend_mod.api_key = email_service.api_key
+            resend_mod.Domains.remove(domain_obj.resend_domain_id)
         except Exception as e:
             print(f"[CustomDomainRouter] Resend delete note: {e}")
 

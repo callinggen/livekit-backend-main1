@@ -251,3 +251,71 @@ async def generate_email_with_ai(
             detail=f"AI generation failed: {str(e)}",
         )
 
+
+# ── GET /api/email/automation/templates ────────────────────────────────────
+
+@router.get("/email/automation/templates")
+async def get_email_automation_templates(
+    current_user: User = Depends(get_current_user),
+):
+    """Return the list of predefined email automation templates."""
+    from app.services.email_automation_service import EMAIL_AUTOMATION_TEMPLATES
+    return {"templates": EMAIL_AUTOMATION_TEMPLATES}
+
+
+# ── GET /api/email/automation/connection-status ─────────────────────────────
+
+@router.get("/email/automation/connection-status")
+async def get_email_connection_status(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Check whether the current user has a working SMTP mailbox connection.
+    Returns connected=True only if the user has at least one active & verified UserSmtpConfig.
+    Frontend uses this to gate the Email Automation toggle.
+    """
+    from app.models.user_smtp_config import UserSmtpConfig
+    from sqlalchemy import select, and_
+
+    stmt = (
+        select(UserSmtpConfig)
+        .where(
+            and_(
+                UserSmtpConfig.user_id == current_user.id,
+                UserSmtpConfig.is_active == True,
+                UserSmtpConfig.is_verified == True,
+            )
+        )
+        .order_by(UserSmtpConfig.is_default.desc(), UserSmtpConfig.id.asc())
+    )
+    result = await db.execute(stmt)
+    smtp_configs = list(result.scalars().all())
+
+    smtp_connected = len(smtp_configs) > 0
+    mailboxes = [
+        {
+            "id": s.id,
+            "email": s.sender_email,
+            "display_name": s.sender_name,
+            "provider": s.provider or "custom",
+            "is_default": s.is_default,
+            "host": s.smtp_host,
+        }
+        for s in smtp_configs
+    ]
+
+    return {
+        "connected": smtp_connected,
+        "method": "smtp" if smtp_connected else None,
+        "smtp_configured": smtp_connected,
+        "resend_configured": False,
+        "mailboxes": mailboxes,
+        "default_sender": mailboxes[0]["email"] if mailboxes else None,
+        "default_sender_name": mailboxes[0]["display_name"] if mailboxes else None,
+        "message": (
+            "SMTP mailbox connected and verified."
+            if smtp_connected
+            else "No verified SMTP mailbox connected. Please add your email mailbox in Settings or Email Campaign page."
+        ),
+    }

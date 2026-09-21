@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Header
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,18 +43,35 @@ async def get_status(instance_name: Optional[str] = Query(None)):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/info")
-async def get_info(instance_name: Optional[str] = Query(None)):
+async def get_info(
+    instance_name: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
     try:
-        inst_name = resolve_instance_name(instance_name)
+        user_id = None
+        if authorization and authorization.startswith("Bearer "):
+            try:
+                import jwt
+                from app.core.security import SECRET_KEY, ALGORITHM
+                token = authorization.split(" ")[1]
+                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                sub = payload.get("sub")
+                user_id = int(sub) if (sub and str(sub).isdigit()) else (payload.get("id") or payload.get("user_id"))
+            except Exception:
+                pass
+        inst_name = resolve_instance_name(instance_name, user_id=user_id)
         status_data = await service.get_connection_status(inst_name)
         state = status_data.get("instance", {}).get("state", "disconnected")
-        phone = status_data.get("instance", {}).get("owner", "Unknown")
+        raw_phone = status_data.get("instance", {}).get("owner", None)
+        
+        is_truly_connected = state in ("open", "connected")
+        phone = raw_phone if is_truly_connected else None
         
         info = {
             "instance_name": inst_name,
             "connected_phone": phone,
             "last_connected": "Unknown",
-            "status": state
+            "status": state if is_truly_connected else "disconnected"
         }
         return {"success": True, "data": info}
     except Exception as e:
@@ -72,7 +89,7 @@ async def logout(instance_name: Optional[str] = Query(None)):
 def clean_digits(val: Optional[str]) -> str:
     if not val:
         return ""
-    return re.sub(r"\D", "", str(val))
+    return re.sub(r"\D", "", val)
 
 @router.get("/chats")
 async def get_chats(
@@ -82,8 +99,8 @@ async def get_chats(
     try:
         inst_name = resolve_instance_name(instance_name)
         raw_chats = await service.get_chats(inst_name)
-        
-        # Load local database contacts to enrich saved names
+
+        # Build contact name map from internal DB to prioritize real contact names
         db_contacts_map: Dict[str, str] = {}
         try:
             db_res = await db.execute(select(Contact.phone, Contact.name, Contact.customer_name))
@@ -99,10 +116,12 @@ async def get_chats(
             print(f"Error fetching DB contacts for WhatsApp sync: {db_err}")
 
         # Fetch WhatsApp contacts from Evolution API
+        raw_contacts: List[Any] = []
         evo_contacts_map: Dict[str, Dict[str, Any]] = {}
         try:
-            raw_contacts = await service.get_contacts(inst_name)
-            if isinstance(raw_contacts, list):
+            contacts_resp = await service.get_contacts(inst_name)
+            if isinstance(contacts_resp, list):
+                raw_contacts = contacts_resp
                 for c in raw_contacts:
                     if isinstance(c, dict):
                         jid = str(c.get("id") or c.get("remoteJid") or "")
