@@ -110,16 +110,169 @@ def resolve_email_personalization(text: str, variables: Dict[str, str]) -> str:
     return result
 
 
+def wrap_email_html(
+    content: str,
+    subject: str,
+    sender_name: str = "",
+    campaign_name: str = "",
+    branding: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Ensure email content is rendered in a responsive, beautifully styled email template identical to web live preview."""
+    if not content:
+        return ""
+    
+    # If already a full HTML document, return as-is
+    if "<!DOCTYPE" in content or "<html" in content.lower():
+        return content
+
+    branding = branding or {}
+    header_type = branding.get("headerType") or ("logo" if branding.get("logoUrl") else "text")
+    logo_url = branding.get("logoUrl", "")
+    header_title = branding.get("headerTitle") or sender_name or campaign_name or "GenX Reality"
+    header_subtitle = branding.get("headerSubtitle", "")
+    header_align = branding.get("headerAlign", "center")
+    show_social = branding.get("showSocial", True)
+    company_footer = branding.get("companyFooter") or header_title or "GenX Reality"
+    social = branding.get("socialLinks") or {}
+
+    # Build social buttons
+    social_icons = []
+    if social.get("linkedin"):
+        social_icons.append(f'<a href="{social["linkedin"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #0077b5; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">in</a>')
+    if social.get("twitter"):
+        social_icons.append(f'<a href="{social["twitter"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #000000; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">𝕏</a>')
+    if social.get("instagram"):
+        social_icons.append(f'<a href="{social["instagram"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #e1306c; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">📸</a>')
+    if social.get("facebook"):
+        social_icons.append(f'<a href="{social["facebook"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #1877f2; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">f</a>')
+    if social.get("youtube"):
+        social_icons.append(f'<a href="{social["youtube"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #ff0000; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">▶</a>')
+    if social.get("whatsapp"):
+        social_icons.append(f'<a href="{social["whatsapp"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #25d366; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">💬</a>')
+    if social.get("website"):
+        social_icons.append(f'<a href="{social["website"]}" target="_blank" style="display: inline-block; margin: 0 4px; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: #6366f1; color: #ffffff; text-decoration: none; font-size: 12px; font-weight: bold; text-align: center;">🌐</a>')
+
+    social_html = "".join(social_icons)
+
+    align_style = "text-align: left;" if header_align == "left" else ("text-align: right;" if header_align == "right" else "text-align: center;")
+    margin_style = "margin: 0;" if header_align == "left" else ("margin: 0 0 0 auto;" if header_align == "right" else "margin: 0 auto;")
+
+    header_html = ""
+    if header_type == "logo" and logo_url:
+        subtitle_html = f'<div style="font-size: 11px; color: #6366f1; margin-top: 6px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 700;">{header_subtitle}</div>' if header_subtitle else ''
+        header_html = f'''
+        <tr>
+          <td style="background-color: #ffffff; padding: 22px 24px 18px 24px; {align_style} border-bottom: 2px solid #6366f1;">
+            <img src="{logo_url}" alt="{header_title}" style="max-height: 54px; max-width: 240px; width: auto; height: auto; object-fit: contain; {margin_style} display: inline-block; border: 0;" />
+            {subtitle_html}
+          </td>
+        </tr>'''
+    elif header_title:
+        subtitle_html = f'<div style="font-size: 11px; color: #6366f1; margin-top: 4px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 700;">{header_subtitle}</div>' if header_subtitle else ''
+        header_html = f'''
+        <tr>
+          <td style="background-color: #ffffff; padding: 20px 24px 16px 24px; {align_style} border-bottom: 2px solid #6366f1;">
+            <div style="font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: #0f172a;">
+              {header_title}
+            </div>
+            {subtitle_html}
+          </td>
+        </tr>'''
+
+    # Check if content has HTML tags
+    has_html_tags = bool("<p" in content or "<div" in content or "<table" in content or "<br" in content or "<h" in content or "<span" in content)
+    if not has_html_tags:
+        import html as html_lib
+        escaped = html_lib.escape(content)
+        paragraphs = escaped.split("\n\n")
+        html_parts = []
+        for para in paragraphs:
+            lines = para.split("\n")
+            html_parts.append("<p style='margin: 0 0 12px 0;'>" + "<br>".join(lines) + "</p>")
+        body_content = "\n".join(html_parts)
+    else:
+        body_content = content
+
+    import datetime
+    current_year = datetime.datetime.now().year
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{subject}</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+    table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+    img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; max-width: 100%; height: auto; }}
+    body {{
+      margin: 0;
+      padding: 14px 8px;
+      background-color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: #334155;
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.55;
+      word-break: break-word;
+    }}
+    p {{ margin: 0 0 12px 0; }}
+    ul {{ margin: 0 0 12px 0; padding-left: 22px; }}
+    li {{ margin-bottom: 5px; }}
+    h1, h2, h3 {{ color: #0f172a; margin: 0 0 12px 0; font-weight: 700; }}
+    h1 {{ font-size: 19px; }}
+    h2 {{ font-size: 16px; }}
+    a {{ color: #6366f1; }}
+    .email-btn {{
+      background-color: #6366f1;
+      color: #ffffff !important;
+      padding: 11px 26px;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      display: inline-block;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+    }}
+    @media screen and (max-width: 620px) {{
+      .email-wrapper {{ width: 100% !important; border-radius: 0 !important; }}
+      .content-padding {{ padding: 20px 16px !important; }}
+    }}
+  </style>
+</head>
+<body>
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="width: 100%; background-color: #f8fafc; padding: 12px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" class="email-wrapper" width="580" border="0" cellspacing="0" cellpadding="0" style="width: 100%; max-width: 580px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.06); text-align: left;">
+          {header_html}
+          <tr>
+            <td class="content-padding" style="padding: 24px 28px 20px 28px; font-size: 14px; color: #334155; line-height: 1.65;">
+              {body_content}
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color: #f8fafc; padding: 18px 24px; border-top: 1px solid #f1f5f9; text-align: center;">
+              {f'<div style="margin-bottom: 12px;">{social_html}</div>' if show_social and social_html else ''}
+              <p style="margin: 0 0 4px 0; font-size: 11.5px; color: #64748b; font-weight: 500;">
+                &copy; {current_year} {company_footer}. All rights reserved.
+              </p>
+              <p style="margin: 0; font-size: 10.5px; color: #94a3b8;">
+                Sent automatically following our conversation &bull; <a href="#" style="color: #94a3b8; text-decoration: underline;">Unsubscribe</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
 def text_to_html(text: str) -> str:
-    """Convert plain-text body to simple HTML for email sending."""
-    import html as html_lib
-    escaped = html_lib.escape(text)
-    paragraphs = escaped.split("\n\n")
-    html_parts = []
-    for para in paragraphs:
-        lines = para.split("\n")
-        html_parts.append("<p>" + "<br>".join(lines) + "</p>")
-    return "\n".join(html_parts)
+    """Legacy helper for plain-text body."""
+    return wrap_email_html(text, "Follow-up")
 
 
 class EmailAutomationService:
@@ -193,10 +346,7 @@ class EmailAutomationService:
                 print(f"[EmailAutomation] No email address for contact on Call {call_id}. Skipping.")
                 return None
 
-            # Check email service is configured
-            if not email_service.is_configured():
-                print(f"[EmailAutomation] Email service not configured. Skipping Call {call_id}.")
-                return None
+            # Destination email resolved successfully
 
             # 2. Extract call outcome attributes (same as WhatsApp)
             cat = (call.category or "UNCATEGORIZED").upper()
@@ -326,24 +476,99 @@ class EmailAutomationService:
 
             subject = resolve_email_personalization(raw_subject, variables)
             body_text = resolve_email_personalization(raw_body, variables)
-            body_html = text_to_html(body_text)
 
-            # 6. Send via Resend
+            # 6. Send via connected User SMTP Mailbox (or fallback)
             try:
-                email_service._send_email(
-                    to_email=dest_email,
-                    subject=subject,
-                    body=body_html,
-                    is_html=True,
+                from app.models.user_smtp_config import UserSmtpConfig
+                from app.services.smtp_mailbox_service import smtp_mailbox_service
+                from sqlalchemy import select, and_
+
+                smtp_config = None
+                if campaign.user_id:
+                    # 1. Try matching rule-specific or automation config sender_email
+                    target_email = (
+                        matched_rule.get("from_email")
+                        or automation_config.get("sender_email")
+                        or automation_config.get("from_email")
+                    )
+                    if target_email:
+                        smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
+                            db, user_id=campaign.user_id, sender_email=target_email
+                        )
+
+                    # 2. If not found, lookup user's default/active verified SMTP config
+                    if not smtp_config:
+                        stmt = (
+                            select(UserSmtpConfig)
+                            .where(
+                                and_(
+                                    UserSmtpConfig.user_id == campaign.user_id,
+                                    UserSmtpConfig.is_active == True,
+                                    UserSmtpConfig.is_verified == True,
+                                )
+                            )
+                            .order_by(UserSmtpConfig.is_default.desc(), UserSmtpConfig.id.asc())
+                            .limit(1)
+                        )
+                        res = await db.execute(stmt)
+                        smtp_config = res.scalars().first()
+
+                from_name = (
+                    matched_rule.get("from_name")
+                    or automation_config.get("from_name")
+                    or (campaign.from_name if hasattr(campaign, "from_name") else None)
+                    or (smtp_config.sender_name if smtp_config else None)
+                    or "Follow-up Team"
                 )
-                print(f"[EmailAutomation] Email sent to {dest_email} for Call {call_id} | template={template_id}")
-                return {
-                    "success": True,
-                    "call_id": call_id,
-                    "to": dest_email,
-                    "subject": subject,
-                    "template_id": template_id,
-                }
+                reply_to = (
+                    matched_rule.get("reply_to")
+                    or automation_config.get("reply_to")
+                    or (smtp_config.sender_email if smtp_config else None)
+                )
+
+                branding_opts = (
+                    matched_rule.get("branding")
+                    or automation_config.get("branding")
+                    or {}
+                )
+                body_html = wrap_email_html(
+                    body_text,
+                    subject=subject,
+                    sender_name=from_name,
+                    campaign_name=campaign.campaign_name,
+                    branding=branding_opts,
+                )
+
+                if smtp_config:
+                    # Dispatched directly through client's connected authenticated mailbox (Gmail / Outlook / Zoho / Custom SMTP)
+                    await smtp_mailbox_service.send_email_via_smtp(
+                        smtp_config=smtp_config,
+                        to_email=dest_email,
+                        subject=subject,
+                        html_content=body_html,
+                        from_name=from_name,
+                        reply_to=reply_to,
+                    )
+                    print(
+                        f"[EmailAutomation] Email sent to {dest_email} via user SMTP ({smtp_config.sender_email}) for Call {call_id} | template={template_id}"
+                    )
+                    return {
+                        "success": True,
+                        "call_id": call_id,
+                        "to": dest_email,
+                        "sender": smtp_config.sender_email,
+                        "sender_name": from_name,
+                        "method": "smtp",
+                        "subject": subject,
+                        "template_id": template_id,
+                    }
+                else:
+                    err_msg = (
+                        f"No active verified SMTP mailbox configured for user {campaign.user_id}. "
+                        "Email automation skipped. Please connect your SMTP mailbox in Connected Mailboxes."
+                    )
+                    print(f"[EmailAutomation] {err_msg}")
+                    return {"success": False, "call_id": call_id, "error": err_msg}
             except Exception as e:
                 print(f"[EmailAutomation] Failed to send email for Call {call_id}: {e}")
                 return {"success": False, "call_id": call_id, "error": str(e)}
