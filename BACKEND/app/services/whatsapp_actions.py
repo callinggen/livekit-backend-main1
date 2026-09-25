@@ -43,7 +43,7 @@ DEFAULT_ASSET_CONFIG = {
 
 def format_whatsapp_number(number: str) -> str:
     """Normalize phone number to international WhatsApp format (e.g. 917656807447)."""
-    clean = "".join(c for c in str(number or "") if c.isdigit())
+    clean = "".join(c for c in (number or "") if c.isdigit())
     if len(clean) == 10:
         clean = "91" + clean
     return clean

@@ -18,6 +18,7 @@ new_columns = [
     ("calls",    "summary",         "TEXT"),
     ("calls",    "category",        "TEXT"),
     ("calls",    "human_response",  "TEXT"),
+    ("calls",    "billing_status",  "TEXT DEFAULT 'pending'"),
 ]
 
 for table, col, col_type in new_columns:

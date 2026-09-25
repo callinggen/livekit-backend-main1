@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON
+from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -15,9 +15,9 @@ class Call(Base):
         index=True,
     )
 
-    job_id: Mapped[int] = mapped_column(
+    job_id: Mapped[int | None] = mapped_column(
         ForeignKey("jobs.id"),
-        nullable=False,
+        nullable=True,
     )
 
     campaign_id: Mapped[int | None] = mapped_column(
@@ -31,14 +31,47 @@ class Call(Base):
         nullable=True,
     )
 
-    contact_id: Mapped[int] = mapped_column(
+    contact_id: Mapped[int | None] = mapped_column(
         ForeignKey("contacts.id"),
-        nullable=False,
+        nullable=True,
     )
 
     phone: Mapped[str] = mapped_column(
         String,
         nullable=False,
+    )
+
+    direction: Mapped[str] = mapped_column(
+        String,
+        default="outbound",
+    )
+
+    caller_number: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    called_number: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    phone_line_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("user_phone_numbers.id"),
+        nullable=True,
+    )
+
+    tenant_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=True,
+    )
+
+    agent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("agents.id"),
+        nullable=True,
     )
     room_name: Mapped[str | None] = mapped_column(
     String,
@@ -98,4 +131,29 @@ class Call(Base):
     credits_deducted: Mapped[int] = mapped_column(
         Integer,
         default=0,
+    )
+
+    outcome: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    failure_reason: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+    )
+
+    sip_was_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+    )
+
+    answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    billing_status: Mapped[str] = mapped_column(
+        String,
+        default="pending",
     )

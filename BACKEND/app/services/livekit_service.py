@@ -1,9 +1,17 @@
 from dotenv import load_dotenv
-load_dotenv(override=True)
+load_dotenv()
 
 from livekit import api
-from livekit.protocol.sip import CreateSIPParticipantRequest
-from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
+from livekit.protocol.sip import (
+    CreateSIPParticipantRequest,
+    CreateSIPInboundTrunkRequest,
+    SIPInboundTrunkInfo,
+    SIPDispatchRule,
+    SIPDispatchRuleIndividual,
+    CreateSIPDispatchRuleRequest,
+)
+from livekit.protocol.agent_dispatch import RoomAgentDispatch, CreateAgentDispatchRequest
+from livekit.protocol.room import RoomConfiguration, CreateRoomRequest
 
 import os
 
@@ -11,72 +19,188 @@ import os
 async def make_livekit_call(
     phone: str,
     room_name: str,
+    sip_trunk_id: str | None = None,
+    sip_call_from: str | None = None,
 ):
-    load_dotenv(override=True)
     lkapi = api.LiveKitAPI()
     
-    # Sanitize phone number to standard E.164 format
-    raw_digits = "".join(c for c in phone if c.isdigit())
-    
-    # Handle Indian number formats
-    if len(raw_digits) == 10:
-        clean_phone = f"+91{raw_digits}"
-    elif len(raw_digits) == 11 and raw_digits.startswith("0"):
-        clean_phone = f"+91{raw_digits[1:]}"
-    elif len(raw_digits) == 12 and raw_digits.startswith("91"):
-        clean_phone = f"+{raw_digits}"
-    elif phone.startswith("+"):
-        clean_phone = f"+{raw_digits}"
-    else:
-        # Fallback to India +91 if likely an Indian number
-        clean_phone = f"+91{raw_digits}" if len(raw_digits) <= 10 else f"+{raw_digits}"
+    # Sanitize the destination phone number
+    clean_phone = "".join(c for c in phone if c.isdigit() or c == "+")
+    if clean_phone.startswith("0") and len(clean_phone) == 11:
+        clean_phone = f"+91{clean_phone[1:]}"
+    elif not clean_phone.startswith("+"):
+        if len(clean_phone) == 10:
+            clean_phone = f"+91{clean_phone}"
+        else:
+            clean_phone = f"+{clean_phone}"
 
-    sip_trunk_id = os.getenv("SIP_TRUNK_ID", "ST_3iPMqSQPX8z5")
-    sip_call_from = os.getenv("SIP_CALL_FROM", "+917971442271")
-    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen_shreya")
+    # Use dynamic SIP Trunk ID if provided, otherwise fallback to env / system trunk
+    _BAD_TRUNKS = ("ST_3yaCewggPpAs", "ST_yZR7oi5aS79a")
+    if not sip_trunk_id or sip_trunk_id in _BAD_TRUNKS:
+        env_trunk = os.getenv("SIP_TRUNK_ID", "")
+        # Also skip known-bad env values
+        sip_trunk_id = env_trunk if env_trunk and env_trunk not in _BAD_TRUNKS else "ST_3iPMqSQPX8z5"
+    if not sip_trunk_id:
+        sip_trunk_id = "ST_3iPMqSQPX8z5"
+        
+    # Use dynamic assigned caller ID if provided, otherwise fallback to system caller ID
+    if not sip_call_from:
+        sip_call_from = os.getenv("SIP_CALL_FROM", "+917971442271")
 
-    print(f"[livekit_service] Dispatching SIP call -> To: {clean_phone} | From: {sip_call_from} | Trunk: {sip_trunk_id} | Room: {room_name}")
+    clean_sip_from = "".join(c for c in sip_call_from if c.isdigit() or c == "+")
+    if clean_sip_from and not clean_sip_from.startswith("+"):
+        if len(clean_sip_from) == 10:
+            clean_sip_from = f"+91{clean_sip_from}"
+        else:
+            clean_sip_from = f"+{clean_sip_from}"
+    elif not clean_sip_from:
+        clean_sip_from = "+917971442271"
 
+    agent_name = os.getenv("LIVEKIT_AGENT_NAME", "callinggen-outbound-agent")
+
+    print(f"[livekit_service] Outbound call — trunk={sip_trunk_id}, from={clean_sip_from}, to={clean_phone}, room={room_name}")
+
+    # Step 1: Pre-create the room with agent dispatch config
     try:
-        # 1. Explicitly dispatch our dedicated local agent worker to this room
-        if agent_name:
-            try:
-                await lkapi.agent_dispatch.create_dispatch(
-                    CreateAgentDispatchRequest(
-                        agent_name=agent_name,
-                        room=room_name,
-                    )
-                )
-                print(f"[livekit_service] Dispatched agent '{agent_name}' to room '{room_name}'")
-            except Exception as dispatch_err:
-                print(f"[livekit_service] Agent dispatch notice: {dispatch_err}")
-
-        # 2. Place the SIP outbound call
-        req = CreateSIPParticipantRequest(
-            sip_trunk_id=sip_trunk_id,
-            sip_call_to=clean_phone,
-            sip_number=sip_call_from,
-            room_name=room_name,
-            participant_identity="customer",
-            participant_name="Customer",
-            wait_until_answered=True,
+        room_req = CreateRoomRequest(
+            name=room_name,
+            empty_timeout=300,
+            departure_timeout=30,
+            agents=[RoomAgentDispatch(agent_name=agent_name)],
         )
-        participant = await lkapi.sip.create_sip_participant(req)
+        await lkapi.room.create_room(room_req)
+        print(f"[livekit_service] Pre-created room '{room_name}' with RoomAgentDispatch(agent_name='{agent_name}')")
+    except Exception as room_err:
+        print(f"[livekit_service] Room create notice for '{room_name}': {room_err}")
 
-        print(f"[livekit_service] SIP Participant created successfully: {participant.participant_id}")
-        return {
-            "success": True,
-            "participant_id": participant.participant_id,
-            "room": room_name,
-            "phone": phone,
-        }
+    req = CreateSIPParticipantRequest(
+        sip_trunk_id=sip_trunk_id,
+        sip_call_to=clean_phone,
+        sip_number=clean_sip_from,
+        room_name=room_name,
+        participant_identity="customer",
+        participant_name="Customer",
+        wait_until_answered=False,
+    )
 
-    except Exception as e:
-        print(f"[livekit_service] Error placing SIP call: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-        }
+    # Retry up to 2 times for transient LiveKit SIP failures
+    last_error = None
+    for attempt in range(3):
+        try:
+            participant = await lkapi.sip.create_sip_participant(req)
+            print(f"[livekit_service] SIP participant created (attempt {attempt+1}): {participant.participant_id}")
+            await lkapi.aclose()
+            return {
+                "success": True,
+                "participant_id": participant.participant_id,
+                "room": room_name,
+                "phone": phone,
+            }
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            print(f"[livekit_service] SIP participant create attempt {attempt+1} failed: {err_str}")
+            # Only retry on transient errors (not_found trunk, server unavailable, timeout)
+            # Do NOT retry on telephony-level errors (busy, declined, no answer)
+            is_transient = (
+                "not_found" in err_str.lower()
+                or "unavailable" in err_str.lower()
+                or "timeout" in err_str.lower()
+                or "deadline" in err_str.lower()
+            )
+            if not is_transient or attempt == 2:
+                break
+            import asyncio as _asyncio
+            await _asyncio.sleep(1.0)  # Wait 1s before retry
 
+    await lkapi.aclose()
+    return {
+        "success": False,
+        "error": str(last_error),
+    }
+
+
+async def create_inbound_sip_trunk(numbers: list[str]) -> str:
+    """
+    Create a LiveKit SIP Inbound Trunk for the given numbers.
+    Returns the created trunk's sip_trunk_id.
+    """
+    lkapi = api.LiveKitAPI()
+    try:
+        # Resolve clean numbers to match
+        numbers_to_match = []
+        for num in numbers:
+            clean_num = "".join(c for c in num if c.isdigit() or c == "+")
+            if not clean_num.startswith("+"):
+                if len(clean_num) == 10:
+                    clean_num = f"+91{clean_num}"
+                else:
+                    clean_num = f"+{clean_num}"
+            numbers_to_match.append(clean_num)
+            raw_digits = "".join(c for c in clean_num if c.isdigit())
+            if clean_num.startswith("+"):
+                numbers_to_match.append(raw_digits)
+                if clean_num.startswith("+91") and len(raw_digits) == 12:
+                    numbers_to_match.append(raw_digits[2:])
+        # Unique list
+        numbers_to_match = list(set(numbers_to_match))
+        
+        name = f"Inbound-Trunk-{numbers[0]}" if numbers else "Inbound-Trunk"
+        trunk_info = SIPInboundTrunkInfo(
+            name=name,
+            numbers=numbers_to_match
+        )
+        trunk_req = CreateSIPInboundTrunkRequest(trunk=trunk_info)
+        trunk_res = await lkapi.sip.create_inbound_trunk(trunk_req)
+        return trunk_res.sip_trunk_id
     finally:
         await lkapi.aclose()
+
+
+async def create_inbound_dispatch_rule(trunk_ids: list[str], room_prefix: str = "inbound-call-") -> str:
+    """
+    Create a LiveKit SIP Dispatch Rule mapping the given trunk_ids to rooms starting with room_prefix.
+    Returns the created dispatch rule ID.
+    """
+    lkapi = api.LiveKitAPI()
+    try:
+        rule = SIPDispatchRule(
+            dispatch_rule_individual=SIPDispatchRuleIndividual(
+                room_prefix=room_prefix
+            )
+        )
+        agent_name = os.getenv("LIVEKIT_AGENT_NAME", "")
+        room_config = RoomConfiguration(
+            agents=[RoomAgentDispatch(agent_name=agent_name)]
+        )
+        first_trunk = trunk_ids[0] if trunk_ids else "rule"
+        dispatch_req = CreateSIPDispatchRuleRequest(
+            name=f"Inbound-Rule-{first_trunk}",
+            rule=rule,
+            room_config=room_config,
+            trunk_ids=trunk_ids
+        )
+        res = await lkapi.sip.create_dispatch_rule(dispatch_req)
+        return res.sip_dispatch_rule_id
+    finally:
+        await lkapi.aclose()
+
+
+async def setup_inbound_sip(phone_number: str):
+    """
+    Register an inbound SIP Trunk and SIP Dispatch Rule in LiveKit for the given phone number.
+    This routes any incoming calls on the phone number to individual rooms prefixed with "inbound-call-".
+    """
+    try:
+        trunk_id = await create_inbound_sip_trunk([phone_number])
+        await create_inbound_dispatch_rule([trunk_id], room_prefix="inbound-call-")
+        print(f"[livekit_service] Configured LiveKit Inbound SIP trunk {trunk_id} and dispatch rule for {phone_number}")
+        return True
+    except Exception as e:
+        print(f"[livekit_service] Error provisioning LiveKit inbound SIP for {phone_number}: {e}")
+        return False
+
+
+def get_inbound_sip_trunk_id() -> str:
+    """Return the authoritative inbound SIP trunk ID."""
+    return os.getenv("SIP_INBOUND_TRUNK_ID") or os.getenv("INBOUND_SIP_TRUNK_ID") or "ST_j856Hob6eAWi"

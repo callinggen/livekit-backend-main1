@@ -87,6 +87,12 @@ class WhatsAppSendJob(Base):
         index=True,
     )
 
+    scheduled_for: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+        index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),

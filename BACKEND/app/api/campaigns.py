@@ -70,7 +70,7 @@ async def launch_campaign(
 
 @router.get("/campaigns")
 async def list_campaigns(
-    type: str = None,
+    type: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -78,7 +78,7 @@ async def list_campaigns(
     Return all campaigns for the current user with aggregated stats pulled from their latest job.
     Used by the Campaigns page table.
     """
-    query = select(Campaign).where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None)))
+    query = select(Campaign).where(or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None))).where(Campaign.campaign_name != "Website Demo Requests")
     
     if type == "pending":
         query = query.where(Campaign.campaign_type == "pending")
@@ -149,7 +149,7 @@ async def list_campaigns(
             "name": c.campaign_name,
             "date": c.created_at.strftime("%Y-%m-%d") if c.created_at else "",
             "schedule": f"{c.schedule_date} {c.schedule_time}",
-            "sheetName": "—",
+            "sheetName": c.sheet_name or "—",
             "totalCalls": total_contacts,
             "contactCount": contact_count,
             "completedCalls": completed,
@@ -160,7 +160,7 @@ async def list_campaigns(
             "agent": c.agent,
             "status": _map_status(c.status),
             "script": c.script,
-            "uploadSource": "API",
+            "uploadSource": c.upload_source or "API",
             "notes": "",
             "campaignType": c.campaign_type,
             "parentCampaignId": c.parent_campaign_id,
@@ -211,6 +211,15 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
             seen_contacts.add(ct.id)
             unique_results.append((ct, call))
 
+    # Build scheduled_at as a proper UTC ISO string so the browser can convert to local time
+    scheduled_at = None
+    if campaign.schedule_date and campaign.schedule_time:
+        try:
+            # schedule_time is stored as HH:MM or HH:MM:SS in UTC
+            scheduled_at = f"{campaign.schedule_date}T{campaign.schedule_time}Z"
+        except Exception:
+            scheduled_at = None
+
     return {
         "id": str(campaign.id),
         "name": campaign.campaign_name,
@@ -218,14 +227,19 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
         "script": campaign.script,
         "schedule_date": campaign.schedule_date,
         "schedule_time": campaign.schedule_time,
+        "scheduled_at": scheduled_at,
         "status": campaign.status,
-        "created_at": campaign.created_at.isoformat() if campaign.created_at else "",
+        "created_at": (campaign.created_at.isoformat() + "Z") if campaign.created_at else "",
         "creditsUsed": credits_used,
+        "upload_source": campaign.upload_source,
+        "sheet_name": campaign.sheet_name,
         "job": {
             "total_contacts": len(call_statuses) if call_statuses else len(unique_results),
             "completed_contacts": sum(1 for s in call_statuses if s == "completed"),
             "failed_contacts": sum(1 for s in call_statuses if s in ("failed", "incomplete")),
             "status": job.status if job else "queued",
+            "started_at": job.started_at.isoformat() + "Z" if (job and job.started_at) else None,
+            "finished_at": job.finished_at.isoformat() + "Z" if (job and job.finished_at) else None,
         },
         "contacts": [
             {
@@ -239,7 +253,12 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
                 "appointment_time": ct.appointment_time,
                 "transcript": ct.transcript,
                 "duration": call.duration if call else 0,
-                "datetime": call.started_at.strftime("%Y-%m-%d %I:%M %p") if (call and call.started_at) else (campaign.created_at.strftime("%Y-%m-%d %I:%M %p") if (campaign and campaign.created_at) else ""),
+                # Use actual call start time, or scheduled time, or campaign creation time
+                "datetime": (
+                    call.started_at.strftime("%Y-%m-%d %I:%M %p IST")
+                    if (call and call.started_at)
+                    else (scheduled_at or (campaign.created_at.strftime("%Y-%m-%d %I:%M %p IST") if campaign.created_at else ""))
+                ),
                 "credits": call.credits_deducted if call else 0,
                 "metadata_fields": ct.metadata_fields,
             }
@@ -348,10 +367,17 @@ async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_d
 
 def _map_status(status: str) -> str:
     """Map backend status values to the capitalized strings the frontend uses."""
+    s = (status or "").strip().lower()
     return {
-        "pending":   "Scheduled",
-        "running":   "Running",
-        "completed": "Completed",
-        "failed":    "Failed",
-        "paused":    "Paused",
-    }.get(status, status.capitalize())
+        "pending":    "Scheduled",
+        "scheduled":  "Scheduled",
+        "running":    "Running",
+        "in_progress":"Running",
+        "completed":  "Completed",
+        "failed":     "Failed",
+        "incomplete": "Incomplete",
+        "stopped":    "Stopped",
+        "finished":   "Completed",
+        "paused":     "Paused",
+        "draft":      "Draft",
+    }.get(s, status.capitalize() if status else "Draft")

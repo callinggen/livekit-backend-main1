@@ -11,6 +11,11 @@ from app.models.agent import Agent
 from app.models.campaign import Campaign
 from app.models.call import Call
 from app.models.agent import Agent
+from app.models.user_phone_number import UserPhoneNumber
+
+from app.models.contact_form_user import ContactFormUser
+from app.models.blocked_slot import BlockedSlot
+
 from app.schemas.auth import UserCreateRequest
 from app.core.security import get_password_hash
 from app.services.email_service import email_service
@@ -19,6 +24,15 @@ import secrets
 from typing import List, Optional
 from pydantic import BaseModel
 from app.schemas.agent import AgentCreate
+
+class BookingStatusUpdateRequest(BaseModel):
+    status: str # "upcoming", "completed" (demo given), "no_show", "cancelled", etc.
+    admin_notes: str | None = None
+
+class BlockSlotRequest(BaseModel):
+    blocked_date: str # YYYY-MM-DD
+    slot_time: str | None = None # HH:MM or None for entire day
+    reason: str | None = None
 
 router = APIRouter()
 
@@ -234,6 +248,114 @@ async def get_all_users(db: AsyncSession = Depends(get_db)):
     ]
 
 
+@router.get("/contact-users")
+async def get_contact_form_users(db: AsyncSession = Depends(get_db)):
+    """Return list of all landing page appointment bookings."""
+    res = await db.execute(select(ContactFormUser).order_by(ContactFormUser.created_at.desc()))
+    users = res.scalars().all()
+    return [
+        {
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+            "phone": u.phone,
+            "company": u.company or "N/A",
+            "industry": u.industry or "N/A",
+            "appointment_time": u.appointment_time.isoformat() if u.appointment_time else None,
+            "status": u.status or "booked",
+            "admin_notes": getattr(u, "admin_notes", None) or "",
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u in users
+    ]
+
+
+@router.put("/contact-users/{booking_id}/status")
+async def update_booking_status(
+    booking_id: int,
+    req: BookingStatusUpdateRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Update appointment status (e.g. 'completed' / Demo Given, 'no_show', 'cancelled') and admin notes."""
+    stmt = select(ContactFormUser).where(ContactFormUser.id == booking_id)
+    res = await db.execute(stmt)
+    booking = res.scalars().first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    setattr(booking, "status", req.status)
+    if req.admin_notes is not None:
+        setattr(booking, "admin_notes", req.admin_notes)
+
+    await db.commit()
+    await db.refresh(booking)
+
+    return {
+        "success": True,
+        "message": f"Booking #{booking_id} status updated to '{booking.status}'",
+        "booking": {
+            "id": booking.id,
+            "status": booking.status,
+            "admin_notes": getattr(booking, "admin_notes", None) or ""
+        }
+    }
+
+
+@router.get("/blocked-slots")
+async def get_blocked_slots(db: AsyncSession = Depends(get_db)):
+    """Return all admin-blocked dates and slots."""
+    res = await db.execute(select(BlockedSlot).order_by(BlockedSlot.blocked_date.asc(), BlockedSlot.slot_time.asc()))
+    blocks = res.scalars().all()
+    return [
+        {
+            "id": b.id,
+            "blocked_date": b.blocked_date,
+            "slot_time": b.slot_time,
+            "reason": b.reason or "Unavailable",
+            "created_at": b.created_at.isoformat() if b.created_at else None
+        }
+        for b in blocks
+    ]
+
+
+@router.post("/blocked-slots", status_code=status.HTTP_201_CREATED)
+async def block_slot(req: BlockSlotRequest, db: AsyncSession = Depends(get_db)):
+    """Block a date or specific time slot from public availability."""
+    new_block = BlockedSlot(
+        blocked_date=req.blocked_date,
+        slot_time=req.slot_time,
+        reason=req.reason or "Unavailable"
+    )
+    db.add(new_block)
+    await db.commit()
+    await db.refresh(new_block)
+
+    return {
+        "success": True,
+        "message": f"Blocked date {req.blocked_date}" + (f" slot {req.slot_time}" if req.slot_time else " (entire day)"),
+        "blocked_slot": {
+            "id": new_block.id,
+            "blocked_date": new_block.blocked_date,
+            "slot_time": new_block.slot_time,
+            "reason": new_block.reason
+        }
+    }
+
+
+@router.delete("/blocked-slots/{block_id}")
+async def unblock_slot(block_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove a date/slot block from un-availability list."""
+    stmt = select(BlockedSlot).where(BlockedSlot.id == block_id)
+    res = await db.execute(stmt)
+    block = res.scalars().first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block entry not found")
+
+    await db.delete(block)
+    await db.commit()
+    return {"success": True, "message": f"Unblocked slot #{block_id}"}
+
+
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 async def create_user(
     user_data: UserCreateRequest,
@@ -270,7 +392,8 @@ async def create_user(
         email=user_data.email,
         phone_number=user_data.phone_number,
         hashed_password=get_password_hash(raw_password),
-        is_first_login=False,  # Admin sets password — no forced change needed
+        is_first_login=True,  # Prompt user to change password on first login
+
         is_admin=False,
         is_active=True,
         credits=user_data.credits if user_data.credits is not None else 2000,
@@ -309,8 +432,30 @@ async def create_user(
         )
         db.add(ag)
         await db.commit()
+
+    if getattr(user_data, "phones", None):
+        for phone_data in user_data.phones:
+            pn = UserPhoneNumber(
+                user_id=new_user.id,
+                region=phone_data.region,
+                phone_number=phone_data.phone_number,
+                number_type=phone_data.number_type,
+                provider_name=phone_data.provider_name,
+                provider_account_id=phone_data.provider_account_id,
+                api_key_auth_token=phone_data.api_key_auth_token,
+                sip_id=phone_data.sip_id,
+                sip_username=phone_data.sip_username,
+                sip_password=phone_data.sip_password,
+                status=phone_data.status,
+                is_default=phone_data.is_default,
+                max_concurrent_calls=getattr(phone_data, "max_concurrent_calls", 3),
+                is_active=True,
+            )
+            db.add(pn)
+        await db.commit()
     
     if user_data.email:
+
         try:
             notification_service.notify_account_created(new_user, raw_password)
         except Exception as e:
@@ -612,3 +757,131 @@ async def get_contact_users(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ContactFormUser).order_by(ContactFormUser.created_at.desc()))
     return result.scalars().all()
 
+
+
+@router.get("/users/{user_id}/activity")
+async def get_user_activity(user_id: str, db: AsyncSession = Depends(get_db)):
+    """Fetch high-level activity stats for a specific user."""
+    import zoneinfo
+    
+    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
+    
+    # Verify user exists
+    user_exists = await db.execute(select(User.id).where(User.id == raw_id))
+    if not user_exists.scalars().first():
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # Total campaigns
+    camp_res = await db.execute(select(func.count(Campaign.id)).where(Campaign.user_id == raw_id))
+    total_campaigns = camp_res.scalar() or 0
+    
+    # Calculate start of today in IST
+    try:
+        ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+    except Exception:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        
+    now_ist = datetime.now(ist_tz)
+    start_of_day_ist = datetime(now_ist.year, now_ist.month, now_ist.day, tzinfo=ist_tz)
+    # Convert IST start-of-day to naive UTC because Call.started_at is naive UTC
+    start_of_day_utc = start_of_day_ist.astimezone(timezone.utc).replace(tzinfo=None)
+    
+    # Today's Calls Base Query
+    base_calls_query = (
+        select(func.count(Call.id))
+        .join(Campaign, Call.campaign_id == Campaign.id)
+        .where(Campaign.user_id == raw_id)
+        .where(Call.started_at >= start_of_day_utc)
+    )
+    
+    # Total calls today
+    calls_res = await db.execute(base_calls_query)
+    total_calls_today = calls_res.scalar() or 0
+    
+    # Successful calls today
+    succ_res = await db.execute(base_calls_query.where(Call.status == "completed"))
+    successful_calls = succ_res.scalar() or 0
+    
+    # Failed calls today
+    fail_res = await db.execute(base_calls_query.where(Call.status.in_(["failed", "error"])))
+    failed_calls = fail_res.scalar() or 0
+    
+    return {
+        "user_id": user_id,
+        "total_campaigns": total_campaigns,
+        "today": {
+            "calls": total_calls_today,
+            "successful": successful_calls,
+            "failed": failed_calls
+        }
+    }
+
+
+@router.get("/users/{user_id}/campaigns")
+async def get_user_campaigns(user_id: str, db: AsyncSession = Depends(get_db)):
+    """Fetch aggregated campaign stats for a specific user."""
+    from app.models.contact import Contact
+    
+    raw_id = int(user_id.replace("USR-", "")) if "USR-" in user_id else int(user_id)
+    
+    # Verify user exists
+    user_exists = await db.execute(select(User.id).where(User.id == raw_id))
+    if not user_exists.scalars().first():
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    subq_contacts = (
+        select(func.count(Contact.id))
+        .where(Contact.campaign_id == Campaign.id)
+        .scalar_subquery()
+    )
+    
+    subq_calls = (
+        select(func.count(Call.id))
+        .where(Call.campaign_id == Campaign.id)
+        .scalar_subquery()
+    )
+    
+    subq_succ = (
+        select(func.count(Call.id))
+        .where(Call.campaign_id == Campaign.id)
+        .where(Call.status == "completed")
+        .scalar_subquery()
+    )
+    
+    subq_fail = (
+        select(func.count(Call.id))
+        .where(Call.campaign_id == Campaign.id)
+        .where(Call.status.in_(["failed", "error"]))
+        .scalar_subquery()
+    )
+    
+    stmt = (
+        select(
+            Campaign,
+            subq_contacts.label("total_contacts"),
+            subq_calls.label("calls_made"),
+            subq_succ.label("successful_calls"),
+            subq_fail.label("failed_calls")
+        )
+        .where(Campaign.user_id == raw_id)
+        .order_by(Campaign.created_at.desc())
+    )
+    
+    res = await db.execute(stmt)
+    rows = res.all()
+    
+    result = []
+    for row in rows:
+        c = row.Campaign
+        result.append({
+            "id": c.id,
+            "campaign_name": c.campaign_name,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "status": c.status,
+            "total_contacts": row.total_contacts or 0,
+            "calls_made": row.calls_made or 0,
+            "successful_calls": row.successful_calls or 0,
+            "failed_calls": row.failed_calls or 0
+        })
+        
+    return result

@@ -11,9 +11,19 @@ class CampaignCreate(BaseModel):
     schedule_date: str
     schedule_time: str
     
+    outbound_phone_number: str | None = None
     selection_type: str = "all"
+
     start_row: int | None = None
     end_row: int | None = None
+    
+    upload_source: str | None = None
+    sheet_name: str | None = None
+
+    voicemail_detection: dict | None = None
     whatsapp_automation: dict | None = None
+    email_automation: dict | None = None
+    save_to_contacts_book: bool = False
+    contact_book_tag: str | None = None
 
     contacts: List[ContactCreate]

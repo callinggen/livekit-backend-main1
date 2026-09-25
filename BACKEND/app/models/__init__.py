@@ -9,7 +9,17 @@ from .notification_state import UserNotificationState
 from .agent import Agent
 from .demo_lead import DemoLead
 from .contact_form_user import ContactFormUser
+from .user_phone_number import UserPhoneNumber
+from .payment import Payment
 from .whatsapp_action import WhatsAppAction
 from .whatsapp_material import WhatsAppMaterial
 from .whatsapp_send_job import WhatsAppSendJob
-from .whatsapp_send_recipient import WhatsAppSendRecipient
+from .whatsapp_send_recipient import WhatsAppSendRecipient
+from .blocked_slot import BlockedSlot
+from .email_campaign import EmailCampaign
+from .email_contact import EmailContact
+from .email_template import EmailMarketingTemplate
+from .custom_domain import CustomEmailDomain
+from .user_smtp_config import UserSmtpConfig
+from .saved_contact import SavedContact
+

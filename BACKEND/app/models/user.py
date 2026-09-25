@@ -106,3 +106,5 @@ class User(Base):
     )
 
     agents = relationship("Agent", back_populates="user", cascade="all, delete-orphan")
+    payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
+

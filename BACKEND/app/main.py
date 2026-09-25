@@ -1,5 +1,9 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.campaigns import router as campaign_router
@@ -10,9 +14,21 @@ from app.api.reports import router as report_router
 from app.api.agents import router as agents_router
 from app.api.demo import router as demo_router
 from app.api.calendar import router as calendar_router
-# Ensure recordings and uploads directories exist
+from app.api.email_campaigns import router as email_campaign_router
+from app.api.email_templates import router as email_template_router
+from app.api.custom_domains import router as custom_domain_router
+from app.api.smtp_configs import router as smtp_configs_router
+from app.api.phone_numbers import router as phone_numbers_router
+from app.api.payments import router as payment_router
+from app.api.whatsapp_send import router as whatsapp_send_router
+from app.api.whatsapp_materials import router as whatsapp_materials_router
+from app.api.whatsapp_history import router as whatsapp_history_router
+from app.api.contacts_book import router as contacts_book_router
+from whatsapp.routes import router as whatsapp_router
+
+
+# Ensure recordings directory exists
 os.makedirs("recordings", exist_ok=True)
-os.makedirs(os.path.join("uploads", "materials"), exist_ok=True)
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -29,6 +45,18 @@ from app.models.call import Call
 from app.models.user import User
 from app.models.password_reset import PasswordReset
 from app.models.notification_state import UserNotificationState
+from app.models.email_campaign import EmailCampaign  # registers email tables
+from app.models.email_contact import EmailContact    # registers email tables
+from app.models.email_template import EmailMarketingTemplate  # registers template table
+from app.models.custom_domain import CustomEmailDomain        # registers custom domain table
+from app.models.user_smtp_config import UserSmtpConfig        # registers smtp mailbox table
+from app.models.payment import Payment
+from app.models.whatsapp_action import WhatsAppAction
+from app.models.whatsapp_material import WhatsAppMaterial
+from app.models.whatsapp_send_job import WhatsAppSendJob
+from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
+from app.models.saved_contact import SavedContact
+
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
 
@@ -44,22 +72,99 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
                 
-        for col_name in ["campaign_type", "parent_campaign_id", "whatsapp_automation"]:
+        for col_name in ["campaign_type", "parent_campaign_id", "pre_start_notified", "start_notified", "completed_notified"]:
             try:
                 if col_name == "campaign_type":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN campaign_type VARCHAR DEFAULT 'normal';"))
                 elif col_name == "parent_campaign_id":
                     await conn.execute(text("ALTER TABLE campaigns ADD COLUMN parent_campaign_id INTEGER;"))
-                elif col_name == "whatsapp_automation":
-                    await conn.execute(text("ALTER TABLE campaigns ADD COLUMN whatsapp_automation JSON;"))
+                elif col_name in ["pre_start_notified", "start_notified", "completed_notified"]:
+                    await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} BOOLEAN DEFAULT 0;"))
+            except Exception:
+                pass
+
+        for col_name in ["upload_source", "sheet_name"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} VARCHAR;"))
             except Exception:
                 pass
                 
+        try:
+            await conn.execute(text("ALTER TABLE campaigns ADD COLUMN outbound_phone_number VARCHAR;"))
+        except Exception:
+            pass
+
+        # Per-line concurrency support
+        try:
+            await conn.execute(text("ALTER TABLE user_phone_numbers ADD COLUMN max_concurrent_calls INTEGER DEFAULT 3;"))
+        except Exception:
+            pass
+
         try:
             await conn.execute(text("ALTER TABLE contacts ADD COLUMN original_row INTEGER;"))
         except Exception:
             pass
 
+        try:
+            await conn.execute(text("ALTER TABLE whatsapp_send_jobs ADD COLUMN scheduled_for TIMESTAMP;"))
+        except Exception:
+            pass
+
+        # Inbound columns migrations
+        for col_name in ["direction", "caller_number", "called_number"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE calls ADD COLUMN {col_name} VARCHAR;"))
+            except Exception:
+                pass
+        for col_name in ["phone_line_id", "tenant_id", "agent_id"]:
+            try:
+                await conn.execute(text(f"ALTER TABLE calls ADD COLUMN {col_name} INTEGER;"))
+            except Exception:
+                pass
+        # Set default direction for existing calls
+        try:
+            await conn.execute(text("UPDATE calls SET direction = 'outbound' WHERE direction IS NULL;"))
+        except Exception:
+            pass
+
+        try:
+            await conn.execute(text("ALTER TABLE user_phone_numbers ADD COLUMN inbound_enabled BOOLEAN DEFAULT 0;"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE user_phone_numbers ADD COLUMN inbound_agent_id INTEGER;"))
+        except Exception:
+            pass
+
+        # Call lifecycle, SIP state, and billing auto-migrations
+        for col_name, col_type in [
+            ("outcome", "VARCHAR"),
+            ("failure_reason", "VARCHAR"),
+            ("sip_was_active", "BOOLEAN DEFAULT 0"),
+            ("answered_at", "DATETIME"),
+            ("billing_status", "VARCHAR DEFAULT 'pending'"),
+        ]:
+            try:
+                await conn.execute(text(f"ALTER TABLE calls ADD COLUMN {col_name} {col_type};"))
+            except Exception:
+                pass
+
+
+
+        # Email Campaign columns auto-migrations
+        for col_name, col_type in [
+            ("from_name", "VARCHAR"),
+            ("from_email", "VARCHAR"),
+            ("reply_to", "VARCHAR"),
+            ("schedule_date", "VARCHAR"),
+            ("schedule_time", "VARCHAR"),
+            ("total_sent", "INTEGER DEFAULT 0"),
+            ("total_failed", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                await conn.execute(text(f"ALTER TABLE email_campaigns ADD COLUMN {col_name} {col_type};"))
+            except Exception:
+                pass
 
     # Ensure default admin user exists
     async with AsyncSessionLocal() as db:
@@ -75,6 +180,13 @@ async def lifespan(app: FastAPI):
             db.add(admin_user)
             await db.commit()
 
+        # Seed default marketing email templates if not already present
+        try:
+            from app.api.email_templates import ensure_default_templates_seeded
+            await ensure_default_templates_seeded(db)
+        except Exception as seed_err:
+            print(f"[STARTUP] Could not seed default email templates: {seed_err}")
+
     # Startup: Start lightweight scheduler
     task = asyncio.create_task(schedule_poller())
     yield
@@ -82,6 +194,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 async def schedule_poller():
+    from datetime import timedelta
     while True:
         try:
             async with AsyncSessionLocal() as db:
@@ -95,18 +208,82 @@ async def schedule_poller():
                     try:
                         iso_str = campaign.schedule_date.replace("Z", "+00:00")
                         schedule_dt = datetime.fromisoformat(iso_str)
+                        if schedule_dt.tzinfo is None:
+                            schedule_dt = schedule_dt.replace(tzinfo=timezone.utc)
+
+                        # 1. Check if campaign is ~2 minutes away from launch (Pre-start email alert)
+                        if (
+                            schedule_dt > now
+                            and (schedule_dt - now) <= timedelta(minutes=2)
+                            and not getattr(campaign, "pre_start_notified", False)
+                        ):
+                            campaign.pre_start_notified = True
+                            if campaign.user_id:
+                                user = await db.get(User, campaign.user_id)
+                                if user and user.email:
+                                    c_res = await db.execute(select(Contact).where(Contact.campaign_id == campaign.id))
+                                    contacts = c_res.scalars().all()
+                                    from app.services.email_service import email_service
+                                    asyncio.create_task(
+                                        asyncio.to_thread(
+                                            email_service.send_campaign_started_email,
+                                            to_email=user.email,
+                                            user_name=user.full_name or "Client",
+                                            campaign_name=campaign.campaign_name,
+                                            total_contacts=len(contacts),
+                                            agent_name=campaign.agent or "AI Voice Agent",
+                                            is_pre_alert=True,
+                                        )
+                                    )
+                                    print(f"[SchedulePoller] Sent 2-min pre-launch email alert to {user.email} for '{campaign.campaign_name}'")
+                            await db.commit()
+
+                        # 2. Time arrived, queue and start campaign
                         if schedule_dt <= now:
-                            # Time arrived, queue it
                             c_res = await db.execute(select(Contact).where(Contact.campaign_id == campaign.id))
                             contacts = c_res.scalars().all()
                             if contacts:
                                 await CampaignService.queue_campaign_job(db, campaign, len(contacts))
                     except Exception as e:
                         print(f"Scheduler error processing campaign {campaign.id}: {e}")
+
+            # 3. Process due WhatsApp scheduled broadcasts
+            try:
+                from app.services.whatsapp_scheduler_service import WhatsAppSchedulerService
+                await WhatsAppSchedulerService.process_due_jobs()
+            except Exception as wa_sched_err:
+                print(f"WhatsApp scheduler error: {wa_sched_err}")
+
+            # 4. Periodic Google Sheet Auto-Sync (Runs automatically every ~5 minutes)
+            if int(now.timestamp()) % 300 < SCHEDULER_POLL_INTERVAL:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        sheet_stmt = select(SavedContact.user_id, SavedContact.tag, SavedContact.metadata_fields).where(
+                            SavedContact.source == "Google Sheet",
+                            SavedContact.metadata_fields.isnot(None),
+                        )
+                        sheet_res = await db.execute(sheet_stmt)
+                        seen_pairs = set()
+                        for u_id, tag_name, mf in sheet_res.all():
+                            if (u_id, tag_name) in seen_pairs:
+                                continue
+                            seen_pairs.add((u_id, tag_name))
+                            if isinstance(mf, dict) and (mf.get("google_sheet_url") or mf.get("sheet_url")):
+                                sheet_url = mf.get("google_sheet_url") or mf.get("sheet_url")
+                                from app.services.google_sheet_service import sync_google_sheet_for_tag
+                                try:
+                                    await sync_google_sheet_for_tag(db, u_id, tag_name, sheet_url)
+                                    print(f"[GoogleSheetAutoSync] Synced tag '{tag_name}' for user {u_id}")
+                                except Exception as gs_err:
+                                    print(f"[GoogleSheetAutoSync] Error syncing tag '{tag_name}': {gs_err}")
+                except Exception as gs_loop_err:
+                    print(f"[GoogleSheetAutoSync] Loop error: {gs_loop_err}")
+
         except Exception as e:
             print(f"Scheduler loop error: {e}")
         
         await asyncio.sleep(SCHEDULER_POLL_INTERVAL)
+
 
 app = FastAPI(
     title="Calling Platform API",
@@ -115,7 +292,6 @@ app = FastAPI(
 )
 
 app.mount("/api/recordings", StaticFiles(directory="recordings"), name="recordings")
-app.mount("/api/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -130,27 +306,28 @@ app.include_router(report_router, prefix="/api")
 app.include_router(demo_router, prefix="/api")
 app.include_router(calendar_router, tags=["Calendar"])
 app.include_router(campaign_router, prefix="/api", tags=["Campaigns"])
+app.include_router(email_campaign_router, prefix="/api", tags=["Email Campaigns"])
+app.include_router(email_template_router, prefix="/api", tags=["Email Templates"])
+app.include_router(custom_domain_router, prefix="/api", tags=["Custom Sending Domains"])
+app.include_router(smtp_configs_router, prefix="/api", tags=["Connected Mailboxes (SMTP)"])
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
 app.include_router(agents_router, prefix="/api/agents", tags=["Agents"])
 app.include_router(demo_router, prefix="/api/demo", tags=["Demo"])
-
-from whatsapp.routes import router as whatsapp_router
+app.include_router(phone_numbers_router)
+app.include_router(payment_router, prefix="/api")
 app.include_router(whatsapp_router, prefix="/api/whatsapp", tags=["WhatsApp"])
-app.include_router(whatsapp_router, prefix="/whatsapp", tags=["WhatsApp"])
-
-from app.api.whatsapp_materials import router as whatsapp_materials_router
-app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
-
-from app.api.whatsapp_send import router as whatsapp_send_router
 app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp Send"])
-
-from app.api.whatsapp_history import router as whatsapp_history_router
+app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
 app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
+app.include_router(contacts_book_router, prefix="/api", tags=["Contacts Book"])
+
+
 
 
 @app.get("/")
 def home():
+    
     return {
         "status": "running",
         "message": "Backend is working",

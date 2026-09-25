@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.whatsapp_send_job import WhatsAppSendJob
 from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
-from app.core.security import get_current_user
+from app.core.security import get_optional_current_user
 
 router = APIRouter()
 
@@ -18,12 +18,12 @@ router = APIRouter()
 @router.get("/history")
 async def list_whatsapp_history(
     source: Optional[str] = Query(None, description="Filter by source: campaign, excel, manual, automation"),
-    status: Optional[str] = Query(None, description="Filter by status: completed, partial, failed"),
+    status: Optional[str] = Query(None, description="Filter by status: completed, partial, failed, scheduled, in_progress, cancelled"),
     search: Optional[str] = Query(None, description="Search by source name, message text, or trigger"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     List WhatsApp Send Jobs history for the current user.
@@ -45,7 +45,11 @@ async def list_whatsapp_history(
             query = query.where(WhatsAppSendJob.source_type == "manual")
 
     if status:
-        query = query.where(WhatsAppSendJob.status == status.lower())
+        stat_lower = status.lower()
+        if stat_lower == "scheduled":
+            query = query.where(WhatsAppSendJob.status == "scheduled")
+        else:
+            query = query.where(WhatsAppSendJob.status == stat_lower)
 
     if search and search.strip():
         term = f"%{search.strip().lower()}%"
@@ -74,6 +78,8 @@ async def list_whatsapp_history(
             "id": j.id,
             "date": j.created_at.strftime("%d %b %Y, %I:%M %p") if j.created_at else "—",
             "created_at_raw": j.created_at.isoformat() if j.created_at else "",
+            "scheduled_for": j.scheduled_for.strftime("%d %b %Y, %I:%M %p") if j.scheduled_for else None,
+            "scheduled_for_raw": j.scheduled_for.isoformat() if j.scheduled_for else None,
             "source_type": j.source_type,
             "source_name": j.source_name,
             "campaign_id": j.campaign_id,
@@ -103,7 +109,7 @@ async def list_whatsapp_history(
 async def get_whatsapp_history_detail(
     job_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Get full details for a specific WhatsApp Send Job, including recipient-level statuses.
@@ -127,6 +133,7 @@ async def get_whatsapp_history_detail(
             "status": r.status.title() if r.status else "Sent",
             "error_message": r.error_message,
             "sent_at": r.sent_at.strftime("%d %b %Y, %I:%M %p") if r.sent_at else "—",
+            "sent_at_raw": r.sent_at.isoformat() if r.sent_at else None,
             "details": r.details,
         })
 
@@ -139,7 +146,11 @@ async def get_whatsapp_history_detail(
             "campaign_id": job.campaign_id,
             "trigger_event": job.trigger_event,
             "date": job.created_at.strftime("%d %b %Y, %I:%M %p") if job.created_at else "—",
+            "created_at_raw": job.created_at.isoformat() if job.created_at else None,
+            "scheduled_for": job.scheduled_for.strftime("%d %b %Y, %I:%M %p") if job.scheduled_for else None,
+            "scheduled_for_raw": job.scheduled_for.isoformat() if job.scheduled_for else None,
             "completed_at": job.completed_at.strftime("%d %b %Y, %I:%M %p") if job.completed_at else "—",
+            "completed_at_raw": job.completed_at.isoformat() if job.completed_at else None,
             "content_type": job.content_type,
             "message_text": job.message_text or "",
             "attachments": job.attachments or [],
@@ -151,3 +162,34 @@ async def get_whatsapp_history_detail(
             "recipients": recipient_items,
         },
     }
+
+
+# ── POST /api/whatsapp/history/{job_id}/cancel ──────────────────────────────
+
+@router.post("/history/{job_id}/cancel")
+async def cancel_scheduled_job(
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_optional_current_user),
+):
+    """
+    Cancel a scheduled WhatsApp Send Job before it executes.
+    """
+    job = await db.get(WhatsAppSendJob, job_id)
+    if not job or (job.user_id and job.user_id != current_user.id and not current_user.is_admin):
+        raise HTTPException(status_code=404, detail="Send job record not found.")
+
+    if job.status != "scheduled":
+        raise HTTPException(status_code=400, detail=f"Cannot cancel job with status '{job.status}'. Only scheduled jobs can be cancelled.")
+
+    job.status = "cancelled"
+    
+    # Update recipients
+    recipients_res = await db.execute(
+        select(WhatsAppSendRecipient).where(WhatsAppSendRecipient.send_job_id == job_id)
+    )
+    for rec in recipients_res.scalars().all():
+        rec.status = "cancelled"
+
+    await db.commit()
+    return {"success": True, "message": "Scheduled WhatsApp job cancelled successfully."}

@@ -36,6 +36,32 @@ class CampaignService:
         )
         db.add(job)
         campaign.status = "running"
+
+        # Dispatch Campaign Started notification email to user profile email
+        if not getattr(campaign, "start_notified", False):
+            campaign.start_notified = True
+            if campaign.user_id:
+                try:
+                    from app.models.user import User
+                    user = await db.get(User, campaign.user_id)
+                    if user and user.email:
+                        import asyncio
+                        from app.services.email_service import email_service
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                email_service.send_campaign_started_email,
+                                to_email=user.email,
+                                user_name=user.full_name or "Client",
+                                campaign_name=campaign.campaign_name,
+                                total_contacts=total_contacts,
+                                agent_name=campaign.agent or "AI Voice Agent",
+                                is_pre_alert=False,
+                            )
+                        )
+                        print(f"[CampaignService] Dispatched campaign start notification email to {user.email}")
+                except Exception as notify_err:
+                    print(f"[CampaignService] Warning: Failed to send start notification: {notify_err}")
+
         await db.commit()
         await db.refresh(job)
         return job
@@ -97,8 +123,8 @@ class CampaignService:
             pass
             
         now = datetime.now(timezone.utc)
-        # If scheduled for the future (beyond a 10s network grace period), mark scheduled
-        if schedule_dt and schedule_dt > now + timedelta(seconds=10):
+        # If scheduled for the future (beyond a 15-second grace period), mark scheduled
+        if schedule_dt and schedule_dt > now + timedelta(seconds=15):
             campaign.status = "scheduled"
             await db.commit()
             return None, len(contacts)
@@ -120,10 +146,16 @@ class CampaignService:
             script=data.script,
             schedule_date=data.schedule_date,
             schedule_time=data.schedule_time,
+            outbound_phone_number=getattr(data, "outbound_phone_number", None),
             status="pending",
             campaign_type="normal",
-            whatsapp_automation=data.whatsapp_automation,
+            upload_source=data.upload_source,
+            sheet_name=data.sheet_name,
+            voicemail_detection=getattr(data, "voicemail_detection", None),
+            whatsapp_automation=getattr(data, "whatsapp_automation", None),
+            email_automation=getattr(data, "email_automation", None),
         )
+
 
         db.add(campaign)
         await db.flush()
@@ -132,11 +164,18 @@ class CampaignService:
         subset = data.contacts
         remaining = []
 
-        if data.selection_type == "range" and data.start_row and data.end_row:
+        if data.upload_source != "single" and data.selection_type == "range" and data.start_row and data.end_row:
             start_idx = max(0, data.start_row - 1)
             end_idx = min(len(data.contacts), data.end_row)
-            subset = data.contacts[start_idx:end_idx]
-            remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
+            if start_idx < end_idx and start_idx < len(data.contacts):
+                subset = data.contacts[start_idx:end_idx]
+                remaining = data.contacts[:start_idx] + data.contacts[end_idx:]
+            else:
+                subset = data.contacts
+                remaining = []
+        else:
+            subset = data.contacts
+            remaining = []
 
         for item in subset:
             contact = Contact(
@@ -163,6 +202,11 @@ class CampaignService:
                 status="pending",
                 campaign_type="pending",
                 parent_campaign_id=campaign.id,
+                upload_source=data.upload_source,
+                sheet_name=data.sheet_name,
+                voicemail_detection=getattr(data, "voicemail_detection", None),
+                whatsapp_automation=getattr(data, "whatsapp_automation", None),
+                email_automation=getattr(data, "email_automation", None),
             )
             db.add(pending_campaign)
             await db.flush()
@@ -180,6 +224,70 @@ class CampaignService:
                 pending_contacts.append(contact)
             
             db.add_all(pending_contacts)
+
+        # Auto-save to Contact Book if requested
+        if user_id and getattr(data, "save_to_contacts_book", False):
+            try:
+                from app.models.saved_contact import SavedContact
+                from app.api.contacts_book import normalize_phone
+                from datetime import datetime, timezone
+                
+                now = datetime.now(timezone.utc)
+                tag_name = (getattr(data, "contact_book_tag", None) or data.campaign_name or "Campaign").strip()
+                source_label = f"Campaign: {data.campaign_name}"
+
+                existing_res = await db.execute(
+                    select(SavedContact).where(SavedContact.user_id == user_id)
+                )
+                existing_map = {c.phone: c for c in existing_res.scalars().all()}
+                
+                new_saved = []
+                seen_phones = set()
+                for item in data.contacts:
+                    norm_p = normalize_phone(item.phone)
+                    if len(norm_p) < 7 or norm_p in seen_phones:
+                        continue
+                    seen_phones.add(norm_p)
+
+                    email_val = None
+                    if item.metadata_fields and isinstance(item.metadata_fields, dict):
+                        for k in ("email", "Email", "email_address", "Email Address", "mail", "Mail"):
+                            if item.metadata_fields.get(k):
+                                email_val = str(item.metadata_fields[k]).strip()
+                                break
+
+                    if norm_p in existing_map:
+                        sc = existing_map[norm_p]
+                        if item.name and item.name != "Unknown":
+                            sc.name = item.name
+                        if email_val:
+                            sc.email = email_val
+                        if tag_name:
+                            sc.tag = tag_name
+                        sc.source = source_label
+                        if item.metadata_fields:
+                            sc.metadata_fields = {**(sc.metadata_fields or {}), **item.metadata_fields}
+                        sc.updated_at = now
+                    else:
+                        new_sc = SavedContact(
+                            user_id=user_id,
+                            name=item.name or "Unknown",
+                            phone=norm_p,
+                            email=email_val,
+                            source=source_label,
+                            tag=tag_name,
+                            metadata_fields=item.metadata_fields or {},
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        new_saved.append(new_sc)
+                        existing_map[norm_p] = new_sc
+
+                if new_saved:
+                    db.add_all(new_saved)
+                print(f"[CampaignService] Saved {len(data.contacts)} contacts to Contact Book under tag '{tag_name}'")
+            except Exception as save_err:
+                print(f"[CampaignService] Warning: Failed to save to Contact Book: {save_err}")
 
         await db.commit()
         await db.refresh(campaign)

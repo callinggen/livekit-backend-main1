@@ -20,7 +20,7 @@ from whatsapp.config import EVOLUTION_INSTANCE_NAME
 
 def normalize_whatsapp_phone(raw_phone: str) -> str:
     """Normalize phone number to international WhatsApp format (e.g. 917656807447)."""
-    clean = "".join(c for c in str(raw_phone or "") if c.isdigit())
+    clean = "".join(c for c in (raw_phone or "") if c.isdigit())
     if len(clean) == 10:
         clean = "91" + clean
     return clean
@@ -35,7 +35,7 @@ def resolve_personalization(text: str, variables: Dict[str, str]) -> str:
         return ""
     result = text
     for key, val in variables.items():
-        result = result.replace(f"{{{{{key}}}}}", str(val or ""))
+        result = result.replace(f"{{{{{key}}}}}", val or "")
     return result
 
 
@@ -144,7 +144,8 @@ class WhatsAppAutomationService:
                 if has_4d_filters:
                     # 1. Call Type check (Outbound / Inbound)
                     if ct_filters and "all types" not in ct_filters and "all" not in ct_filters:
-                        call_type = (call.call_type or "outbound").lower()
+                        raw_ct = getattr(call, "call_type", None) or getattr(call, "direction", "outbound")
+                        call_type = (raw_ct or "outbound").lower()
                         if not any(f in call_type for f in ct_filters):
                             match = False
 
@@ -197,46 +198,50 @@ class WhatsAppAutomationService:
                             match = False
 
                 else:
-                    # Legacy single category & values evaluation
+                    # Legacy single category & values evaluation, or empty filters (match all completed calls)
                     trigger_type = (rule.get("trigger_type") or rule.get("category") or "").strip().lower()
                     raw_values = rule.get("values") or [rule.get("trigger_value") or rule.get("value")]
                     trigger_vals = [str(v).strip().lower() for v in raw_values if v]
 
-                    match = False
-                    for trigger_val in trigger_vals:
-                        if trigger_type in ("ai_classification", "classification"):
-                            if trigger_val in ("hot", "hot lead") and is_hot:
+                    if not trigger_type and not trigger_vals:
+                        # Empty rule filters -> Match all calls by default
+                        match = True
+                    else:
+                        match = False
+                        for trigger_val in trigger_vals:
+                            if trigger_type in ("ai_classification", "classification"):
+                                if trigger_val in ("hot", "hot lead") and is_hot:
+                                    match = True
+                                elif trigger_val in ("warm", "warm lead") and is_warm:
+                                    match = True
+                                elif trigger_val in ("cold", "cold lead") and is_cold:
+                                    match = True
+                                elif trigger_val == "interested" and is_interested:
+                                    match = True
+                                elif trigger_val in ("not interested", "declined") and is_not_interested:
+                                    match = True
+                            elif trigger_type in ("response", "call_response"):
+                                if trigger_val in ("answered", "completed") and is_answered:
+                                    match = True
+                                elif trigger_val in ("not answered", "no answer", "missed") and is_not_answered:
+                                    match = True
+                                elif trigger_val in ("appointment", "appointment booked") and is_appointment:
+                                    match = True
+                                elif trigger_val in ("callback", "rescheduled") and is_callback:
+                                    match = True
+                                elif trigger_val in ("declined", "not interested") and is_not_interested:
+                                    match = True
+                                elif trigger_val in ("cut", "cut/disconnected", "disconnected") and is_cut:
+                                    match = True
+                            elif trigger_type == "status":
+                                if trigger_val == "completed" and call_status == "completed":
+                                    match = True
+                                elif trigger_val in ("failed", "unreached") and call_status in ("failed", "incomplete"):
+                                    match = True
+                            elif trigger_type == "all" or trigger_val == "any":
                                 match = True
-                            elif trigger_val in ("warm", "warm lead") and is_warm:
-                                match = True
-                            elif trigger_val in ("cold", "cold lead") and is_cold:
-                                match = True
-                            elif trigger_val == "interested" and is_interested:
-                                match = True
-                            elif trigger_val in ("not interested", "declined") and is_not_interested:
-                                match = True
-                        elif trigger_type in ("response", "call_response"):
-                            if trigger_val in ("answered", "completed") and is_answered:
-                                match = True
-                            elif trigger_val in ("not answered", "no answer", "missed") and is_not_answered:
-                                match = True
-                            elif trigger_val in ("appointment", "appointment booked") and is_appointment:
-                                match = True
-                            elif trigger_val in ("callback", "rescheduled") and is_callback:
-                                match = True
-                            elif trigger_val in ("declined", "not interested") and is_not_interested:
-                                match = True
-                            elif trigger_val in ("cut", "cut/disconnected", "disconnected") and is_cut:
-                                match = True
-                        elif trigger_type == "status":
-                            if trigger_val == "completed" and call_status == "completed":
-                                match = True
-                            elif trigger_val in ("failed", "unreached") and call_status in ("failed", "incomplete"):
-                                match = True
-                        elif trigger_type == "all" or trigger_val == "any":
-                            match = True
-                        if match:
-                            break
+                            if match:
+                                break
 
                 if match:
                     # Permission / Consent check for promotional attachments & materials
@@ -464,4 +469,173 @@ class WhatsAppAutomationService:
                 "job_id": send_job.id,
                 "credits_deducted": credits_spent,
                 "trigger": trigger_description,
+            }
+
+    @classmethod
+    async def trigger_in_call_action(cls, call_id: int, action: str) -> Optional[Dict[str, Any]]:
+        """
+        Trigger an in-call WhatsApp dispatch (e.g. SEND_BROCHURE, SEND_PRICING, SEND_WEBSITE)
+        when the AI agent executes send_whatsapp_info during a live call.
+        """
+        async with AsyncSessionLocal() as db:
+            call = await db.get(Call, call_id)
+            if not call:
+                print(f"[WhatsAppAutomation] In-call trigger: Call {call_id} not found.")
+                return {"status": "error", "message": "Call not found"}
+
+            campaign_id = call.campaign_id
+            if not campaign_id and call.job_id:
+                job = await db.get(Job, call.job_id)
+                if job:
+                    campaign_id = job.campaign_id
+
+            campaign = await db.get(Campaign, campaign_id) if campaign_id else None
+            contact = await db.get(Contact, call.contact_id) if call.contact_id else None
+
+            raw_phone = contact.phone if contact else call.phone
+            clean_phone = normalize_whatsapp_phone(raw_phone)
+            if not clean_phone:
+                return {"status": "error", "message": "Invalid phone number"}
+
+            customer_name = (contact.customer_name or contact.name) if contact else ""
+            campaign_name = campaign.campaign_name if campaign else "Our Team"
+
+            # Resolve user ownership for credits
+            user_id = campaign.user_id if campaign else 1
+            user = await db.get(User, user_id) if user_id else None
+            if not user:
+                res = await db.execute(select(User).limit(1))
+                user = res.scalars().first()
+
+            if not user:
+                return {"status": "error", "message": "User not found"}
+
+            # Collect attachments and message text from campaign config if present
+            automation_config = campaign.whatsapp_automation if campaign else {}
+            if isinstance(automation_config, str):
+                try:
+                    import json
+                    automation_config = json.loads(automation_config)
+                except Exception:
+                    automation_config = {}
+
+            rules = automation_config.get("rules", []) if isinstance(automation_config, dict) else []
+            first_rule = rules[0] if rules else {}
+
+            raw_text = first_rule.get("message_text") or f"Hi {customer_name}, here is the information from {campaign_name} you requested during our call."
+            variables = {
+                "name": customer_name,
+                "customer_name": customer_name,
+                "phone": raw_phone,
+                "campaign_name": campaign_name,
+            }
+            personalized_text = resolve_personalization(raw_text, variables)
+
+            attachments = first_rule.get("attachments") or []
+            resolved_attachments = []
+            backend_base_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+
+            for att in attachments:
+                att_type = att.get("type", "document")
+                att_url = att.get("url") or att.get("file_url") or ""
+                if att_url.startswith("/"):
+                    att_url = f"{backend_base_url}{att_url}"
+                resolved_attachments.append({
+                    "title": att.get("title") or "Brochure",
+                    "type": att_type,
+                    "url": att_url,
+                    "file_name": att.get("file_name") or ("image.png" if att_type == "image" else "document.pdf"),
+                    "mime_type": att.get("mime_type") or ("image/png" if att_type == "image" else "application/pdf"),
+                    "file_size": att.get("file_size"),
+                })
+
+            send_items = []
+            if personalized_text.strip():
+                send_items.append({"type": "text", "text": personalized_text})
+            for att in resolved_attachments:
+                send_items.append(att)
+
+            if not send_items:
+                send_items.append({"type": "text", "text": f"Hi {customer_name}, thank you for speaking with us! Here is the information regarding {campaign_name}."})
+
+            total_required_credits = WhatsAppCreditService.calculate_total_credits(send_items, 1)
+            await db.refresh(user)
+            if user.credits < total_required_credits:
+                return {"status": "error", "message": "Insufficient WhatsApp credits"}
+
+            inst = EVOLUTION_INSTANCE_NAME or "callinggen"
+            has_error = False
+            last_error = None
+            credits_spent = 0
+            item_results = []
+
+            for item in send_items:
+                try:
+                    if item["type"] == "text":
+                        api_res = await evolution_service.send_text_message(
+                            instance_name=inst,
+                            number=clean_phone,
+                            text=item["text"],
+                        )
+                        credits_spent += WhatsAppCreditService.CREDIT_PER_TEXT
+                        item_results.append({"type": "text", "status": "sent", "response": api_res})
+                    elif item["type"] in ("image", "document"):
+                        api_res = await evolution_service.send_media_message(
+                            instance_name=inst,
+                            number=clean_phone,
+                            media_url=item["url"],
+                            media_type=item["type"],
+                            mimetype=item.get("mime_type", "application/pdf" if item["type"] == "document" else "image/png"),
+                            caption=personalized_text if not any(i["type"] == "text" for i in send_items) else None,
+                            file_name=item.get("file_name"),
+                        )
+                        credits_spent += WhatsAppCreditService.calculate_item_credits(item["type"])
+                        item_results.append({"type": item["type"], "status": "sent", "response": api_res})
+                except Exception as send_err:
+                    print(f"[WhatsAppAutomation] In-call send error to {clean_phone}: {send_err}")
+                    has_error = True
+                    last_error = str(send_err)
+                    item_results.append({"type": item["type"], "status": "failed", "error": str(send_err)})
+
+            if credits_spent > 0:
+                await WhatsAppCreditService.deduct_credits(db, user, credits_spent)
+
+            send_job = WhatsAppSendJob(
+                user_id=user.id,
+                source_type="campaign_in_call",
+                source_name=f"{campaign_name} (In-Call {action})",
+                campaign_id=campaign_id,
+                trigger_event=f"In-Call {action}",
+                content_type="Mixed" if len(send_items) > 1 else send_items[0]["type"].title(),
+                message_text=personalized_text,
+                attachments=resolved_attachments,
+                total_contacts=1,
+                sent_count=1 if not has_error else 0,
+                failed_count=0 if not has_error else 1,
+                credits_deducted=credits_spent,
+                status="completed" if not has_error else "failed",
+                completed_at=datetime.now(timezone.utc),
+            )
+            db.add(send_job)
+            await db.flush()
+
+            rec = WhatsAppSendRecipient(
+                send_job_id=send_job.id,
+                contact_id=call.contact_id,
+                call_id=call_id,
+                name=customer_name,
+                phone=clean_phone,
+                status="sent" if not has_error else "failed",
+                error_message=last_error,
+                details={"items": item_results},
+                sent_at=datetime.now(timezone.utc),
+            )
+            db.add(rec)
+            await db.commit()
+
+            return {
+                "success": not has_error,
+                "job_id": send_job.id,
+                "credits_deducted": credits_spent,
+                "action": action,
             }

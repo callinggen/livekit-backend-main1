@@ -51,7 +51,7 @@ async def provision_user(
         # Cleanup on failure: email failed after commit, rollback user creation
         await db.delete(new_user)
         await db.commit()
-        print(f"Rolling back user creation for {email} due to SMTP failure: {e}")
+        print(f"Rolling back user creation for {email} due to email delivery failure: {e}")
         return {"success": False, "message": "Unable to send welcome email. User provisioning rolled back."}
 
     return {"success": True, "message": "User provisioned successfully."}
