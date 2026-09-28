@@ -112,9 +112,8 @@ async def test_atomic_credit_deductions():
         )
         await db.commit()
 
-        u = await db.get(User, 101)
-        assert u is not None
-        assert u.credits == 20
+        c_res = await db.execute(select(User.credits).where(User.id == 101))
+        assert c_res.scalar_one() == 20
 
         # Attempt to deduct 40 credits when only 20 remain -> Floor at 0, no negative balance
         await db.execute(
@@ -124,9 +123,8 @@ async def test_atomic_credit_deductions():
         )
         await db.commit()
 
-        u = await db.get(User, 101)
-        assert u is not None
-        assert u.credits == 0
+        c_res2 = await db.execute(select(User.credits).where(User.id == 101))
+        assert c_res2.scalar_one() == 0
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
