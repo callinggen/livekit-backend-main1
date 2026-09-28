@@ -232,7 +232,7 @@ async def list_contact_lists_summary(
             func.max(SavedContact.updated_at).label("updated_at"),
         )
         .where(SavedContact.user_id == current_user.id)
-        .group_by(func.coalesce(SavedContact.tag, "General"))
+        .group_by(SavedContact.tag)
         .order_by(desc(func.max(SavedContact.updated_at)))
     )
 
