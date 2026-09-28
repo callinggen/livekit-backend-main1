@@ -13,7 +13,7 @@ def _to_ist(dt: Optional[datetime]) -> str:
     ist_dt = aware.astimezone(IST)
     return ist_dt.strftime("%Y-%m-%d %H:%M IST")
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request, Header, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -29,6 +29,24 @@ from app.services.livekit_event_service import LiveKitEventService
 from livekit import api as lk_api
 
 router = APIRouter()
+
+INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET")
+
+def verify_internal_secret(
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret")
+):
+    """
+    Enforces authentication on internal worker/agent webhooks when INTERNAL_API_SECRET is configured.
+    Blocks unauthenticated external actors from forging call completions or transcript modifications.
+    """
+    if INTERNAL_API_SECRET:
+        if not x_internal_secret or x_internal_secret != INTERNAL_API_SECRET:
+            print("[SECURITY] Unauthorized attempt on internal call endpoint. Missing or invalid X-Internal-Secret.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: Missing or invalid internal secret"
+            )
+    return True
 
 
 @router.post("/livekit/webhook")
@@ -394,6 +412,7 @@ async def complete_call(
     call_id: int,
     body: Optional[CallCompleteRequest] = Body(default=None),
     db: AsyncSession = Depends(get_db),
+    _sec: bool = Depends(verify_internal_secret),
 ):
     import os
     print("-" * 50)
@@ -431,6 +450,7 @@ async def complete_call(
 async def mark_call_active(
     call_id: int,
     db: AsyncSession = Depends(get_db),
+    _sec: bool = Depends(verify_internal_secret),
 ):
     import os
     print("-" * 50)

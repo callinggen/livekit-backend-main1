@@ -13,7 +13,12 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.auth import TokenPayload
 
-SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
+FALLBACK_SECRET = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    import sys
+    print("[SECURITY WARNING] SECRET_KEY environment variable is not configured! Default fallback is active.", file=sys.stderr)
+    SECRET_KEY = FALLBACK_SECRET
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
@@ -30,7 +35,7 @@ def create_access_token(
     subject: Union[str, Any], 
     is_first_login: bool = False,
     is_admin: bool = False,
-    expires_delta: timedelta = None
+    expires_delta: Optional[timedelta] = None
 ) -> str:
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta

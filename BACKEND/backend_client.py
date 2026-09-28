@@ -8,6 +8,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_internal_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    secret = os.getenv("INTERNAL_API_SECRET")
+    if secret:
+        headers["X-Internal-Secret"] = secret
+    return headers
+
+
 async def notify_call_active(room_name: str) -> bool:
     """
     Tell the FastAPI backend that the call behind this room has become active,
@@ -26,7 +34,7 @@ async def notify_call_active(room_name: str) -> bool:
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url)
+                resp = await client.post(url, headers=_get_internal_headers())
                 if resp.is_success:
                     print(f"[backend_client] Backend notified: call {call_id} marked active.")
                     return True
@@ -113,7 +121,7 @@ async def notify_call_complete(
     for attempt in range(1, max_attempts + 1):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(url, json=payload or {})
+                resp = await client.post(url, json=payload or {}, headers=_get_internal_headers())
                 print(f"[backend_client] Attempt {attempt}/{max_attempts} -> HTTP Status: {resp.status_code}")
                 if resp.is_success:
                     try:

@@ -197,11 +197,18 @@ async def lifespan(app: FastAPI):
         except Exception as seed_err:
             print(f"[STARTUP] Could not seed default email templates: {seed_err}")
 
-    # Startup: Start lightweight scheduler
-    task = asyncio.create_task(schedule_poller())
+    # Startup: Start lightweight scheduler (guarded to prevent duplicate loops upon horizontal scaling)
+    enable_sched = os.getenv("ENABLE_SCHEDULER", "true").lower() in ("true", "1", "yes")
+    task = None
+    if enable_sched:
+        print("[STARTUP] Starting background campaign schedule poller...")
+        task = asyncio.create_task(schedule_poller())
+    else:
+        print("[STARTUP] Campaign schedule poller disabled on this instance (ENABLE_SCHEDULER=false).")
     yield
     # Shutdown: Cancel scheduler
-    task.cancel()
+    if task:
+        task.cancel()
 
 async def schedule_poller():
     from datetime import timedelta
