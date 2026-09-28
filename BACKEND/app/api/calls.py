@@ -405,6 +405,29 @@ def _parse_transcript(raw: Optional[str]) -> list:
     return lines
 
 
+# ── GET /api/calls/lookup (Decoupled Worker/Agent Helper) ───────────────────
+
+@router.get("/calls/lookup", dependencies=[Depends(verify_internal_secret)])
+async def lookup_call(
+    room_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Internal decoupled endpoint: Look up call metadata by room_name.
+    Protected by X-Internal-Secret.
+    """
+    res = await db.execute(select(Call).where(Call.room_name == room_name))
+    call = res.scalars().first()
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found for room")
+    return {
+        "call_id": call.id,
+        "campaign_id": call.campaign_id,
+        "contact_id": call.contact_id,
+        "status": call.status,
+    }
+
+
 # ── POST /api/calls/{call_id}/complete ─────────────────────────────────────
 
 @router.post("/calls/{call_id}/complete")

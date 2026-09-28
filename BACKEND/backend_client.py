@@ -66,47 +66,26 @@ async def notify_call_complete(
     except (ValueError, IndexError):
         call_id = -1
 
+    backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+
     if call_id == -1:
+        # Decoupled HTTP API lookup
         try:
-            from app.database import AsyncSessionLocal
-            from app.models.call import Call
-            from sqlalchemy import select
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(select(Call).where(Call.room_name == room_name))
-                call = result.scalars().first()
-                if call:
-                    call_id = call.id
-        except Exception as db_err:
-            print(f"[backend_client] Database lookup failed for room {room_name}: {db_err}")
-            call_id = -1
+            async with httpx.AsyncClient(timeout=5) as client:
+                lookup_resp = await client.get(
+                    f"{backend_url}/api/calls/lookup",
+                    params={"room_name": room_name},
+                    headers=_get_internal_headers(),
+                )
+                if lookup_resp.is_success:
+                    call_id = lookup_resp.json().get("call_id", -1)
+        except Exception as lookup_err:
+            print(f"[backend_client] HTTP lookup failed for room {room_name}: {lookup_err}")
 
     if call_id == -1:
         print(f"[backend_client] Could not parse or find call_id for room name: {room_name}")
         return False
 
-    # ── [COMPLETION CHECK] ────────────────────────────────────────────────────
-    from app.database import AsyncSessionLocal
-    from app.models.call import Call
-    db_exists = False
-    try:
-        async with AsyncSessionLocal() as db:
-            call = await db.get(Call, call_id)
-            if call:
-                db_exists = True
-    except Exception as e:
-        print(f"[backend_client] Error checking DB for call {call_id}: {e}")
-        
-    print(f"\n[COMPLETION CHECK]")
-    print(f"call_id={call_id}")
-    print(f"db_exists={db_exists}\n")
-    
-    if not db_exists:
-        print(f"[COMPLETION ABORTED]")
-        print(f"reason=call_row_missing")
-        return False
-    # ──────────────────────────────────────────────────────────────────────────
-
-    backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
     url = f"{backend_url}/api/calls/{call_id}/complete"
 
     print("-" * 50)

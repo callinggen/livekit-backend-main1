@@ -20,7 +20,6 @@ from livekit.agents import (
     WorkerOptions,
     cli,
 )
-
 from livekit.plugins import sarvam, openai, silero
 
 # Database access to read campaign + contact at runtime
@@ -30,6 +29,7 @@ from app.models.call import Call
 from app.models.contact import Contact
 from app.models.campaign import Campaign
 from app.models.agent import Agent as AgentModel
+
 
 load_dotenv(override=True)
 

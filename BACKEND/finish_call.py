@@ -277,6 +277,17 @@ async def terminate_call_once(
                 f"recordings/call_{call_id}_agent.wav",
                 f"recordings/call_{call_id}.wav"
             )
+            # Decoupled Tier 5 Storage: Upload to S3 if configured
+            try:
+                from app.services.storage_service import StorageService
+                if StorageService.is_s3_enabled():
+                    await asyncio.to_thread(
+                        StorageService.upload_recording,
+                        f"recordings/call_{call_id}.wav",
+                        f"call_{call_id}.wav"
+                    )
+            except Exception as s3_err:
+                print(f"[finish_call] S3 upload warning: {s3_err}")
         except Exception as mix_err:
             print(f"Warning – mixing audio failed: {mix_err}")
 
@@ -530,11 +541,22 @@ async def finish_call(
             try:
                 await asyncio.sleep(0.5)
                 from agent import mix_wav_files
-                mix_wav_files(
+                await asyncio.to_thread(
+                    mix_wav_files,
                     f"recordings/call_{call_id}_customer.wav",
                     f"recordings/call_{call_id}_agent.wav",
                     f"recordings/call_{call_id}.wav"
                 )
+                try:
+                    from app.services.storage_service import StorageService
+                    if StorageService.is_s3_enabled():
+                        await asyncio.to_thread(
+                            StorageService.upload_recording,
+                            f"recordings/call_{call_id}.wav",
+                            f"call_{call_id}.wav"
+                        )
+                except Exception as s3_err:
+                    print(f"[finish_call] S3 upload warning: {s3_err}")
             except Exception as mix_err:
                 print(f"Warning – mixing audio failed: {mix_err}")
 

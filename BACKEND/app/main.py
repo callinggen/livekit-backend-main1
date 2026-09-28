@@ -7,7 +7,7 @@ import jwt
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Header, Query
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.campaigns import router as campaign_router
@@ -203,111 +203,21 @@ async def lifespan(app: FastAPI):
         except Exception as seed_err:
             print(f"[STARTUP] Could not seed default email templates: {seed_err}")
 
-    # Startup: Start lightweight scheduler (guarded to prevent duplicate loops upon horizontal scaling)
-    enable_sched = os.getenv("ENABLE_SCHEDULER", "true").lower() in ("true", "1", "yes")
+    # Startup: Background campaign scheduler is now decoupled into the Worker tier (Tier 4).
+    # The API tier remains purely stateless. If ENABLE_SCHEDULER=true is explicitly forced,
+    # it can run locally for single-process development.
+    enable_sched = os.getenv("ENABLE_SCHEDULER", "false").lower() in ("true", "1", "yes")
     task = None
     if enable_sched:
-        print("[STARTUP] Starting background campaign schedule poller...")
-        task = asyncio.create_task(schedule_poller())
+        from app.services.scheduler_service import SchedulerService
+        print("[STARTUP] WARNING: ENABLE_SCHEDULER=true. Running SchedulerService loop inside API instance.")
+        task = asyncio.create_task(SchedulerService.run_scheduler_loop())
     else:
-        print("[STARTUP] Campaign schedule poller disabled on this instance (ENABLE_SCHEDULER=false).")
+        print("[STARTUP] API Tier is purely STATELESS (ENABLE_SCHEDULER=false). Background scheduling is decoupled to the worker tier.")
     yield
-    # Shutdown: Cancel scheduler
+    # Shutdown: Cancel scheduler if active
     if task:
         task.cancel()
-
-async def schedule_poller():
-    from datetime import timedelta
-    while True:
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(Campaign).where(Campaign.status == "scheduled")
-                )
-                campaigns = result.scalars().all()
-                now = datetime.now(timezone.utc)
-                
-                for campaign in campaigns:
-                    try:
-                        iso_str = campaign.schedule_date.replace("Z", "+00:00")
-                        schedule_dt = datetime.fromisoformat(iso_str)
-                        if schedule_dt.tzinfo is None:
-                            schedule_dt = schedule_dt.replace(tzinfo=timezone.utc)
-
-                        # 1. Check if campaign is ~2 minutes away from launch (Pre-start email alert)
-                        if (
-                            schedule_dt > now
-                            and (schedule_dt - now) <= timedelta(minutes=2)
-                            and not getattr(campaign, "pre_start_notified", False)
-                        ):
-                            campaign.pre_start_notified = True
-                            if campaign.user_id:
-                                user = await db.get(User, campaign.user_id)
-                                if user and user.email:
-                                    c_res = await db.execute(select(Contact).where(Contact.campaign_id == campaign.id))
-                                    contacts = c_res.scalars().all()
-                                    from app.services.email_service import email_service
-                                    asyncio.create_task(
-                                        asyncio.to_thread(
-                                            email_service.send_campaign_started_email,
-                                            to_email=user.email,
-                                            user_name=user.full_name or "Client",
-                                            campaign_name=campaign.campaign_name,
-                                            total_contacts=len(contacts),
-                                            agent_name=campaign.agent or "AI Voice Agent",
-                                            is_pre_alert=True,
-                                        )
-                                    )
-                                    print(f"[SchedulePoller] Sent 2-min pre-launch email alert to {user.email} for '{campaign.campaign_name}'")
-                            await db.commit()
-
-                        # 2. Time arrived, queue and start campaign
-                        if schedule_dt <= now:
-                            c_res = await db.execute(select(Contact).where(Contact.campaign_id == campaign.id))
-                            contacts = c_res.scalars().all()
-                            if contacts:
-                                await CampaignService.queue_campaign_job(db, campaign, len(contacts))
-                    except Exception as e:
-                        print(f"Scheduler error processing campaign {campaign.id}: {e}")
-
-            # 3. Process due WhatsApp scheduled broadcasts
-            try:
-                from app.services.whatsapp_scheduler_service import WhatsAppSchedulerService
-                await WhatsAppSchedulerService.process_due_jobs()
-            except Exception as wa_sched_err:
-                print(f"WhatsApp scheduler error: {wa_sched_err}")
-
-            # 4. Periodic Google Sheet Auto-Sync (Runs automatically every ~5 minutes)
-            if int(now.timestamp()) % 300 < SCHEDULER_POLL_INTERVAL:
-                try:
-                    async with AsyncSessionLocal() as db:
-                        sheet_stmt = select(SavedContact.user_id, SavedContact.tag, SavedContact.metadata_fields).where(
-                            SavedContact.source == "Google Sheet",
-                            SavedContact.metadata_fields.isnot(None),
-                        )
-                        sheet_res = await db.execute(sheet_stmt)
-                        seen_pairs = set()
-                        for u_id, tag_name, mf in sheet_res.all():
-                            if (u_id, tag_name) in seen_pairs:
-                                continue
-                            seen_pairs.add((u_id, tag_name))
-                            if isinstance(mf, dict):
-                                raw_url = mf.get("google_sheet_url") or mf.get("sheet_url")
-                                if raw_url and tag_name and u_id:
-                                    sheet_url = str(raw_url).strip()
-                                    from app.services.google_sheet_service import sync_google_sheet_for_tag
-                                    try:
-                                        await sync_google_sheet_for_tag(db, int(u_id), str(tag_name), sheet_url)
-                                        print(f"[GoogleSheetAutoSync] Synced tag '{tag_name}' for user {u_id}")
-                                    except Exception as gs_err:
-                                        print(f"[GoogleSheetAutoSync] Error syncing tag '{tag_name}': {gs_err}")
-                except Exception as gs_loop_err:
-                    print(f"[GoogleSheetAutoSync] Loop error: {gs_loop_err}")
-
-        except Exception as e:
-            print(f"Scheduler loop error: {e}")
-        
-        await asyncio.sleep(SCHEDULER_POLL_INTERVAL)
 
 
 app = FastAPI(
@@ -346,10 +256,6 @@ async def get_recording(
     if not RECORDING_FILENAME_REGEX.match(filename) or ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid recording filename")
 
-    file_path = os.path.join("recordings", filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Recording not found")
-
     # 2. Token / internal secret verification when strict auth is enabled
     if os.getenv("REQUIRE_RECORDING_AUTH", "false").lower() in ("true", "1"):
         authorized = False
@@ -366,6 +272,17 @@ async def get_recording(
 
         if not authorized:
             raise HTTPException(status_code=401, detail="Unauthorized to access call recording")
+
+    # 3. Decoupled Tier 5 Storage: Redirect to S3 presigned URL if cloud storage enabled
+    from app.services.storage_service import StorageService
+    s3_url = StorageService.get_presigned_url(filename)
+    if s3_url:
+        return RedirectResponse(url=s3_url, status_code=307)
+
+    # 4. Fallback to local disk storage
+    file_path = os.path.join("recordings", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Recording not found")
 
     return FileResponse(file_path, media_type="audio/wav")
 
