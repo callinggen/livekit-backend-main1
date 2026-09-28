@@ -48,13 +48,17 @@ async def generate_report(
         # Get calls with Campaign details within date range for current user
         calls_result = await db.execute(
             select(Call, Campaign)
-            .join(Contact, Call.contact_id == Contact.id)
-            .join(Campaign, Contact.campaign_id == Campaign.id)
+            .outerjoin(Contact, Call.contact_id == Contact.id)
+            .outerjoin(Campaign, or_(Call.campaign_id == Campaign.id, Contact.campaign_id == Campaign.id))
             .where(
                 and_(
                     Call.started_at >= start_dt,
                     Call.started_at <= end_dt,
-                    or_(Campaign.user_id == current_user.id, Campaign.user_id.is_(None))
+                    or_(
+                        Campaign.user_id == current_user.id,
+                        Call.tenant_id == current_user.id,
+                        and_(Campaign.user_id.is_(None), Call.tenant_id.is_(None))
+                    )
                 )
             )
         )
@@ -234,13 +238,24 @@ async def generate_report(
 
         # 4. Active Automations across unique campaigns
         unique_cmp_map = {cmp.id: cmp for cmp in campaigns if cmp and cmp.id}
+        def _check_auto(cfg):
+            if not cfg:
+                return False
+            if isinstance(cfg, str):
+                try:
+                    import json
+                    cfg = json.loads(cfg)
+                except Exception:
+                    return False
+            return isinstance(cfg, dict) and bool(cfg.get("enabled"))
+
         post_call_email_active = sum(
             1 for cmp in unique_cmp_map.values()
-            if cmp.email_automation and isinstance(cmp.email_automation, dict) and cmp.email_automation.get("enabled")
+            if _check_auto(cmp.email_automation)
         )
         post_call_wa_active = sum(
             1 for cmp in unique_cmp_map.values()
-            if cmp.whatsapp_automation and isinstance(cmp.whatsapp_automation, dict) and cmp.whatsapp_automation.get("enabled")
+            if _check_auto(cmp.whatsapp_automation)
         )
 
         report_req = ReportRequest(
@@ -373,6 +388,9 @@ async def get_report(
         report = result.scalars().first()
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
+        
+        if report.user_id and report.user_id != current_user.id and not current_user.is_admin:
+            raise HTTPException(status_code=403, detail="Not authorized to access this report")
         
         return {
             "id": report.id,

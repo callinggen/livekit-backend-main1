@@ -508,7 +508,7 @@ async def list_calls(
     result = await db.execute(
         select(Call, Contact, Campaign, Agent)
         .outerjoin(Contact, Call.contact_id == Contact.id)
-        .outerjoin(Campaign, Contact.campaign_id == Campaign.id)
+        .outerjoin(Campaign, or_(Call.campaign_id == Campaign.id, Contact.campaign_id == Campaign.id))
         .outerjoin(Agent, Call.agent_id == Agent.id)
         .where(
             or_(

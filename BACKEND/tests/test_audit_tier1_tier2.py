@@ -195,3 +195,59 @@ async def test_atomic_whatsapp_credit_service(db_session: AsyncSession):
     bal_check2 = await db_session.execute(select(User.credits).where(User.id == 202))
     assert bal_check2.scalar_one() == 0
 
+
+@pytest.mark.asyncio
+async def test_multitenancy_campaign_authorization(client: AsyncClient, db_session: AsyncSession):
+    """Verify tenant isolation: User 1 cannot access, launch, or modify User 2's campaigns."""
+    other_campaign = Campaign(
+        id=8888,
+        user_id=2,  # Belongs to User 2
+        campaign_name="Tenant 2 Confidential Campaign",
+        agent="Sales SDR",
+        script="Secret Script",
+        schedule_date="2026-10-01",
+        schedule_time="10:00:00",
+        status="scheduled"
+    )
+    db_session.add(other_campaign)
+    await db_session.commit()
+
+    # Client is authenticated as User 1
+    # 1. View campaign -> 403 Forbidden
+    resp_get = await client.get("/api/campaigns/8888")
+    assert resp_get.status_code == 403
+    assert "Not authorized" in resp_get.json()["detail"]
+
+    # 2. Launch campaign -> 403 Forbidden
+    resp_launch = await client.post("/api/campaigns/8888/launch")
+    assert resp_launch.status_code == 403
+
+    # 3. Pause campaign -> 403 Forbidden
+    resp_pause = await client.post("/api/campaigns/8888/pause")
+    assert resp_pause.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_multitenancy_report_authorization(client: AsyncClient, db_session: AsyncSession):
+    """Verify IDOR protection: User 1 cannot access User 2's AI campaign report."""
+    from app.models.report import Report
+
+    other_report = Report(
+        id=7777,
+        user_id=2,  # Belongs to User 2
+        title="Tenant 2 Q3 Strategy Report",
+        start_date="2026-09-01",
+        end_date="2026-09-20",
+        content="Confidential financial report details",
+        stats={"total": 500}
+    )
+    db_session.add(other_report)
+    await db_session.commit()
+
+    # Client is authenticated as User 1
+    # View report -> 403 Forbidden
+    resp_get = await client.get("/api/reports/7777")
+    assert resp_get.status_code == 403
+    assert "Not authorized" in resp_get.json()["detail"]
+
+

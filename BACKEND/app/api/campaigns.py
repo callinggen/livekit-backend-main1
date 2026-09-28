@@ -46,7 +46,14 @@ async def create_campaign(
 async def launch_campaign(
     campaign_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to launch this campaign")
+
     job, total_contacts = await CampaignService.launch_campaign(
         db=db,
         campaign_id=campaign_id,
@@ -74,6 +81,12 @@ async def pause_campaign(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to pause this campaign")
+
     campaign = await CampaignService.pause_campaign(db=db, campaign_id=campaign_id)
     return {
         "message": "Campaign paused successfully. Ongoing calls have been disconnected.",
@@ -90,6 +103,12 @@ async def resume_campaign(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to resume this campaign")
+
     campaign = await CampaignService.resume_campaign(db=db, campaign_id=campaign_id)
     return {
         "message": "Campaign resumed successfully.",
@@ -106,6 +125,12 @@ async def stop_campaign(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to stop this campaign")
+
     campaign = await CampaignService.stop_campaign(db=db, campaign_id=campaign_id)
     return {
         "message": "Campaign stopped successfully. All ongoing and pending calls have been terminated.",
@@ -220,10 +245,16 @@ async def list_campaigns(
 # ── GET /api/campaigns/{campaign_id} ──────────────────────────────────────
 
 @router.get("/campaigns/{campaign_id}")
-async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
+async def get_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     campaign = await db.get(Campaign, campaign_id)
     if campaign is None:
-        return {"error": "Not found"}
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to view this campaign")
 
     job_result = await db.execute(
         select(Job).where(Job.campaign_id == campaign_id).order_by(Job.id.desc()).limit(1)
@@ -318,7 +349,17 @@ async def get_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
 # ── GET /api/campaigns/{campaign_id}/contacts ─────────────────────────────
 
 @router.get("/campaigns/{campaign_id}/contacts")
-async def get_campaign_contacts(campaign_id: int, db: AsyncSession = Depends(get_db)):
+async def get_campaign_contacts(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    campaign = await db.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to view contacts for this campaign")
+
     result = await db.execute(
         select(Contact).where(Contact.campaign_id == campaign_id)
     )
@@ -341,14 +382,23 @@ async def get_campaign_contacts(campaign_id: int, db: AsyncSession = Depends(get
 # BUG-007: Real-time per-contact status counts for the Live Journey panel.
 
 @router.get("/campaigns/{campaign_id}/live")
-async def get_campaign_live(campaign_id: int, db: AsyncSession = Depends(get_db)):
+async def get_campaign_live(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Return per-contact status counts so the frontend can update the live tracking panel."""
+    campaign = await db.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to view live status for this campaign")
+
     result = await db.execute(
         select(Contact).where(Contact.campaign_id == campaign_id)
     )
     contacts = result.scalars().all()
 
-    campaign = await db.get(Campaign, campaign_id)
     job_result = await db.execute(
         select(Job).where(Job.campaign_id == campaign_id).order_by(Job.id.desc()).limit(1)
     )
@@ -382,11 +432,17 @@ async def get_campaign_live(campaign_id: int, db: AsyncSession = Depends(get_db)
 # BUG-024: Lightweight status endpoint for fast polling without fetching all data.
 
 @router.get("/campaigns/{campaign_id}/status")
-async def get_campaign_status(campaign_id: int, db: AsyncSession = Depends(get_db)):
+async def get_campaign_status(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Lightweight endpoint to poll campaign + job status."""
     campaign = await db.get(Campaign, campaign_id)
     if campaign is None:
-        return {"error": "Not found"}
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign.user_id and campaign.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized to view status for this campaign")
 
     job_result = await db.execute(
         select(Job).where(Job.campaign_id == campaign_id).order_by(Job.id.desc()).limit(1)
