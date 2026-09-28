@@ -170,13 +170,15 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-        # Call Manager automation columns auto-migrations
-        for col_name in ["voicemail_detection", "whatsapp_automation", "email_automation"]:
+        # Performance index auto-migrations
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS ix_calls_campaign_id ON calls(campaign_id);",
+            "CREATE INDEX IF NOT EXISTS ix_calls_room_name ON calls(room_name);",
+            "CREATE INDEX IF NOT EXISTS ix_calls_status ON calls(status);",
+            "CREATE INDEX IF NOT EXISTS ix_calls_started_at ON calls(started_at);",
+        ]:
             try:
-                if "postgresql" in str(engine.url):
-                    await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS {col_name} JSONB;"))
-                else:
-                    await conn.execute(text(f"ALTER TABLE campaigns ADD COLUMN {col_name} JSON;"))
+                await conn.execute(text(idx_sql))
             except Exception:
                 pass
 
