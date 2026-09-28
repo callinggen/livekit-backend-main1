@@ -2,8 +2,12 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI
+import re
+import jwt
+from typing import Optional
 
+from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.campaigns import router as campaign_router
@@ -310,15 +314,58 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.mount("/api/recordings", StaticFiles(directory="recordings"), name="recordings")
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+if allowed_origins_env:
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    allowed_origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+RECORDING_FILENAME_REGEX = re.compile(r"^[a-zA-Z0-9_\-\.]+\.(wav|mp3|ogg)$")
+
+@app.get("/api/recordings/{filename}", tags=["Recordings"])
+async def get_recording(
+    filename: str,
+    token: Optional[str] = Query(None),
+    x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret")
+):
+    """
+    Secure call audio recording delivery.
+    Enforces path traversal protection and optional token-based authorization.
+    """
+    # 1. Path traversal defense
+    if not RECORDING_FILENAME_REGEX.match(filename) or ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid recording filename")
+
+    file_path = os.path.join("recordings", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    # 2. Token / internal secret verification when strict auth is enabled
+    if os.getenv("REQUIRE_RECORDING_AUTH", "false").lower() in ("true", "1"):
+        authorized = False
+        internal_secret = os.getenv("INTERNAL_API_SECRET")
+        if internal_secret and x_internal_secret == internal_secret:
+            authorized = True
+        elif token:
+            try:
+                from app.core.security import SECRET_KEY, ALGORITHM
+                jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                authorized = True
+            except Exception:
+                pass
+
+        if not authorized:
+            raise HTTPException(status_code=401, detail="Unauthorized to access call recording")
+
+    return FileResponse(file_path, media_type="audio/wav")
 
 app.include_router(call_router, prefix="/api", tags=["Calls"])
 app.include_router(report_router, prefix="/api")
@@ -342,11 +389,54 @@ app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["Whats
 app.include_router(contacts_book_router, prefix="/api", tags=["Contacts Book"])
 
 
+@app.get("/api/health", tags=["Health"])
+async def health_check():
+    """
+    Comprehensive platform health check for Application Load Balancers and uptime monitors.
+    Validates PostgreSQL database connectivity and host resource availability.
+    """
+    db_status = "connected"
+    db_error = None
+    try:
+        from sqlalchemy import text
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as e:
+        db_status = "disconnected"
+        db_error = str(e)
+
+    memory_info = {}
+    try:
+        import psutil  # type: ignore
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        memory_info = {
+            "ram_used_percent": mem.percent,
+            "swap_used_percent": swap.percent,
+            "swap_active": swap.total > 0
+        }
+    except Exception:
+        pass
+
+    is_healthy = db_status == "connected"
+    response_payload = {
+        "status": "healthy" if is_healthy else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "database": {
+            "status": db_status,
+            "error": db_error
+        },
+        "system": memory_info,
+        "version": "1.0.0"
+    }
+
+    if not is_healthy:
+        return JSONResponse(status_code=503, content=response_payload)
+    return response_payload
 
 
 @app.get("/")
 def home():
-    
     return {
         "status": "running",
         "message": "Backend is working",

@@ -24,6 +24,7 @@ class Call(Base):
         Integer,
         ForeignKey("campaigns.id"),
         nullable=True,
+        index=True,
     )
 
     detection_metadata: Mapped[dict | None] = mapped_column(
@@ -74,8 +75,9 @@ class Call(Base):
         nullable=True,
     )
     room_name: Mapped[str | None] = mapped_column(
-    String,
-    nullable=True,
+        String,
+        nullable=True,
+        index=True,
     )
 
     livekit_participant_id: Mapped[str | None] = mapped_column(
@@ -86,6 +88,7 @@ class Call(Base):
     status: Mapped[str] = mapped_column(
         String,
         default="queued",
+        index=True,
     )
 
     started_at: Mapped[datetime] = mapped_column(
