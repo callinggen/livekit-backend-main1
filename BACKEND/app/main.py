@@ -6,10 +6,17 @@ import re
 import jwt
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Header, Query
+import logging
+from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+from app.core.middleware import (
+    RequestIdAndTracingMiddleware,
+    SecurityHeadersMiddleware,
+    RateLimitMiddleware,
+)
 from app.api.campaigns import router as campaign_router
 from app.api.calls import router as call_router
 from app.api.auth import router as auth_router
@@ -176,6 +183,16 @@ async def lifespan(app: FastAPI):
             "CREATE INDEX IF NOT EXISTS ix_calls_room_name ON calls(room_name);",
             "CREATE INDEX IF NOT EXISTS ix_calls_status ON calls(status);",
             "CREATE INDEX IF NOT EXISTS ix_calls_started_at ON calls(started_at);",
+            "CREATE INDEX IF NOT EXISTS ix_calls_contact_id ON calls(contact_id);",
+            "CREATE INDEX IF NOT EXISTS ix_calls_tenant_id ON calls(tenant_id);",
+            "CREATE INDEX IF NOT EXISTS ix_calls_phone ON calls(phone);",
+            "CREATE INDEX IF NOT EXISTS ix_jobs_campaign_id ON jobs(campaign_id);",
+            "CREATE INDEX IF NOT EXISTS ix_jobs_status ON jobs(status);",
+            "CREATE INDEX IF NOT EXISTS ix_contacts_campaign_id ON contacts(campaign_id);",
+            "CREATE INDEX IF NOT EXISTS ix_contacts_status ON contacts(status);",
+            "CREATE INDEX IF NOT EXISTS ix_contacts_phone ON contacts(phone);",
+            "CREATE INDEX IF NOT EXISTS ix_campaigns_user_id ON campaigns(user_id);",
+            "CREATE INDEX IF NOT EXISTS ix_campaigns_status ON campaigns(status);",
         ]:
             try:
                 await conn.execute(text(idx_sql))
@@ -232,6 +249,10 @@ if allowed_origins_env:
 else:
     allowed_origins = ["*"]
 
+# Enterprise Security, Tracing, and Throttling Middlewares
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(RequestIdAndTracingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -239,6 +260,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+api_logger = logging.getLogger("callinggen.api")
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    req_id = getattr(request.state, "request_id", "req_unknown")
+    api_logger.error(f"[GLOBAL EXCEPTION] [{req_id}] {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An internal server error occurred.",
+            "request_id": req_id,
+        },
+        headers={"X-Request-ID": req_id}
+    )
 
 RECORDING_FILENAME_REGEX = re.compile(r"^[a-zA-Z0-9_\-\.]+\.(wav|mp3|ogg)$")
 

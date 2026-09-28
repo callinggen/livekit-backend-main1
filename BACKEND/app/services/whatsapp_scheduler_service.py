@@ -92,8 +92,7 @@ class WhatsAppSchedulerService:
                                         number=rec_phone,
                                         text=personalized_text,
                                     )
-                                    if user and user.credits >= WhatsAppCreditService.CREDIT_PER_TEXT:
-                                        user.credits -= WhatsAppCreditService.CREDIT_PER_TEXT
+                                    if user and (user.credits or 0) >= (total_credits_deducted + WhatsAppCreditService.CREDIT_PER_TEXT):
                                         total_credits_deducted += WhatsAppCreditService.CREDIT_PER_TEXT
                                         total_sent += 1
                                         rec_item_statuses.append({"type": "text", "status": "sent", "response": res})
@@ -132,8 +131,7 @@ class WhatsAppSchedulerService:
                                             caption=att.get("caption"),
                                             file_name=att.get("file_name") or ("image.png" if mtype == "image" else "document.pdf"),
                                         )
-                                        if user and user.credits >= item_cost:
-                                            user.credits -= item_cost
+                                        if user and (user.credits or 0) >= (total_credits_deducted + item_cost):
                                             total_credits_deducted += item_cost
                                             total_sent += 1
                                             rec_item_statuses.append({"type": mtype, "status": "sent", "response": res})
@@ -162,7 +160,11 @@ class WhatsAppSchedulerService:
                         job.status = "completed" if total_failed == 0 else ("partial" if total_sent > 0 else "failed")
                         job.completed_at = datetime.now(timezone.utc)
 
-                        await db.commit()
+                        if total_credits_deducted > 0 and user:
+                            await WhatsAppCreditService.deduct_credits(db, user, total_credits_deducted)
+                        else:
+                            await db.commit()
+
                         print(f"[WhatsAppScheduler] ✓ Job #{job.id} completed! Sent: {total_sent}, Failed: {total_failed}, Credits: {total_credits_deducted}")
 
                     except Exception as job_err:

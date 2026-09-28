@@ -56,32 +56,30 @@ async def test_recordings_path_traversal_defense():
 
 
 @pytest.mark.asyncio
-async def test_internal_webhook_security():
+async def test_internal_webhook_security(client: AsyncClient):
     """Verify internal webhooks require X-Internal-Secret."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # /complete without secret -> 401
-        resp1 = await client.post("/api/calls/123/complete", json={})
-        assert resp1.status_code == 401
+    # /complete without secret -> 401
+    resp1 = await client.post("/api/calls/123/complete", json={})
+    assert resp1.status_code == 401
 
-        # /complete with forged secret -> 401
-        resp2 = await client.post(
-            "/api/calls/123/complete",
-            json={},
-            headers={"X-Internal-Secret": "forged_secret_token_123"}
-        )
-        assert resp2.status_code == 401
+    # /complete with forged secret -> 401
+    resp2 = await client.post(
+        "/api/calls/123/complete",
+        json={},
+        headers={"X-Internal-Secret": "forged_secret_token_123"}
+    )
+    assert resp2.status_code == 401
 
-        # /lookup without secret -> 401
-        resp3 = await client.get("/api/calls/lookup?room_name=call-123")
-        assert resp3.status_code == 401
+    # /lookup without secret -> 401
+    resp3 = await client.get("/api/calls/lookup?room_name=call-123")
+    assert resp3.status_code == 401
 
-        # /lookup with forged secret -> 401
-        resp4 = await client.get(
-            "/api/calls/lookup?room_name=call-123",
-            headers={"X-Internal-Secret": "wrong_secret"}
-        )
-        assert resp4.status_code == 401
+    # /lookup with forged secret -> 401
+    resp4 = await client.get(
+        "/api/calls/lookup?room_name=call-123",
+        headers={"X-Internal-Secret": "wrong_secret"}
+    )
+    assert resp4.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -129,3 +127,71 @@ async def test_atomic_credit_deductions():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_security_headers_and_request_id(client: AsyncClient):
+    """Verify enterprise security headers, request tracing ID, and response timing are attached."""
+    resp = await client.get("/api/health")
+    assert resp.status_code == 200
+
+    # OWASP Security Headers
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert resp.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert resp.headers.get("X-XSS-Protection") == "1; mode=block"
+    assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+    # Distributed Tracing & APM Headers
+    assert "X-Request-ID" in resp.headers
+    assert resp.headers["X-Request-ID"].startswith("req_")
+    assert "X-Response-Time" in resp.headers
+    assert resp.headers["X-Response-Time"].endswith("ms")
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_protection(client: AsyncClient):
+    """Verify rate limiter blocks automated brute-force attempts on sensitive endpoints."""
+    # /api/auth/login threshold is 15 requests/min
+    responses = []
+    for _ in range(18):
+        r = await client.post("/api/auth/login", json={"identifier": "attacker@example.com", "password": "wrong"})
+        responses.append(r)
+
+    # The later requests in the burst must be throttled with HTTP 429
+    status_codes = [r.status_code for r in responses]
+    assert 429 in status_codes
+
+    rate_limited_resp = next(r for r in responses if r.status_code == 429)
+    assert "Retry-After" in rate_limited_resp.headers
+    assert rate_limited_resp.headers.get("RateLimit-Remaining") == "0"
+
+
+@pytest.mark.asyncio
+async def test_atomic_whatsapp_credit_service(db_session: AsyncSession):
+    """Verify WhatsAppCreditService applies atomic decrements and protects wallet balances."""
+    from app.services.whatsapp_credit_service import WhatsAppCreditService
+
+    test_user = User(
+        id=202,
+        email="wa_wallet@callinggen.in",
+        full_name="WA Wallet User",
+        credits=40,
+        hashed_password="hashed_pw",
+    )
+    db_session.add(test_user)
+    await db_session.commit()
+
+    # Deduct 15 credits atomically
+    new_bal = await WhatsAppCreditService.deduct_credits(db_session, test_user, 15)
+    assert new_bal == 25
+
+    bal_check = await db_session.execute(select(User.credits).where(User.id == 202))
+    assert bal_check.scalar_one() == 25
+
+    # Deduct 30 credits (exceeds balance 25) -> floor at 0
+    floored_bal = await WhatsAppCreditService.deduct_credits(db_session, test_user, 30)
+    assert floored_bal == 0
+
+    bal_check2 = await db_session.execute(select(User.credits).where(User.id == 202))
+    assert bal_check2.scalar_one() == 0
+

@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 try:
     import razorpay  # type: ignore
@@ -351,16 +351,21 @@ class PaymentService:
                 detail="User not found for credit allocation"
             )
 
-        # Add credits and update plan
+        # Atomically add credits and update plan
         old_credits = user.credits
-        user.credits += payment.credits
+        stmt = (
+            update(User)
+            .where(User.id == user.id)
+            .values(credits=func.coalesce(User.credits, 0) + payment.credits)
+        )
         if payment.plan_name in PLANS:
-            user.subscription_plan = payment.plan_name
-        print(f"Successfully processed payment. Allocated {payment.credits} credits to User {user.id}. Balance: {old_credits} -> {user.credits}. Plan: {user.subscription_plan}")
+            stmt = stmt.values(subscription_plan=payment.plan_name)
 
-        # Commit all modifications to users & payments tables
+        await db.execute(stmt)
         await db.commit()
+        await db.refresh(user)
         await db.refresh(payment)
+        print(f"Successfully processed payment. Allocated {payment.credits} credits to User {user.id}. Balance: {old_credits} -> {user.credits}. Plan: {user.subscription_plan}")
 
         # Trigger confirmation email in the background to prevent blocking uvicorn
         if user.email:

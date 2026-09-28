@@ -13,13 +13,13 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.auth import TokenPayload
 
-FALLBACK_SECRET = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
+FALLBACK_SECRET: str = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+_env_secret = os.getenv("SECRET_KEY")
+if not _env_secret:
     import sys
     print("[SECURITY WARNING] SECRET_KEY environment variable is not configured! Default fallback is active.", file=sys.stderr)
-    SECRET_KEY = FALLBACK_SECRET
-ALGORITHM = "HS256"
+SECRET_KEY: str = _env_secret or FALLBACK_SECRET
+ALGORITHM: str = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")

@@ -5,7 +5,7 @@ from typing import Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, update, case, func, and_, or_
 from openai import AsyncOpenAI
 
 from app.database import get_db
@@ -148,15 +148,20 @@ async def generate_report(
         call_credits = round(total_duration / 60, 1)
         credits_consumed = round(call_credits + 1.0, 1)
 
-        # Get current user record from db for remaining credits
-        user_stmt = select(User).where(User.id == current_user.id)
-        user_res = await db.execute(user_stmt)
-        db_user = user_res.scalars().first()
-        if db_user:
-            db_user.credits = max(0, (db_user.credits or 0) - 1)
-            remaining_credits = db_user.credits
-        else:
-            remaining_credits = max(0, (current_user.credits or 0) - 1)
+        # Atomically deduct 1 credit for AI report generation
+        await db.execute(
+            update(User)
+            .where(User.id == current_user.id)
+            .values(
+                credits=case(
+                    (User.credits >= 1, User.credits - 1),
+                    else_=0
+                )
+            )
+        )
+        await db.commit()
+        refreshed_user_res = await db.execute(select(User.credits).where(User.id == current_user.id))
+        remaining_credits = refreshed_user_res.scalar_one_or_none() or 0
 
         # Extract sample call summaries & notes
         call_summaries = [

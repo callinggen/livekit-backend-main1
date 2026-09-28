@@ -85,12 +85,23 @@ class WhatsAppCreditService:
         amount: int,
     ) -> int:
         """
-        Safely deduct credits and trigger notification if threshold breached.
+        Safely deduct credits atomically via SQL and trigger notification if threshold breached.
+        Eliminates double-spending and concurrent race conditions.
         """
         if amount <= 0:
             return user.credits or 0
 
-        user.credits = max(0, (user.credits or 0) - amount)
+        from sqlalchemy import update, case
+        await db.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(
+                credits=case(
+                    (User.credits >= amount, User.credits - amount),
+                    else_=0
+                )
+            )
+        )
         await db.commit()
         await db.refresh(user)
 
@@ -99,4 +110,4 @@ class WhatsAppCreditService:
         except Exception as e:
             print(f"[WhatsAppCreditService] Warning: Failed to check credit notifications: {e}")
 
-        return user.credits
+        return user.credits or 0

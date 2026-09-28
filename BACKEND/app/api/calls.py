@@ -30,22 +30,20 @@ from livekit import api as lk_api
 
 router = APIRouter()
 
-INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET")
-
 def verify_internal_secret(
     x_internal_secret: Optional[str] = Header(None, alias="X-Internal-Secret")
 ):
     """
-    Enforces authentication on internal worker/agent webhooks when INTERNAL_API_SECRET is configured.
+    Enforces authentication on internal worker/agent webhooks.
     Blocks unauthenticated external actors from forging call completions or transcript modifications.
     """
-    if INTERNAL_API_SECRET:
-        if not x_internal_secret or x_internal_secret != INTERNAL_API_SECRET:
-            print("[SECURITY] Unauthorized attempt on internal call endpoint. Missing or invalid X-Internal-Secret.")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unauthorized: Missing or invalid internal secret"
-            )
+    internal_secret = os.getenv("INTERNAL_API_SECRET") or "callinggen_internal_secret_fallback_key"
+    if not x_internal_secret or x_internal_secret != internal_secret:
+        print("[SECURITY] Unauthorized attempt on internal call endpoint. Missing or invalid X-Internal-Secret.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid internal secret"
+        )
     return True
 
 

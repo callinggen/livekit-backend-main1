@@ -26,7 +26,7 @@ router = APIRouter()
 
 def normalize_whatsapp_phone(raw_phone: str) -> str:
     """Normalize phone number to international WhatsApp format (e.g. 917656807447)."""
-    clean = "".join(c for c in str(raw_phone or "") if c.isdigit())
+    clean = "".join(c for c in (raw_phone or "") if c.isdigit())
     if len(clean) == 10:
         clean = "91" + clean
     return clean
@@ -218,7 +218,7 @@ async def send_bulk_whatsapp(
         raise HTTPException(status_code=400, detail="None of the selected recipients have a valid phone number.")
 
     # Convert items to dict for credit service
-    items_dicts = [item.dict() for item in req.items]
+    items_dicts = [item.model_dump() for item in req.items]
 
     # Calculate total required credits: (Text=1, Image=2, Document=3) per recipient
     total_required_credits = WhatsAppCreditService.calculate_total_credits(items_dicts, len(valid_recipients))
@@ -380,8 +380,7 @@ async def send_bulk_whatsapp(
                         text=personalized_text,
                     )
                     # Successful send -> Deduct 1 credit
-                    if current_user.credits >= WhatsAppCreditService.CREDIT_PER_TEXT:
-                        current_user.credits -= WhatsAppCreditService.CREDIT_PER_TEXT
+                    if (current_user.credits or 0) >= (total_credits_deducted + WhatsAppCreditService.CREDIT_PER_TEXT):
                         total_credits_deducted += WhatsAppCreditService.CREDIT_PER_TEXT
                         total_sent += 1
                         rec_item_statuses.append({"type": "text", "status": "sent", "response": res})
@@ -422,8 +421,7 @@ async def send_bulk_whatsapp(
                         file_name=item.file_name or ("image.png" if item.type == "image" else "document.pdf"),
                     )
                     # Successful send -> Deduct exact credits (1 credit per image/document)
-                    if current_user.credits >= item_cost:
-                        current_user.credits -= item_cost
+                    if (current_user.credits or 0) >= (total_credits_deducted + item_cost):
                         total_credits_deducted += item_cost
                         total_sent += 1
                         rec_item_statuses.append({"type": item.type, "status": "sent", "response": res})
@@ -467,8 +465,11 @@ async def send_bulk_whatsapp(
     send_job.status = "completed" if total_failed == 0 else ("partial" if total_sent > 0 else "failed")
     send_job.completed_at = datetime.now(timezone.utc)
 
-    # Save credit balance and job update to DB
-    await db.commit()
+    # Save credit balance atomically and job update to DB
+    if total_credits_deducted > 0:
+        await WhatsAppCreditService.deduct_credits(db, current_user, total_credits_deducted)
+    else:
+        await db.commit()
 
     return {
         "success": True,
