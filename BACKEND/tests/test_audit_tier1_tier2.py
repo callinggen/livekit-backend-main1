@@ -16,18 +16,7 @@ from app.services.call_service import CallService
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest.fixture(scope="module")
-async def test_session():
-    engine = create_async_engine(TEST_DB_URL, echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
-    async_session = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    yield async_session
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -96,9 +85,14 @@ async def test_internal_webhook_security():
 
 
 @pytest.mark.asyncio
-async def test_atomic_credit_deductions(test_session):
+async def test_atomic_credit_deductions():
     """Verify atomic SQL credit deduction prevents negative balances and double-spending."""
-    async with test_session() as db:
+    engine = create_async_engine(TEST_DB_URL, echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
         user = User(
             id=101,
             email="wallet_test@callinggen.in",
@@ -119,6 +113,7 @@ async def test_atomic_credit_deductions(test_session):
         await db.commit()
 
         u = await db.get(User, 101)
+        assert u is not None
         assert u.credits == 20
 
         # Attempt to deduct 40 credits when only 20 remain -> Floor at 0, no negative balance
@@ -130,4 +125,9 @@ async def test_atomic_credit_deductions(test_session):
         await db.commit()
 
         u = await db.get(User, 101)
+        assert u is not None
         assert u.credits == 0
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
