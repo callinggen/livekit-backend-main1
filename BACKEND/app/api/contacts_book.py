@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any
 import math
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, or_, and_, desc, asc, delete, case
+from sqlalchemy import select, func, or_, and_, desc, asc, delete, case, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -366,7 +366,7 @@ async def rename_contact_list(
         )
 
     stmt = (
-        SavedContact.__table__.update()
+        update(SavedContact)
         .where(
             SavedContact.user_id == current_user.id,
             SavedContact.tag == old_tag,
@@ -382,7 +382,7 @@ async def rename_contact_list(
         "success": True,
         "old_tag": old_tag,
         "new_tag": new_tag,
-        "updated_count": result.rowcount,
+        "updated_count": int(getattr(result, "rowcount", 0) or 0),
     }
 
 
@@ -403,7 +403,7 @@ async def delete_contact_list(
     return {
         "success": True,
         "tag": tag_name,
-        "deleted_count": result.rowcount,
+        "deleted_count": int(getattr(result, "rowcount", 0) or 0),
     }
 
 
@@ -646,5 +646,5 @@ async def batch_delete_saved_contacts(
 
     return {
         "success": True,
-        "deleted_count": result.rowcount,
+        "deleted_count": int(getattr(result, "rowcount", 0) or 0),
     }
