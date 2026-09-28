@@ -271,7 +271,8 @@ async def terminate_call_once(
         try:
             await asyncio.sleep(1.5)  # give recorder time to flush & close on Windows
             from agent import mix_wav_files
-            mix_wav_files(
+            await asyncio.to_thread(
+                mix_wav_files,
                 f"recordings/call_{call_id}_customer.wav",
                 f"recordings/call_{call_id}_agent.wav",
                 f"recordings/call_{call_id}.wav"

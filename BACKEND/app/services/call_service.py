@@ -447,7 +447,18 @@ class CallService:
                 if credits_to_deduct > 0:
                     owner = await _get_credit_owner_for_call(db, call)
                     if owner:
-                        owner.credits -= credits_to_deduct
+                        # Atomic credit decrement at database level to eliminate race conditions
+                        await db.execute(
+                            update(User)
+                            .where(User.id == owner.id)
+                            .values(
+                                credits=case(
+                                    (User.credits >= credits_to_deduct, User.credits - credits_to_deduct),
+                                    else_=0
+                                )
+                            )
+                        )
+                        await db.refresh(owner)
                         call.credits_deducted = credits_to_deduct
                         
                         try:

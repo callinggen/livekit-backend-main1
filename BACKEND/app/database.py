@@ -9,25 +9,35 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from typing import Any, Dict
+
 DB_PATH = (Path(__file__).resolve().parent.parent / "callinggen.db").as_posix()
-DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
+DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite+aiosqlite:///{DB_PATH}"
 
 class Base(DeclarativeBase):
     pass
 
+engine_kwargs: dict[str, Any] = {"echo": False}
+if "postgresql" in DATABASE_URL:
+    engine_kwargs.update({
+        "pool_size": 20,
+        "max_overflow": 10,
+        "pool_recycle": 1800,
+        "pool_pre_ping": True,
+    })
 
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False,  # Disabled verbose SQL engine log spam
+    **engine_kwargs
 )
 
-
-@event.listens_for(engine.sync_engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.close()
+if "sqlite" in DATABASE_URL:
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 print("-" * 50)
