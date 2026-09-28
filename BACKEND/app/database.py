@@ -10,12 +10,50 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase
 
 from typing import Any, Dict
+from datetime import datetime, timezone
+from sqlalchemy.types import TypeDecorator, DateTime
 
 DB_PATH = (Path(__file__).resolve().parent.parent / "callinggen.db").as_posix()
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite+aiosqlite:///{DB_PATH}"
 
 class Base(DeclarativeBase):
     pass
+
+
+class SafeDateTime(TypeDecorator):
+    """
+    Ensures safe datetime handling across SQLite and PostgreSQL.
+    Coerces naive datetimes or ISO strings to timezone-aware UTC datetimes.
+    """
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except Exception:
+                return None
+        return value
 
 engine_kwargs: dict[str, Any] = {"echo": False}
 if "postgresql" in DATABASE_URL:
