@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 import logging
@@ -19,6 +20,13 @@ class RequestIdAndTracingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         req_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex[:12]}"
         request.state.request_id = req_id
+
+        if os.getenv("SENTRY_DSN"):
+            try:
+                import sentry_sdk  # type: ignore # pyright: ignore[reportMissingImports]
+                sentry_sdk.set_tag("request_id", req_id)
+            except Exception:
+                pass
 
         start_time = time.perf_counter()
         try:

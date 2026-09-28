@@ -13,7 +13,22 @@ from app.services.queue_service import QueueService
 from app.services.scheduler_service import SchedulerService
 
 
-async def job_worker_loop():
+# Optional Enterprise APM Integration (Sentry)
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    try:
+        import sentry_sdk  # type: ignore # pyright: ignore[reportMissingImports]
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=os.getenv("ENVIRONMENT", "staging"),
+            traces_sample_rate=0.2,
+        )
+        print(f"[Worker] Sentry APM tracking initialized (Env: {os.getenv('ENVIRONMENT', 'staging')})")
+    except Exception as e:
+        print(f"[Worker] Could not initialize Sentry: {e}")
+
+
+async def job_worker_loop(shutdown_event: Optional[asyncio.Event] = None):
     """
     Continuous worker loop for campaign call queue dispatching.
     Uses PostgreSQL row-level locking (with_for_update skip_locked) to support
@@ -22,7 +37,7 @@ async def job_worker_loop():
     print("[Worker] Campaign Job Worker started")
     is_postgres = "postgresql" in str(engine.url)
 
-    while True:
+    while shutdown_event is None or not shutdown_event.is_set():
         try:
             async with AsyncSessionLocal() as db:
                 stmt = (
@@ -39,7 +54,13 @@ async def job_worker_loop():
 
                 if job is None:
                     # No active jobs found; brief rest before next polling tick
-                    await asyncio.sleep(1.5)
+                    try:
+                        await asyncio.wait_for(
+                            shutdown_event.wait() if shutdown_event else asyncio.sleep(1.5),
+                            timeout=1.5
+                        )
+                    except asyncio.TimeoutError:
+                        pass
                     continue
 
                 job_id = job.id
@@ -76,6 +97,8 @@ async def job_worker_loop():
 
         await asyncio.sleep(1)
 
+    print("[Worker] Job worker loop drained and stopped.")
+
 
 async def main():
     mode = os.getenv("WORKER_MODE", "all").lower()
@@ -91,10 +114,24 @@ async def main():
     print(f"Database Engine: {'PostgreSQL (Distributed Row Locking)' if 'postgresql' in str(engine.url) else 'SQLite'}")
     print("=" * 60)
 
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _on_signal():
+        print("\n[Worker] Received termination signal (SIGTERM/SIGINT). Draining in-flight tasks gracefully...")
+        shutdown_event.set()
+
+    if sys.platform != "win32":
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, _on_signal)
+            except NotImplementedError:
+                pass
+
     tasks = []
 
     if mode in ("all", "worker_only"):
-        tasks.append(asyncio.create_task(job_worker_loop(), name="job_worker"))
+        tasks.append(asyncio.create_task(job_worker_loop(shutdown_event), name="job_worker"))
 
     if mode in ("all", "scheduler_only"):
         tasks.append(asyncio.create_task(SchedulerService.run_scheduler_loop(), name="scheduler"))
@@ -103,11 +140,17 @@ async def main():
         print("[Worker] Error: No tasks selected to run.")
         return
 
-    # Keep running until cancelled
+    # Wait until shutdown event is triggered or tasks complete
     try:
-        await asyncio.gather(*tasks)
+        if sys.platform != "win32":
+            await shutdown_event.wait()
+        else:
+            await asyncio.gather(*tasks)
     except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
+    finally:
         print("[Worker] Shutting down worker tier...")
+        shutdown_event.set()
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

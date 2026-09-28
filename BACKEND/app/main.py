@@ -2,6 +2,24 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+# Optional Enterprise APM Integration (Sentry)
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    try:
+        import sentry_sdk  # type: ignore # pyright: ignore[reportMissingImports]
+        from sentry_sdk.integrations.fastapi import FastApiIntegration  # type: ignore # pyright: ignore[reportMissingImports]
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration  # type: ignore # pyright: ignore[reportMissingImports]
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            environment=os.getenv("ENVIRONMENT", "staging"),
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.2")),
+            integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        )
+        print(f"[APM] Sentry initialized in environment: {os.getenv('ENVIRONMENT', 'staging')}")
+    except Exception as e:
+        print(f"[APM] Could not initialize Sentry: {e}")
+
+
 import re
 import jwt
 from typing import Optional
