@@ -8,6 +8,8 @@
   "exclude": [
     "tests",
     "**/tests/**",
+    "alembic",
+    "**/alembic/**",
     "**/__pyrefly_virtual__/**"
   ]
 }
