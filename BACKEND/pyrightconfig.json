@@ -6,6 +6,8 @@
     "C:\\Python314\\Lib\\site-packages"
   ],
   "exclude": [
+    "tests",
+    "**/tests/**",
     "**/__pyrefly_virtual__/**"
   ]
 }
