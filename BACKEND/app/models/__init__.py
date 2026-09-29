@@ -22,4 +22,6 @@ from .email_template import EmailMarketingTemplate
 from .custom_domain import CustomEmailDomain
 from .user_smtp_config import UserSmtpConfig
 from .saved_contact import SavedContact
+from .credit_models import CreditTransaction, UsageEvent, AdminRateConfig
+from .knowledge import KnowledgeDocument, KnowledgeChunk
 

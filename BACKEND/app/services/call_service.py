@@ -9,6 +9,7 @@ from app.models.job import Job
 from app.models.campaign import Campaign
 from app.models.user import User
 from app.services.notification_service import notification_service
+from app.services.universal_credit_service import UniversalCreditService
 
 
 def classify_call_end(sip_was_active: bool, disconnect_reason: Optional[str], outcome_override: Optional[str], failure_reason: Optional[str]):
@@ -330,20 +331,27 @@ class CallService:
             
         # Determine if we should deduct a credit (transitioning to completed and billing is pending)
         if call.billing_status == "pending":
-            if is_success and not is_voicemail:
-                import math
-                credits_to_deduct = math.floor(max(0, call.duration) / 4)
-                
-                if credits_to_deduct > 0:
-                    owner = await _get_credit_owner_for_call(db, call)
-                    if owner:
-                        owner.credits -= credits_to_deduct
-                        call.credits_deducted = credits_to_deduct
-                        
-                        try:
-                            await notification_service.check_and_trigger_credit_notifications(db, owner)
-                        except Exception as e:
-                            print(f"Error checking credit notifications: {e}")
+            if is_success and not is_voicemail and (call.duration or 0) > 0:
+                owner = await _get_credit_owner_for_call(db, call)
+                if owner:
+                    try:
+                        tx = await UniversalCreditService.deduct_credits(
+                            db=db,
+                            user_id=owner.id,
+                            service="calling",
+                            count_or_duration=float(call.duration),
+                            reference_id=str(call.id),
+                            description=f"AI Calling – {int(call.duration)}s (~{round(call.duration/60.0, 1)} min)",
+                            metadata_json={"call_id": call.id, "room_name": call.room_name, "duration_seconds": call.duration}
+                        )
+                        call.credits_deducted = abs(tx.credits)
+                    except Exception as e:
+                        print(f"[UniversalCreditService] Error deducting call credits: {e}")
+                    
+                    try:
+                        await notification_service.check_and_trigger_credit_notifications(db, owner)
+                    except Exception as e:
+                        print(f"Error checking credit notifications: {e}")
                 
                 call.billing_status = "billed"
             else:

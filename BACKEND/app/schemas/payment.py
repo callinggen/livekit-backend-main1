@@ -3,7 +3,7 @@ from typing import Optional
 
 class PaymentCreateOrderRequest(BaseModel):
     plan_name: str
-    custom_credits: Optional[int] = None
+    custom_credits: Optional[float | int] = None
 
 class PaymentCreateOrderResponse(BaseModel):
     razorpay_order_id: str
@@ -20,4 +20,4 @@ class PaymentVerifyRequest(BaseModel):
 class PaymentVerifyResponse(BaseModel):
     status: str
     message: str
-    credits: int
+    credits: float | int

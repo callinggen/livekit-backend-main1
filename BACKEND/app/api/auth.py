@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy import select, func, or_
 from datetime import datetime, timedelta, timezone
 from pydantic import EmailStr, TypeAdapter, ValidationError
 import random

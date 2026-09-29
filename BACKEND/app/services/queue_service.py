@@ -213,10 +213,10 @@ class QueueService:
 
         campaign = await db.get(Campaign, job.campaign_id)
         if campaign and campaign.user_id:
-            from app.models.user import User
-            user = await db.get(User, campaign.user_id)
-            if user and user.credits < 15:
-                print(f"User {user.id} has insufficient credits ({user.credits} < 15). Failing contact {contact.id} and pausing campaign.")
+            from app.services.universal_credit_service import UniversalCreditService
+            allowed, req_cr, reason = await UniversalCreditService.check_preflight(db, campaign.user_id, "calling", count_or_duration=60)
+            if not allowed:
+                print(f"[QueueService] User {campaign.user_id} has insufficient credits ({reason}). Pausing campaign {campaign.id}.")
                 contact.status = "failed"
                 contact.response = "Insufficient Credits"
                 job.status = "paused"

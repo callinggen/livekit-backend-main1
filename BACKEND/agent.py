@@ -29,6 +29,7 @@ from app.models.call import Call
 from app.models.contact import Contact
 from app.models.campaign import Campaign
 from app.models.agent import Agent as AgentModel
+from app.models.knowledge import KnowledgeDocument
 
 load_dotenv(override=True)
 
@@ -104,6 +105,7 @@ def build_agent_instructions(
     custom_script: str,
     customer_name: str,
     whatsapp_enabled: bool = False,
+    knowledge_context: str = "",
 ) -> str:
     """
     Compose the full system prompt for the agent from:
@@ -212,7 +214,24 @@ CAMPAIGN-SPECIFIC SCRIPT:
 
 {DATE_TIME_VALIDATION_RULES}
 
+
 {whatsapp_protocol}
+
+{f'''================================================================================
+VERIFIED BUSINESS KNOWLEDGE BASE (ACTIVE FOR THIS CALL):
+{knowledge_context.strip()}
+================================================================================
+
+KNOWLEDGE BASE CONVERSATION RULES:
+1. When the customer asks about any company policies, pricing, offerings, refund terms, working hours, FAQs, or services, speak with confidence using the verified knowledge base facts above.
+2. Keep your spoken explanations conversational, concise (1-2 sentences), and directly answer their question.
+3. If they ask a detailed question that requires searching broader catalogs, sheets, or archives, invoke the `knowledge_search(query=...)` tool.
+4. Never contradict the verified knowledge base facts or invent unauthorized figures.
+''' if knowledge_context.strip() else '''KNOWLEDGE BASE & RAG LOOKUP PROTOCOL:
+- You have access to the `knowledge_search` tool.
+- Use `knowledge_search(query=...)` whenever the caller asks about company services, features, pricing, policies, return/refund rules, warranty, business hours, FAQs, or background.
+- Answer accurately based strictly on the retrieved knowledge base excerpts. Never invent or hallucinate company information.
+'''}
 
 REMINDER ON HANGUP:
 Whenever the conversation reaches its end (whether appointment booked, customer declined, or customer says goodbye), call `finish_call` immediately with:
@@ -429,11 +448,24 @@ class DynamicAgent(Agent):
         greeting_instructions: str = "",
         call_answered_event: asyncio.Event | None = None,
         whatsapp_enabled: bool = False,
+        knowledge_context: str = "",
     ):
-        instructions = build_agent_instructions(agent_type, custom_script, customer_name, whatsapp_enabled=whatsapp_enabled)
+        instructions = build_agent_instructions(
+            agent_type,
+            custom_script,
+            customer_name,
+            whatsapp_enabled=whatsapp_enabled,
+            knowledge_context=knowledge_context,
+        )
         self._greeting_instructions = greeting_instructions
         self._call_answered_event = call_answered_event
         tools: list[Any] = [finish_call]
+        try:
+            from knowledge_tool import knowledge_search
+            tools.append(knowledge_search)
+        except Exception as kb_tool_err:
+            print(f"[agent] Could not load knowledge_tool: {kb_tool_err}")
+
         if whatsapp_enabled:
             try:
                 from whatsapp_tool import send_whatsapp_info
@@ -568,9 +600,30 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                 if isinstance(wa_config, dict):
                     whatsapp_enabled = bool(wa_config.get("enabled", False))
 
+            # Load attached knowledge docs context
+            knowledge_context_parts = []
+            knowledge_doc_ids = getattr(campaign, "knowledge_document_ids", None) if campaign else None
+            user_id = campaign.user_id if campaign else (call.user_id if call else 1)
+            
+            if knowledge_doc_ids and isinstance(knowledge_doc_ids, list) and len(knowledge_doc_ids) > 0:
+                valid_ids = [int(i) for i in knowledge_doc_ids if str(i).isdigit()]
+                if valid_ids:
+                    try:
+                        kb_stmt = select(KnowledgeDocument).where(KnowledgeDocument.id.in_(valid_ids))
+                        kb_res = await db.execute(kb_stmt)
+                        for doc in kb_res.scalars().all():
+                            raw = (doc.raw_content or "").strip()
+                            snippet = raw[:1200] if len(raw) > 1200 else raw
+                            knowledge_context_parts.append(f"[{doc.title} ({doc.source_type.upper()})]\n{snippet}")
+                    except Exception as kb_fetch_err:
+                        print(f"[agent] Warning loading knowledge context: {kb_fetch_err}")
+            
+            knowledge_context_str = "\n\n".join(knowledge_context_parts)
+
             return {
                 "job_id": job.id if job else None,
                 "campaign_id": campaign.id if campaign else None,
+                "user_id": user_id,
                 "agent_id": agent_obj.id if agent_obj else None,
                 "agent_type": campaign.agent if campaign else "Voice-E (Tax Agent)",
                 "script": campaign.script if campaign else "",
@@ -580,11 +633,13 @@ async def _get_campaign_info(call_id: int) -> dict[str, Any] | None:
                 "voice": voice_profile,
                 "whatsapp_enabled": whatsapp_enabled,
                 "whatsapp_automation": campaign.whatsapp_automation if campaign else None,
+                "knowledge_document_ids": knowledge_doc_ids,
+                "knowledge_context": knowledge_context_str,
                 "direction": "outbound",
             }
     except Exception as e:
         print(f"[agent] Warning: could not fetch campaign info for call {call_id}: {e}")
-        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False, "direction": "outbound"}
+        return {"agent_type": "Voice-E (Tax Agent)", "script": "", "customer_name": "", "metadata_fields": {}, "voice": "Meera", "whatsapp_enabled": False, "direction": "outbound", "knowledge_context": "", "knowledge_document_ids": None}
 
 
 async def entrypoint(ctx: JobContext):
@@ -998,10 +1053,12 @@ async def entrypoint(ctx: JobContext):
                         state["customer_has_spoken"] = True
                         state["call_phase"] = "conversation"
 
-        # Store session in ACTIVE_CALLS so finish_call can find it
+        # Store session in ACTIVE_CALLS so finish_call and knowledge_tool can find it
         ACTIVE_CALLS[room_name] = {
             "session": None,
             "call_id": call_id,
+            "user_id": campaign_info.get("user_id"),
+            "knowledge_document_ids": campaign_info.get("knowledge_document_ids"),
             "call_phase": "waiting_for_answer",
             "job_id": campaign_info.get("job_id"),
             "campaign_id": campaign_info.get("campaign_id"),
@@ -1107,6 +1164,7 @@ async def entrypoint(ctx: JobContext):
                 greeting_instructions=greeting_text,
                 call_answered_event=call_answered_event,
                 whatsapp_enabled=campaign_info.get("whatsapp_enabled", False),
+                knowledge_context=campaign_info.get("knowledge_context", ""),
             ),
         )
         if ACTIVE_CALLS.get(room_name):

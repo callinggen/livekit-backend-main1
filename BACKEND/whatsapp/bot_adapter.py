@@ -113,10 +113,10 @@ class WhatsAppMessageParser:
             return None
 
         event = payload.get("event") or payload.get("type") or ""
-        event_lower = str(event).lower()
+        event_str = str(event).lower().replace(".", "_").replace("-", "_")
 
-        # ONLY process messages.upsert. Ignore updates, presence, etc.
-        if event_lower and "messages.upsert" not in event_lower:
+        # Process messages_upsert, messages_update, message, etc. Ignore presence, connection, etc.
+        if event_str and ("message" not in event_str and "messages_upsert" not in event_str and "messages" not in event_str):
             return None
 
         # Robust extraction of the message object from Evolution API payload
@@ -130,6 +130,8 @@ class WhatsAppMessageParser:
             # Sometimes data has "messages" array
             if "messages" in data and isinstance(data["messages"], list) and len(data["messages"]) > 0:
                 msg_obj = data["messages"][0]
+            elif "message" in data and isinstance(data["message"], dict) and ("conversation" in data["message"] or "extendedTextMessage" in data["message"] or "imageMessage" in data["message"]):
+                msg_obj = data
             # Sometimes data itself is the message object (v1)
             elif "key" in data or "message" in data:
                 msg_obj = data
@@ -222,6 +224,7 @@ class WhatsAppBotPipeline:
     def __init__(self):
         self.dedup_store = DeduplicationStore()
         self.session_manager = WhatsAppSessionManager()
+        self.is_active: bool = True
 
     def get_system_prompt(self, agent_type: str = "Meera (Morning Tax)", customer_name: str = "") -> str:
         """
@@ -311,6 +314,10 @@ class WhatsAppBotPipeline:
         """
         Full orchestration: Parse webhook -> Deduplicate -> Call LLM -> Deliver Response Adapter.
         """
+        if not self.is_active:
+            print("[WhatsAppBotPipeline] Bot is currently toggled OFF. Ignoring incoming message.")
+            return {"status": "ignored", "reason": "bot_disabled"}
+
         parsed = WhatsAppMessageParser.parse_webhook_payload(payload)
         if not parsed:
             return {"status": "ignored", "reason": "non_actionable_or_outbound"}

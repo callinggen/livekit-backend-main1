@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import DateTime, Integer, String, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -65,9 +65,19 @@ class User(Base):
         nullable=True,
     )
 
-    credits: Mapped[int] = mapped_column(
-        Integer,
-        default=2000,
+    credits: Mapped[float] = mapped_column(
+        Float,
+        default=2000.0,
+    )
+
+    subscription_credit_balance: Mapped[float] = mapped_column(
+        Float,
+        default=2000.0,
+    )
+
+    topup_credit_balance: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
     )
 
     subscription_plan: Mapped[str | None] = mapped_column(
@@ -107,4 +117,5 @@ class User(Base):
 
     agents = relationship("Agent", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
+    credit_transactions = relationship("CreditTransaction", back_populates="user", cascade="all, delete-orphan")
 

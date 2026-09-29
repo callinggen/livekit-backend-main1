@@ -540,6 +540,13 @@ class EmailAutomationService:
                 )
 
                 if smtp_config:
+                    # Pre-flight credit check
+                    from app.services.universal_credit_service import UniversalCreditService
+                    allowed, req_cr, reason = await UniversalCreditService.check_preflight(db, campaign.user_id, "email", count_or_duration=1)
+                    if not allowed:
+                        print(f"[EmailAutomation] Insufficient credits for user {campaign.user_id}: {reason}")
+                        return {"success": False, "call_id": call_id, "error": f"Insufficient credits: {reason}"}
+
                     # Dispatched directly through client's connected authenticated mailbox (Gmail / Outlook / Zoho / Custom SMTP)
                     await smtp_mailbox_service.send_email_via_smtp(
                         smtp_config=smtp_config,
@@ -549,6 +556,20 @@ class EmailAutomationService:
                         from_name=from_name,
                         reply_to=reply_to,
                     )
+                    
+                    # Deduct email credit
+                    try:
+                        await UniversalCreditService.deduct_credits(
+                            db=db,
+                            user_id=campaign.user_id,
+                            service="email",
+                            count_or_duration=1,
+                            reference_id=f"call_{call_id}_email",
+                            description=f"Email Automation – 1 email to {dest_email}"
+                        )
+                    except Exception as cr_err:
+                        print(f"[EmailAutomation] Warning: Failed to deduct email credit: {cr_err}")
+
                     print(
                         f"[EmailAutomation] Email sent to {dest_email} via user SMTP ({smtp_config.sender_email}) for Call {call_id} | template={template_id}"
                     )

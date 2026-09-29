@@ -10,7 +10,7 @@ class Token(BaseModel):
     is_first_login: bool = False
     is_admin: bool = False
     refresh_token: str | None = None
-    credits: int = 2000
+    credits: float = 2000.0
     subscription_plan: str | None = None
     company_name: str | None = None
     industry: str | None = None
@@ -34,7 +34,7 @@ class UserResponse(BaseModel):
     id: int
     email: str | None = None
     phone_number: str | None = None
-    credits: int = 2000
+    credits: float = 2000.0
     subscription_plan: str | None = None
 
     class Config:
@@ -75,7 +75,7 @@ class UserCreateRequest(BaseModel):
     phone_number: str | None = None
     password: str | None = None
     subscription_plan: str | None = None
-    credits: int | None = None
+    credits: float | None = None
     company_name: str | None = None
     industry: str | None = None
     agent_name: str | None = None
@@ -92,7 +92,7 @@ class RegisterRequest(BaseModel):
     phone_number: str | None = None
     password: str
     subscription_plan: str | None = None
-    credits: int | None = None
+    credits: float | None = None
     company_name: str | None = None
     industry: str | None = None
     agent_name: str | None = None

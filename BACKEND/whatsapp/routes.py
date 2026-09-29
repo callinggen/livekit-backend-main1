@@ -336,10 +336,31 @@ async def send_media(req: SendMediaMessageRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class BotStatusRequest(BaseModel):
+    is_active: bool
+
+
+@router.get("/bot-status")
+async def get_bot_status():
+    """Returns current active status of the WhatsApp AI Bot."""
+    from .bot_adapter import whatsapp_bot_pipeline
+    return {"success": True, "is_active": whatsapp_bot_pipeline.is_active, "status": "active" if whatsapp_bot_pipeline.is_active else "offline"}
+
+
+@router.post("/bot-status")
+async def set_bot_status(req: BotStatusRequest):
+    """Enables or disables the WhatsApp AI Bot."""
+    from .bot_adapter import whatsapp_bot_pipeline
+    whatsapp_bot_pipeline.is_active = req.is_active
+    print(f"[whatsapp_routes] Updated WhatsApp bot status: is_active={req.is_active}")
+    return {"success": True, "is_active": whatsapp_bot_pipeline.is_active, "message": f"Bot is now {'active' if req.is_active else 'offline'}"}
+
+
 @router.get("/webhook")
 async def webhook_verification():
     """Webhook verification/health check endpoint."""
-    return {"status": "active", "message": "WhatsApp webhook endpoint is ready"}
+    from .bot_adapter import whatsapp_bot_pipeline
+    return {"status": "active" if whatsapp_bot_pipeline.is_active else "offline", "is_active": whatsapp_bot_pipeline.is_active, "message": "WhatsApp webhook endpoint is ready"}
 
 
 @router.post("/webhook")
@@ -350,11 +371,14 @@ async def handle_whatsapp_webhook(payload: Dict[str, Any], background_tasks: Bac
     """
     from .bot_adapter import whatsapp_bot_pipeline
 
+    print(f"[whatsapp_webhook] Received webhook event: {payload.get('event') or payload.get('type')}, instance: {payload.get('instance')}")
+
     async def _process_webhook():
         try:
-            await whatsapp_bot_pipeline.process_incoming_message(payload)
+            res = await whatsapp_bot_pipeline.process_incoming_message(payload)
+            print(f"[whatsapp_webhook] Processed webhook result: {res.get('status')}, phone: {res.get('sender_phone')}")
         except Exception as e:
-            print(f"[whatsapp_routes] Error processing webhook async: {e}")
+            print(f"[whatsapp_webhook] Error processing webhook async: {e}")
 
     background_tasks.add_task(_process_webhook)
     return {"success": True, "message": "Webhook queued for processing"}

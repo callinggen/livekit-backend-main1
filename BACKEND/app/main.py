@@ -24,6 +24,8 @@ from app.api.whatsapp_send import router as whatsapp_send_router
 from app.api.whatsapp_materials import router as whatsapp_materials_router
 from app.api.whatsapp_history import router as whatsapp_history_router
 from app.api.contacts_book import router as contacts_book_router
+from app.api.billing import router as billing_router
+from app.api.knowledge import router as knowledge_router
 from whatsapp.routes import router as whatsapp_router
 
 
@@ -56,6 +58,7 @@ from app.models.whatsapp_material import WhatsAppMaterial
 from app.models.whatsapp_send_job import WhatsAppSendJob
 from app.models.whatsapp_send_recipient import WhatsAppSendRecipient
 from app.models.saved_contact import SavedContact
+from app.models.knowledge import KnowledgeDocument, KnowledgeChunk  # registers knowledge tables
 
 from app.core.security import get_password_hash
 from app.services.campaign_service import CampaignService
@@ -295,7 +298,8 @@ app.mount("/api/recordings", StaticFiles(directory="recordings"), name="recordin
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.1.4:3000"],
+    allow_origin_regex=r"^https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -321,6 +325,8 @@ app.include_router(whatsapp_send_router, prefix="/api/whatsapp", tags=["WhatsApp
 app.include_router(whatsapp_materials_router, prefix="/api/whatsapp", tags=["WhatsApp Materials"])
 app.include_router(whatsapp_history_router, prefix="/api/whatsapp", tags=["WhatsApp History"])
 app.include_router(contacts_book_router, prefix="/api", tags=["Contacts Book"])
+app.include_router(billing_router, prefix="/api", tags=["Universal Billing & Credits"])
+app.include_router(knowledge_router, prefix="/api", tags=["Knowledge Base"])
 
 
 

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON, Boolean
+from sqlalchemy import DateTime, ForeignKey, Integer, String, JSON, Boolean, Float
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -128,9 +128,9 @@ class Call(Base):
         nullable=True,
     )
 
-    credits_deducted: Mapped[int] = mapped_column(
-        Integer,
-        default=0,
+    credits_deducted: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
     )
 
     outcome: Mapped[str | None] = mapped_column(

@@ -34,7 +34,7 @@ class ReportRequest(BaseModel):
     agent_names: List[str] = []
     campaign_breakdown: List[CampaignMetric] = []
     credits_consumed: float = 0.0
-    remaining_credits: int = 0
+    remaining_credits: float = 0.0
     appointments_booked: int = 0
     call_summaries: List[str] = []
 

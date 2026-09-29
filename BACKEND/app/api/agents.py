@@ -69,6 +69,7 @@ PRIMARY GOAL: Book a fifteen-minute consultation with a Senior Tax Strategist.""
     }
 ]
 
+@router.get("", response_model=List[AgentResponse])
 @router.get("/", response_model=List[AgentResponse])
 async def get_agents(
     current_user: User = Depends(get_current_user),
@@ -127,6 +128,7 @@ async def get_agents(
 
     return agents
 
+@router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent(
     agent_data: AgentCreate,
