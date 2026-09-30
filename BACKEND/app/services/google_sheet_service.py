@@ -127,7 +127,7 @@ async def sync_google_sheet_for_tag(
 
     added_count = 0
     updated_count = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     new_records = []
     seen_in_batch = set()
 

@@ -263,7 +263,7 @@ async def list_contact_lists_summary(
         if s not in sources_by_tag[t]:
             sources_by_tag[t].append(s)
 
-        if isinstance(mf, dict):
+        if s == "Google Sheet" and isinstance(mf, dict):
             url = mf.get("google_sheet_url") or mf.get("sheet_url")
             if url and t not in sheet_url_by_tag:
                 sheet_url_by_tag[t] = str(url)
@@ -278,7 +278,8 @@ async def list_contact_lists_summary(
     for r in rows:
         tag_name = r.tag
         sheet_url = sheet_url_by_tag.get(tag_name)
-        is_sheet = bool(sheet_url or "Google Sheet" in sources_by_tag.get(tag_name, []))
+        tag_sources = sources_by_tag.get(tag_name, [])
+        is_sheet = bool(sheet_url and "Google Sheet" in tag_sources)
 
         summaries.append(
             SavedContactListSummary(
@@ -286,10 +287,10 @@ async def list_contact_lists_summary(
                 total_contacts=r.total_contacts or 0,
                 valid_phones=int(r.valid_phones or 0),
                 with_email=int(r.with_email or 0),
-                sources=sources_by_tag.get(tag_name, ["Manual"]),
-                source_url=sheet_url,
+                sources=tag_sources or ["Manual"],
+                source_url=sheet_url if is_sheet else None,
                 is_google_sheet=is_sheet,
-                last_synced_at=last_synced_by_tag.get(tag_name),
+                last_synced_at=last_synced_by_tag.get(tag_name) if is_sheet else None,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
             )
@@ -317,6 +318,7 @@ async def sync_contact_list_from_google_sheet(
             .where(
                 SavedContact.user_id == current_user.id,
                 SavedContact.tag == tag_name,
+                SavedContact.source == "Google Sheet",
                 SavedContact.metadata_fields.isnot(None),
             )
             .limit(10)
@@ -330,7 +332,7 @@ async def sync_contact_list_from_google_sheet(
     if not sheet_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No Google Sheet URL found for list '{tag_name}'. Please provide a valid Google Sheet link.",
+            detail=f"List '{tag_name}' is not connected to a Google Sheet.",
         )
 
     try:

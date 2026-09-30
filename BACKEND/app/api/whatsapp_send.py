@@ -284,9 +284,9 @@ async def send_bulk_whatsapp(
         try:
             cleaned_iso = req.scheduled_for.replace("Z", "+00:00")
             parsed_dt = datetime.fromisoformat(cleaned_iso)
-            # Ensure future time
+            # Ensure future time in naive UTC
             if parsed_dt:
-                scheduled_dt = parsed_dt
+                scheduled_dt = parsed_dt.astimezone(timezone.utc).replace(tzinfo=None) if parsed_dt.tzinfo else parsed_dt
         except Exception as dt_err:
             print(f"[SendBulk] Error parsing scheduled_for: {dt_err}")
 
@@ -447,7 +447,7 @@ async def send_bulk_whatsapp(
             status=rec_status,
             error_message=last_rec_error,
             details={"items": rec_item_statuses},
-            sent_at=datetime.now(timezone.utc),
+            sent_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
         db.add(rec_log)
 
@@ -463,7 +463,7 @@ async def send_bulk_whatsapp(
     send_job.failed_count = total_failed
     send_job.credits_deducted = total_credits_deducted
     send_job.status = "completed" if total_failed == 0 else ("partial" if total_sent > 0 else "failed")
-    send_job.completed_at = datetime.now(timezone.utc)
+    send_job.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Save credit balance atomically and job update to DB
     if total_credits_deducted > 0:

@@ -1,9 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, ForeignKey, Text
+from sqlalchemy import Integer, String, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, SafeDateTime
 
 
 class EmailContact(Base):
@@ -21,7 +21,7 @@ class EmailContact(Base):
     # Status: pending | sent | failed | bounced | unsubscribed
     status: Mapped[str] = mapped_column(String, default="pending")
 
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(SafeDateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     campaign = relationship("EmailCampaign", back_populates="contacts")

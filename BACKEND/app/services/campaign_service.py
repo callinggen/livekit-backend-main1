@@ -254,12 +254,16 @@ class CampaignService:
                 from app.api.contacts_book import normalize_phone
                 from datetime import datetime, timezone
                 
-                now = datetime.now(timezone.utc)
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 tag_name = (getattr(data, "contact_book_tag", None) or data.campaign_name or "Campaign").strip()
-                source_label = f"Campaign: {data.campaign_name}"
+                is_gs = (getattr(data, "upload_source", None) == "google_sheet")
+                source_label = "Google Sheet" if is_gs else f"Call Manager: {data.campaign_name}"
 
                 existing_res = await db.execute(
-                    select(SavedContact).where(SavedContact.user_id == user_id)
+                    select(SavedContact).where(
+                        SavedContact.user_id == user_id,
+                        SavedContact.tag == tag_name,
+                    )
                 )
                 existing_map = {c.phone: c for c in existing_res.scalars().all()}
                 
@@ -278,17 +282,27 @@ class CampaignService:
                                 email_val = item.metadata_fields[k].strip()
                                 break
 
+                    clean_item_meta = dict(item.metadata_fields or {})
+                    if not is_gs:
+                        clean_item_meta.pop("google_sheet_url", None)
+                        clean_item_meta.pop("google_sheet_id", None)
+                        clean_item_meta.pop("last_synced_at", None)
+
                     if norm_p in existing_map:
                         sc = existing_map[norm_p]
                         if item.name and item.name != "Unknown":
                             sc.name = item.name
                         if email_val:
                             sc.email = email_val
-                        if tag_name:
-                            sc.tag = tag_name
                         sc.source = source_label
-                        if item.metadata_fields:
-                            sc.metadata_fields = {**(sc.metadata_fields or {}), **item.metadata_fields}
+                        if not is_gs and sc.metadata_fields:
+                            sc_meta = dict(sc.metadata_fields)
+                            sc_meta.pop("google_sheet_url", None)
+                            sc_meta.pop("google_sheet_id", None)
+                            sc_meta.pop("last_synced_at", None)
+                            sc.metadata_fields = {**sc_meta, **clean_item_meta}
+                        else:
+                            sc.metadata_fields = {**(sc.metadata_fields or {}), **clean_item_meta}
                         sc.updated_at = now
                     else:
                         new_sc = SavedContact(
@@ -298,7 +312,7 @@ class CampaignService:
                             email=email_val,
                             source=source_label,
                             tag=tag_name,
-                            metadata_fields=item.metadata_fields or {},
+                            metadata_fields=clean_item_meta,
                             created_at=now,
                             updated_at=now,
                         )
@@ -307,7 +321,7 @@ class CampaignService:
 
                 if new_saved:
                     db.add_all(new_saved)
-                print(f"[CampaignService] Saved {len(data.contacts)} contacts to Contact Book under tag '{tag_name}'")
+                print(f"[CampaignService] Saved {len(data.contacts)} contacts to Contact Book under tag '{tag_name}' (source: {source_label})")
             except Exception as save_err:
                 print(f"[CampaignService] Warning: Failed to save to Contact Book: {save_err}")
 

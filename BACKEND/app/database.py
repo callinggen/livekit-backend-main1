@@ -23,9 +23,10 @@ class Base(DeclarativeBase):
 class SafeDateTime(TypeDecorator):
     """
     Ensures safe datetime handling across SQLite and PostgreSQL.
-    Coerces naive datetimes or ISO strings to timezone-aware UTC datetimes.
+    Normalizes datetimes to offset-naive UTC to avoid asyncpg DataError
+    on TIMESTAMP WITHOUT TIME ZONE columns.
     """
-    impl = DateTime(timezone=True)
+    impl = DateTime(timezone=False)
     cache_ok = True
 
     def process_bind_param(self, value, dialect):
@@ -34,14 +35,14 @@ class SafeDateTime(TypeDecorator):
         if isinstance(value, str):
             try:
                 dt = datetime.fromisoformat(value)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
                 return dt
             except Exception:
                 return None
         if isinstance(value, datetime):
-            if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is not None:
+                return value.astimezone(timezone.utc).replace(tzinfo=None)
             return value
         return value
 

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime, Integer, String, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, SafeDateTime
 
 class Payment(Base):
     __tablename__ = "payments"
@@ -65,15 +65,15 @@ class Payment(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        SafeDateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         nullable=False,
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        SafeDateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         nullable=False,
     )
 

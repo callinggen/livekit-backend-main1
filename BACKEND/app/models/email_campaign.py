@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, SafeDateTime
 
 
 class EmailCampaign(Base):
@@ -28,7 +28,10 @@ class EmailCampaign(Base):
     schedule_date: Mapped[str | None] = mapped_column(String, nullable=True)
     schedule_time: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        SafeDateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
 
     total_sent: Mapped[int] = mapped_column(Integer, default=0)
     total_failed: Mapped[int] = mapped_column(Integer, default=0)

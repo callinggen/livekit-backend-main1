@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.database import Base
+from app.database import Base, SafeDateTime
 
 
 class WhatsAppSendJob(Base):
@@ -88,18 +88,18 @@ class WhatsAppSendJob(Base):
     )
 
     scheduled_for: Mapped[datetime | None] = mapped_column(
-        DateTime,
+        SafeDateTime,
         nullable=True,
         index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime,
-        default=lambda: datetime.now(timezone.utc),
+        SafeDateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime,
+        SafeDateTime,
         nullable=True,
     )
 
