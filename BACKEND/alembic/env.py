@@ -31,7 +31,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Set database URL dynamically
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# Escape percent signs so ConfigParser doesn't treat percent-encoded credentials
+# (e.g., %40 in passwords) as interpolation sequences, which raises InterpolationSyntaxError.
+config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 target_metadata = Base.metadata
 
 

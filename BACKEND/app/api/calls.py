@@ -36,9 +36,21 @@ def verify_internal_secret(
     """
     Enforces authentication on internal worker/agent webhooks.
     Blocks unauthenticated external actors from forging call completions or transcript modifications.
+    Uses hmac.compare_digest for constant-time comparison to prevent timing-attack secret extraction.
     """
-    internal_secret = os.getenv("INTERNAL_API_SECRET") or "callinggen_internal_secret_fallback_key"
-    if not x_internal_secret or x_internal_secret != internal_secret:
+    import hmac
+    internal_secret = os.getenv("INTERNAL_API_SECRET", "")
+    if not internal_secret:
+        # If the secret is not configured, refuse all requests rather than silently accepting
+        print("[SECURITY] INTERNAL_API_SECRET is not configured. Refusing internal endpoint request.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Internal API secret not configured on server"
+        )
+    if not x_internal_secret or not hmac.compare_digest(
+        x_internal_secret.encode("utf-8"),
+        internal_secret.encode("utf-8"),
+    ):
         print("[SECURITY] Unauthorized attempt on internal call endpoint. Missing or invalid X-Internal-Secret.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -499,13 +511,27 @@ from app.core.security import get_current_user
 async def list_calls(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    page: int = 1,
+    page_size: int = 100,
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    direction: Optional[str] = None,
+    campaign_id: Optional[int] = None,
 ):
     """
-    Return all calls for current user joined with their contact and campaign info.
-    Used by the Responses page.
+    Return paginated calls for current user joined with their contact and campaign info.
+    Supports server-side pagination, search, status and direction filtering.
+    Used by the Call Logs page.
     """
     from app.models.agent import Agent
-    result = await db.execute(
+    from sqlalchemy import func as sql_func
+
+    # Clamp page_size to a sane maximum to prevent accidental full-table scans
+    page_size = min(max(1, page_size), 500)
+    page = max(1, page)
+    offset = (page - 1) * page_size
+
+    base_query = (
         select(Call, Contact, Campaign, Agent)
         .outerjoin(Contact, Call.contact_id == Contact.id)
         .outerjoin(Campaign, or_(Call.campaign_id == Campaign.id, Contact.campaign_id == Campaign.id))
@@ -513,11 +539,42 @@ async def list_calls(
         .where(
             or_(
                 Campaign.user_id == current_user.id,
-                Call.tenant_id == current_user.id
+                Call.tenant_id == current_user.id,
             )
         )
         .where(or_(Campaign.campaign_name != "Website Demo Requests", Campaign.campaign_name.is_(None)))
-        .order_by(Call.id.desc())
+    )
+
+    if status and status.lower() != "all":
+        base_query = base_query.where(Call.status == status.lower())
+
+    if direction and direction.lower() != "all":
+        base_query = base_query.where(Call.direction == direction.lower())
+
+    if campaign_id:
+        base_query = base_query.where(
+            or_(Call.campaign_id == campaign_id, Campaign.id == campaign_id)
+        )
+
+    if search:
+        search_term = f"%{search}%"
+        base_query = base_query.where(
+            or_(
+                Contact.name.ilike(search_term),
+                Contact.phone.ilike(search_term),
+                Contact.customer_name.ilike(search_term),
+                Call.caller_number.ilike(search_term),
+                Call.transcript.ilike(search_term),
+            )
+        )
+
+    # Count total matching rows (for pagination metadata)
+    count_query = select(sql_func.count()).select_from(base_query.subquery())
+    total_res = await db.execute(count_query)
+    total = total_res.scalar() or 0
+
+    result = await db.execute(
+        base_query.order_by(Call.id.desc()).offset(offset).limit(page_size)
     )
     rows = result.all()
 
@@ -586,7 +643,12 @@ async def list_calls(
             "failure_reason": call.failure_reason or "",
             "sip_was_active": call.sip_was_active,
         })
-    return calls
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "calls": calls,
+    }
 
 
 @router.post("/calls/{call_id}/whatsapp-action")
