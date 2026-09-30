@@ -29,7 +29,7 @@ def extract_sheet_id(url_or_id: str) -> Optional[str]:
 
 def normalize_phone(phone: str) -> str:
     """Normalize phone number to standard E.164-like format."""
-    p = "".join(c for c in str(phone) if c.isdigit() or c == "+").strip()
+    p = "".join(c for c in phone if c.isdigit() or c == "+").strip()
     if p.startswith("0") and len(p) == 11:
         p = f"+91{p[1:]}"
     elif not p.startswith("+"):
