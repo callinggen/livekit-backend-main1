@@ -316,6 +316,8 @@ class CallService:
             or (call.duration and call.duration > 0)
             or customer_lines > 0
             or has_valid_appointment
+            or bool(recording_url)
+            or bool(transcript and len(transcript.strip()) > 0)
         )
 
         # ── Calculate timestamps and duration ─────────────────────────
@@ -638,6 +640,9 @@ class CallService:
 
         if call.status in ("completed", "failed", "ended"):
             return call
+
+        if failure_reason is None and outcome is None:
+            failure_reason = "call_failed"
 
         final_status, final_outcome, final_failure = classify_call_end(
             sip_was_active=call.sip_was_active,

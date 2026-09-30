@@ -119,7 +119,7 @@ class WhatsAppAutomationService:
             is_appointment = bool(contact and contact.appointment_date) or "appointment" in resp_lower or "appointment" in summary_lower
             is_callback = "callback" in resp_lower or "rescheduled" in resp_lower or "callback" in summary_lower
             is_answered = call_status == "completed" and "answered" in (resp_lower or "answered")
-            is_not_answered = call_status in ("failed", "incomplete") or "no answer" in resp_lower or "unreached" in resp_lower
+            is_not_answered = call_status in ("failed", "incomplete", "ended") or getattr(call, "outcome", "") in ("no_answer", "busy", "declined", "voicemail") or "no answer" in resp_lower or "unreached" in resp_lower
             is_cut = "cut" in resp_lower or "disconnected" in resp_lower
 
             # 3. Match against enabled rules
@@ -190,7 +190,7 @@ class WhatsAppAutomationService:
                         status_matched = False
                         if "completed" in status_filters and call_status == "completed":
                             status_matched = True
-                        elif any(f in ("failed", "unreached") for f in status_filters) and call_status in ("failed", "incomplete"):
+                        elif any(f in ("failed", "unreached", "ended", "missed") for f in status_filters) and call_status in ("failed", "incomplete", "ended"):
                             status_matched = True
                         elif "in progress" in status_filters and call_status in ("in progress", "pending"):
                             status_matched = True

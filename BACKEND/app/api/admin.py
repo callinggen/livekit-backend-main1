@@ -718,7 +718,7 @@ async def get_user_activity(user_id: str, db: AsyncSession = Depends(get_db)):
     successful_calls = succ_res.scalar() or 0
     
     # Failed calls today
-    fail_res = await db.execute(base_calls_query.where(Call.status.in_(["failed", "error"])))
+    fail_res = await db.execute(base_calls_query.where(Call.status.in_(["failed", "error", "ended"])))
     failed_calls = fail_res.scalar() or 0
     
     return {

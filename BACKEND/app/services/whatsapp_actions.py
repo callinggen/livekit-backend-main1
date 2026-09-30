@@ -71,6 +71,7 @@ class WhatsAppActionService:
         phone: Optional[str] = None,
         custom_payload: Optional[Dict[str, Any]] = None,
         instance_name: Optional[str] = None,
+        db: Optional[AsyncSession] = None,
     ) -> Dict[str, Any]:
         """
         Validate, deduplicate, and execute a structured WhatsApp action for a specific call.
@@ -94,186 +95,220 @@ class WhatsAppActionService:
 
         print(f"[WHATSAPP_ACTION_VALIDATED] call_id={call_id} action={action_upper}")
 
-        async with AsyncSessionLocal() as db:
-            # ── 2. Resolve Context Explicitly from DB ───────────────────────
-            call = await db.get(Call, call_id)
-            if not call:
-                print(f"[WHATSAPP_ACTION_FAILED] call_id={call_id} error='Call not found'")
-                return {"success": False, "status": "failed", "error": f"Call {call_id} not found."}
-
-            resolved_contact_id = contact_id or call.contact_id
-            contact = await db.get(Contact, resolved_contact_id) if resolved_contact_id else None
-
-            resolved_campaign_id = campaign_id or call.campaign_id
-            if not resolved_campaign_id and contact:
-                resolved_campaign_id = contact.campaign_id
-            if not resolved_campaign_id and call.job_id:
-                from app.models.job import Job
-                job_obj = await db.get(Job, call.job_id)
-                if job_obj:
-                    resolved_campaign_id = job_obj.campaign_id
-            campaign = await db.get(Campaign, resolved_campaign_id) if resolved_campaign_id else None
-
-            raw_phone = phone or (contact.phone if contact else call.phone)
-            resolved_phone = format_whatsapp_number(raw_phone)
-            customer_name = (contact.customer_name if (contact and contact.customer_name) else (contact.name if contact else "there")) or "there"
-            campaign_name = campaign.campaign_name if campaign else "Morning Tax Consultation"
-
-            if not resolved_phone:
-                print(f"[WHATSAPP_ACTION_FAILED] call_id={call_id} error='No destination phone number'")
-                return {"success": False, "status": "failed", "error": "No phone number available for WhatsApp action."}
-
-            # ── 3. Idempotency Check (Prevent duplicate sends) ──────────────
-            existing_action_query = select(WhatsAppAction).where(
-                WhatsAppAction.call_id == call_id,
-                WhatsAppAction.action == action_upper,
-                WhatsAppAction.status.in_(["pending", "sent"]),
-            )
-            existing_res = await db.execute(existing_action_query)
-            already_sent = existing_res.scalars().first()
-
-            if already_sent:
-                print(
-                    f"[WHATSAPP_ACTION_SKIPPED_DUPLICATE] call_id={call_id} contact_id={resolved_contact_id} "
-                    f"action={action_upper} phone={mask_phone(resolved_phone)} (already {already_sent.status} at {already_sent.created_at})"
-                )
-                return {
-                    "success": True,
-                    "status": "skipped_duplicate",
-                    "action": action_upper,
-                    "message": f"Action already {already_sent.status} for this call.",
-                }
-
-            # ── 4. Create Pending WhatsAppAction Record ─────────────────────
-            action_record = WhatsAppAction(
+        if db is not None:
+            return await WhatsAppActionService._execute_action_with_db(
+                db=db,
                 call_id=call_id,
-                contact_id=resolved_contact_id,
-                campaign_id=resolved_campaign_id,
-                phone=resolved_phone,
-                action=action_upper,
-                status="pending",
-                payload=custom_payload or {},
-            )
-            db.add(action_record)
-            await db.commit()
-            await db.refresh(action_record)
-
-            # ── 5. Build Structured Message / Media Payload ─────────────────
-            message_text, media_payload = WhatsAppActionService._build_action_payload(
-                action=action_upper,
-                customer_name=customer_name,
-                campaign_name=campaign_name,
+                action_upper=action_upper,
+                inst=inst,
+                contact_id=contact_id,
+                campaign_id=campaign_id,
+                phone=phone,
                 custom_payload=custom_payload,
             )
+        else:
+            async with AsyncSessionLocal() as session:
+                return await WhatsAppActionService._execute_action_with_db(
+                    db=session,
+                    call_id=call_id,
+                    action_upper=action_upper,
+                    inst=inst,
+                    contact_id=contact_id,
+                    campaign_id=campaign_id,
+                    phone=phone,
+                    custom_payload=custom_payload,
+                )
 
-            # ── 6. Centralized Credit Safety & Pre-check ────────────────────
-            from app.services.whatsapp_credit_service import WhatsAppCreditService
-            item_type = media_payload.get("media_type", "document") if media_payload else "text"
-            required_credits = WhatsAppCreditService.calculate_item_credits(item_type)
+    @staticmethod
+    async def _execute_action_with_db(
+        db: AsyncSession,
+        call_id: int,
+        action_upper: str,
+        inst: str,
+        contact_id: Optional[int] = None,
+        campaign_id: Optional[int] = None,
+        phone: Optional[str] = None,
+        custom_payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        # ── 2. Resolve Context Explicitly from DB ───────────────────────
+        call = await db.get(Call, call_id)
+        if not call:
+            print(f"[WHATSAPP_ACTION_FAILED] call_id={call_id} error='Call not found'")
+            return {"success": False, "status": "failed", "error": f"Call {call_id} not found."}
 
-            owner_user_id = campaign.user_id if campaign else None
-            if not owner_user_id and call.job_id:
-                from app.models.job import Job
-                job = await db.get(Job, call.job_id)
-                if job and job.campaign_id:
-                    cmp = await db.get(Campaign, job.campaign_id)
-                    if cmp:
-                        owner_user_id = cmp.user_id
+        resolved_contact_id = contact_id or call.contact_id
+        contact = await db.get(Contact, resolved_contact_id) if resolved_contact_id else None
 
-            credit_user = await db.get(User, owner_user_id) if owner_user_id else None
-            if credit_user and (credit_user.credits or 0) < required_credits:
-                error_msg = f"Insufficient WhatsApp credits. Required: {required_credits}, Available: {credit_user.credits}."
-                print(f"[WHATSAPP_ACTION_BLOCKED_CREDITS] call_id={call_id} user_id={credit_user.id} {error_msg}")
-                action_record.status = "failed"
-                action_record.error = error_msg
-                await db.commit()
-                return {
-                    "success": False,
-                    "status": "insufficient_credits",
-                    "action": action_upper,
-                    "error": error_msg,
-                }
+        resolved_campaign_id = campaign_id or call.campaign_id
+        if not resolved_campaign_id and contact:
+            resolved_campaign_id = contact.campaign_id
+        if not resolved_campaign_id and call.job_id:
+            from app.models.job import Job
+            job_obj = await db.get(Job, call.job_id)
+            if job_obj:
+                resolved_campaign_id = job_obj.campaign_id
+        campaign = await db.get(Campaign, resolved_campaign_id) if resolved_campaign_id else None
 
-            # ── 7. Execute via Evolution API ────────────────────────────────
+        raw_phone = phone or (contact.phone if contact else call.phone)
+        resolved_phone = format_whatsapp_number(raw_phone)
+        customer_name = (contact.customer_name if (contact and contact.customer_name) else (contact.name if contact else "there")) or "there"
+        campaign_name = campaign.campaign_name if campaign else "Morning Tax Consultation"
+
+        if not resolved_phone:
+            print(f"[WHATSAPP_ACTION_FAILED] call_id={call_id} error='No destination phone number'")
+            return {"success": False, "status": "failed", "error": "No phone number available for WhatsApp action."}
+
+        # ── 3. Idempotency Check (Prevent duplicate sends) ──────────────
+        existing_action_query = select(WhatsAppAction).where(
+            WhatsAppAction.call_id == call_id,
+            WhatsAppAction.action == action_upper,
+            WhatsAppAction.status.in_(["pending", "sent"]),
+        )
+        existing_res = await db.execute(existing_action_query)
+        already_sent = existing_res.scalars().first()
+
+        if already_sent:
             print(
-                f"[WHATSAPP_SEND_STARTED] call_id={call_id} contact_id={resolved_contact_id} "
-                f"action={action_upper} phone={mask_phone(resolved_phone)} required_credits={required_credits}"
+                f"[WHATSAPP_ACTION_SKIPPED_DUPLICATE] call_id={call_id} contact_id={resolved_contact_id} "
+                f"action={action_upper} phone={mask_phone(resolved_phone)} (already {already_sent.status} at {already_sent.created_at})"
             )
+            return {
+                "success": True,
+                "status": "skipped_duplicate",
+                "action": action_upper,
+                "message": f"Action already {already_sent.status} for this call.",
+            }
 
-            try:
-                api_res = None
-                actual_item_type = item_type
-                if media_payload:
-                    try:
-                        api_res = await evolution_service.send_media_message(
-                            instance_name=inst,
-                            number=resolved_phone,
-                            media_url=media_payload["media_url"],
-                            media_type=media_payload.get("media_type", "document"),
-                            mimetype=media_payload.get("mimetype", "application/pdf"),
-                            caption=message_text,
-                            file_name=media_payload.get("file_name", "document.pdf"),
-                        )
-                    except Exception as media_err:
-                        print(f"[WhatsAppService] Media send failed ({media_err}), falling back to text delivery...")
-                        api_res = await evolution_service.send_text_message(
-                            instance_name=inst,
-                            number=resolved_phone,
-                            text=message_text,
-                        )
-                        actual_item_type = "text"
-                else:
+        # ── 4. Create Pending WhatsAppAction Record ─────────────────────
+        action_record = WhatsAppAction(
+            call_id=call_id,
+            contact_id=resolved_contact_id,
+            campaign_id=resolved_campaign_id,
+            phone=resolved_phone,
+            action=action_upper,
+            status="pending",
+            payload=custom_payload or {},
+        )
+        db.add(action_record)
+        await db.commit()
+        await db.refresh(action_record)
+
+        # ── 5. Build Structured Message / Media Payload ─────────────────
+        message_text, media_payload = WhatsAppActionService._build_action_payload(
+            action=action_upper,
+            customer_name=customer_name,
+            campaign_name=campaign_name,
+            custom_payload=custom_payload,
+        )
+
+        # ── 6. Centralized Credit Safety & Pre-check ────────────────────
+        from app.services.whatsapp_credit_service import WhatsAppCreditService
+        item_type = media_payload.get("media_type", "document") if media_payload else "text"
+        required_credits = WhatsAppCreditService.calculate_item_credits(item_type)
+
+        owner_user_id = campaign.user_id if campaign else None
+        if not owner_user_id and call.job_id:
+            from app.models.job import Job
+            job = await db.get(Job, call.job_id)
+            if job and job.campaign_id:
+                cmp = await db.get(Campaign, job.campaign_id)
+                if cmp:
+                    owner_user_id = cmp.user_id
+
+        credit_user = await db.get(User, owner_user_id) if owner_user_id else None
+        if credit_user and (credit_user.credits or 0) < required_credits:
+            error_msg = f"Insufficient WhatsApp credits. Required: {required_credits}, Available: {credit_user.credits}."
+            print(f"[WHATSAPP_ACTION_BLOCKED_CREDITS] call_id={call_id} user_id={credit_user.id} {error_msg}")
+            action_record.status = "failed"
+            action_record.error = error_msg
+            await db.commit()
+            return {
+                "success": False,
+                "status": "insufficient_credits",
+                "action": action_upper,
+                "error": error_msg,
+            }
+
+        # ── 7. Execute via Evolution API ────────────────────────────────
+        print(
+            f"[WHATSAPP_SEND_STARTED] call_id={call_id} contact_id={resolved_contact_id} "
+            f"action={action_upper} phone={mask_phone(resolved_phone)} required_credits={required_credits}"
+        )
+
+        try:
+            api_res = None
+            actual_item_type = item_type
+            if media_payload:
+                try:
+                    api_res = await evolution_service.send_media_message(
+                        instance_name=inst,
+                        number=resolved_phone,
+                        media_url=media_payload["media_url"],
+                        media_type=media_payload.get("media_type", "document"),
+                        mimetype=media_payload.get("mimetype", "application/pdf"),
+                        caption=message_text,
+                        file_name=media_payload.get("file_name", "document.pdf"),
+                    )
+                except Exception as media_err:
+                    print(f"[WhatsAppService] Media send failed ({media_err}), falling back to text delivery...")
                     api_res = await evolution_service.send_text_message(
                         instance_name=inst,
                         number=resolved_phone,
                         text=message_text,
                     )
                     actual_item_type = "text"
-
-                action_record.status = "sent"
-                action_record.response = api_res
-                action_record.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-                # ── Deduct WhatsApp Credits via Centralized Service ──────────
-                credits_to_deduct = WhatsAppCreditService.calculate_item_credits(actual_item_type)
-                if credit_user and credits_to_deduct > 0:
-                    try:
-                        await WhatsAppCreditService.deduct_credits(db, credit_user, credits_to_deduct)
-                        print(f"[WhatsAppService] Deducted {credits_to_deduct} credits for user {credit_user.id} ({credit_user.email}). Remaining: {credit_user.credits}")
-                    except Exception as credit_err:
-                        print(f"[WhatsAppService] Non-fatal credit deduction error: {credit_err}")
-
-                await db.commit()
-
-                print(
-                    f"[WHATSAPP_SEND_SUCCESS] call_id={call_id} contact_id={resolved_contact_id} "
-                    f"action={action_upper} phone={mask_phone(resolved_phone)} credits_deducted={credits_to_deduct}"
+            else:
+                api_res = await evolution_service.send_text_message(
+                    instance_name=inst,
+                    number=resolved_phone,
+                    text=message_text,
                 )
-                return {
-                    "success": True,
-                    "status": "sent",
-                    "action": action_upper,
-                    "action_id": action_record.id,
-                    "credits_deducted": credits_to_deduct,
-                }
+                actual_item_type = "text"
 
-            except Exception as send_err:
-                error_str = str(send_err)
-                action_record.status = "failed"
-                action_record.error = error_str
-                await db.commit()
+            action_record.status = "sent"
+            action_record.response = api_res
+            action_record.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-                print(
-                    f"[WHATSAPP_SEND_FAILED] call_id={call_id} contact_id={resolved_contact_id} "
-                    f"action={action_upper} error='{error_str}'"
-                )
-                # Failure is isolated; returns safe status without crashing caller
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "action": action_upper,
-                    "error": error_str,
-                }
+            # ── Deduct WhatsApp Credits via Centralized Service ──────────
+            credits_to_deduct = WhatsAppCreditService.calculate_item_credits(actual_item_type)
+            if credit_user and credits_to_deduct > 0:
+                try:
+                    await WhatsAppCreditService.deduct_credits(db, credit_user, credits_to_deduct)
+                    print(f"[WhatsAppService] Deducted {credits_to_deduct} credits for user {credit_user.id} ({credit_user.email}). Remaining: {credit_user.credits}")
+                except Exception as credit_err:
+                    print(f"[WhatsAppService] Non-fatal credit deduction error: {credit_err}")
+
+            await db.commit()
+
+            print(
+                f"[WHATSAPP_SEND_SUCCESS] call_id={call_id} contact_id={resolved_contact_id} "
+                f"action={action_upper} phone={mask_phone(resolved_phone)} credits_deducted={credits_to_deduct}"
+            )
+            return {
+                "success": True,
+                "status": "sent",
+                "action": action_upper,
+                "action_id": action_record.id,
+                "credits_deducted": credits_to_deduct,
+            }
+
+        except Exception as send_err:
+            error_str = str(send_err)
+            action_record.status = "failed"
+            action_record.error = error_str
+            await db.commit()
+
+            print(
+                f"[WHATSAPP_SEND_FAILED] call_id={call_id} contact_id={resolved_contact_id} "
+                f"action={action_upper} error='{error_str}'"
+            )
+            # Failure is isolated; returns safe status without crashing caller
+            return {
+                "success": False,
+                "status": "failed",
+                "action": action_upper,
+                "error": error_str,
+            }
 
     @staticmethod
     def _build_action_payload(

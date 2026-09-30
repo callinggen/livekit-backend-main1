@@ -144,7 +144,7 @@ CURRENT DATE & TIME INFORMATION (DYNAMIC REAL-TIME CONTEXT):
   * "day after tomorrow" = {day_after_date}
 {days_context_str}
 
-DATE & CALLBACK RESOLUTION RULES:
+DATE RESOLUTION RULES & CALLBACK GUIDELINES:
 - You know today's exact date is {today_readable} (ISO: {today_date}).
 - IF THE CUSTOMER ASKS TO BE CALLED BACK TODAY (e.g. "call me today at 5:30 PM", "after 5:30 PM today", or "today 5 PM"):
   * ACCEPT TODAY IMMEDIATELY! Do NOT suggest tomorrow, do NOT ask "would tomorrow work better?".

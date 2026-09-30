@@ -70,6 +70,7 @@ async def test_in_call_whatsapp_action_success(db_session):
             action="SEND_BROCHURE",
             contact_id=contact.id,
             phone=contact.phone,
+            db=db_session,
         )
 
         assert result["success"] is True
@@ -102,6 +103,7 @@ async def test_idempotency_duplicate_protection(db_session):
             action="SEND_WEBSITE",
             contact_id=contact.id,
             phone=contact.phone,
+            db=db_session,
         )
         assert res1["success"] is True
         assert res1["status"] == "sent"
@@ -113,6 +115,7 @@ async def test_idempotency_duplicate_protection(db_session):
             action="SEND_WEBSITE",
             contact_id=contact.id,
             phone=contact.phone,
+            db=db_session,
         )
         assert res2["success"] is True
         assert res2["status"] == "skipped_duplicate"
@@ -145,6 +148,7 @@ async def test_call_isolation_between_customers(db_session):
             action="SEND_BOOKING_LINK",
             contact_id=contact_a.id,
             phone=contact_a.phone,
+            db=db_session,
         )
 
         await WhatsAppActionService.execute_action(
@@ -152,6 +156,7 @@ async def test_call_isolation_between_customers(db_session):
             action="SEND_CONTACT_DETAILS",
             contact_id=contact_b.id,
             phone=contact_b.phone,
+            db=db_session,
         )
 
         # Check call arguments to ensure correct phone routing
@@ -184,6 +189,7 @@ async def test_whatsapp_failure_isolation(db_session):
             action="SEND_MISSED_CALL",
             contact_id=contact.id,
             phone=contact.phone,
+            db=db_session,
         )
 
         # Action is marked failed gracefully, no unhandled exception
@@ -192,9 +198,8 @@ async def test_whatsapp_failure_isolation(db_session):
         assert "Evolution API Connection Timeout" in result["error"]
 
         # Verify DB record is marked failed
-        async with db_session.begin():
-            q = select(WhatsAppAction).where(WhatsAppAction.call_id == call.id)
-            res = await db_session.execute(q)
-            record = res.scalars().first()
-            assert record is not None
-            assert record.status == "failed"
+        q = select(WhatsAppAction).where(WhatsAppAction.call_id == call.id)
+        res = await db_session.execute(q)
+        record = res.scalars().first()
+        assert record is not None
+        assert record.status == "failed"

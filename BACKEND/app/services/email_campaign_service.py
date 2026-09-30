@@ -150,11 +150,16 @@ class EmailCampaignService:
 
         # Check if campaign sender is connected via SMTP
         smtp_config = None
-        if campaign.from_email and campaign.user_id:
+        if campaign.user_id:
             async with AsyncSessionLocal() as db:
-                smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
-                    db, user_id=campaign.user_id, sender_email=campaign.from_email
-                )
+                if campaign.from_email:
+                    smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
+                        db, user_id=campaign.user_id, sender_email=campaign.from_email
+                    )
+                if not smtp_config:
+                    smtp_config = await smtp_mailbox_service.get_default_smtp_config(
+                        db, user_id=campaign.user_id
+                    )
 
         for contact in contacts:
             try:

@@ -182,7 +182,7 @@ async def list_campaigns(
             Contact.campaign_id,
             func.count(Call.id).label("total_calls"),
             func.count(case((Call.status == "completed", 1))).label("completed"),
-            func.count(case((Call.status.in_(["failed", "incomplete"]), 1))).label("failed"),
+            func.count(case((Call.status.in_(["failed", "incomplete", "ended"]), 1))).label("failed"),
             func.coalesce(func.sum(Call.credits_deducted), 0).label("credits_used"),
         )
         .select_from(Call)

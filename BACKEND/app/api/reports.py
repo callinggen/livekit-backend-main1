@@ -42,6 +42,7 @@ async def generate_report(
             end_date = start_date
 
         # Parse dates (frontend sends YYYY-MM-DD)
+        # Use naive UTC datetimes — DB columns are TIMESTAMP WITHOUT TIME ZONE
         start_dt = datetime.strptime(f"{start_date.strip()} 00:00:00", "%Y-%m-%d %H:%M:%S")
         end_dt = datetime.strptime(f"{end_date.strip()} 23:59:59", "%Y-%m-%d %H:%M:%S")
 
@@ -52,6 +53,7 @@ async def generate_report(
             .outerjoin(Campaign, or_(Call.campaign_id == Campaign.id, Contact.campaign_id == Campaign.id))
             .where(
                 and_(
+                    # Use naive UTC datetimes — PostgreSQL TIMESTAMP WITHOUT TIME ZONE columns require naive datetime
                     Call.started_at >= start_dt,
                     Call.started_at <= end_dt,
                     or_(
@@ -76,7 +78,7 @@ async def generate_report(
             }
 
         completed = sum(1 for c in calls if c.status == "completed")
-        failed = sum(1 for c in calls if c.status == "failed")
+        failed = sum(1 for c in calls if c.status in ("failed", "ended"))
         hot_leads = sum(1 for c in calls if c.category == "HOT")
         warm_leads = sum(1 for c in calls if c.category == "WARM")
         cold_leads = sum(1 for c in calls if c.category == "COLD")
@@ -116,7 +118,7 @@ async def generate_report(
             cm["total"] += 1
             if c.status == "completed":
                 cm["completed"] += 1
-            elif c.status == "failed":
+            elif c.status in ("failed", "ended"):
                 cm["failed"] += 1
             
             if c.category == "HOT":
@@ -318,7 +320,7 @@ async def generate_report(
             end_date=end_date,
             content=report_text,
             stats=stats_data,
-            generated_at=datetime.now(timezone.utc)
+            generated_at=datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC — column is TIMESTAMP WITHOUT TIME ZONE
         )
         db.add(db_report)
         await db.commit()

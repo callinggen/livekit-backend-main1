@@ -207,7 +207,7 @@ class QueueService:
                                 calls = calls_res.scalars().all()
                                 total_calls = len(calls)
                                 completed_calls = sum(1 for c in calls if c.status == "completed")
-                                failed_calls = sum(1 for c in calls if c.status in ("failed", "no_answer"))
+                                failed_calls = sum(1 for c in calls if c.status in ("failed", "ended", "no_answer"))
                                 hot_leads = sum(1 for c in calls if c.category == "HOT")
 
                                 import asyncio
@@ -302,12 +302,8 @@ class QueueService:
 
         # ── [CALL DB READY] VERIFICATION ──────────────────────────────────────
         # Ensure the row is committed and readable before dispatching to LiveKit
-        from app.database import AsyncSessionLocal
-        db_exists = False
-        async with AsyncSessionLocal() as verify_db:
-            verify_call = await verify_db.get(Call, call.id)
-            if verify_call:
-                db_exists = True
+        verify_call = await db.get(Call, call.id)
+        db_exists = bool(verify_call)
 
         print(f"\n[CALL DB READY]")
         print(f"call_id={call.id}")

@@ -34,16 +34,19 @@ class Campaign(Base):
     script: Mapped[str] = mapped_column(
         String,
         nullable=False,
+        default="",
     )
 
     schedule_date: Mapped[str] = mapped_column(
         String,
         nullable=False,
+        default="",
     )
 
     schedule_time: Mapped[str] = mapped_column(
         String,
         nullable=False,
+        default="",
     )
 
     outbound_phone_number: Mapped[str | None] = mapped_column(

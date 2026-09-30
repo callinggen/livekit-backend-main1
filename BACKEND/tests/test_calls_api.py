@@ -1,3 +1,4 @@
+import os
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,7 +63,12 @@ async def test_complete_and_list_calls(client: AsyncClient, db_session: AsyncSes
     }
     
     # Run POST /api/calls/{call_id}/complete
-    complete_resp = await client.post(f"/api/calls/{call.id}/complete", json=payload)
+    internal_secret = os.getenv("INTERNAL_API_SECRET") or "callinggen_internal_secret_fallback_key"
+    complete_resp = await client.post(
+        f"/api/calls/{call.id}/complete",
+        json=payload,
+        headers={"X-Internal-Secret": internal_secret}
+    )
     assert complete_resp.status_code == 200
     complete_data = complete_resp.json()
     assert complete_data["success"] is True
