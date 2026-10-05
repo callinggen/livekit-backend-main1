@@ -140,6 +140,7 @@ class EmailCampaignService:
         Send emails to all contacts, throttled at ~2/sec, updating status in a
         fresh DB session per contact to avoid session conflicts.
         Routes via client's connected SMTP mailbox if available, or platform mailer.
+        Guarantees status is updated away from 'running' even if unexpected errors occur.
         """
         from app.database import AsyncSessionLocal
         from app.services.smtp_mailbox_service import smtp_mailbox_service
@@ -148,101 +149,113 @@ class EmailCampaignService:
         sent = 0
         failed = 0
 
-        # Check if campaign sender is connected via SMTP
-        smtp_config = None
-        if campaign.user_id:
-            async with AsyncSessionLocal() as db:
-                if campaign.from_email:
-                    smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
-                        db, user_id=campaign.user_id, sender_email=campaign.from_email
-                    )
-                if not smtp_config:
-                    smtp_config = await smtp_mailbox_service.get_default_smtp_config(
-                        db, user_id=campaign.user_id
-                    )
-
-        for contact in contacts:
-            try:
-                personalized_body = EmailCampaignService._personalize(
-                    campaign.html_body,
-                    contact_name=contact.name,
-                    contact_email=contact.email,
-                )
-                personalized_subject = EmailCampaignService._personalize(
-                    campaign.subject,
-                    contact_name=contact.name,
-                    contact_email=contact.email,
-                )
-                final_html_body = EmailCampaignService._wrap_if_fragment(
-                    personalized_body,
-                    title=personalized_subject,
-                    subtitle=campaign.from_name or "AI Voice Calling & Automation Platform"
-                )
-
-                if smtp_config:
-                    # Method 2: Dispatched directly through client's real authenticated mailbox
-                    await smtp_mailbox_service.send_email_via_smtp(
-                        smtp_config=smtp_config,
-                        to_email=contact.email,
-                        subject=personalized_subject,
-                        html_content=final_html_body,
-                        from_name=campaign.from_name,
-                        reply_to=campaign.reply_to,
-                    )
-                else:
-                    # Platform fallback (Resend)
-                    email_service.send_marketing_email(
-                        to_email=contact.email,
-                        subject=personalized_subject,
-                        html_content=final_html_body,
-                        from_name=campaign.from_name,
-                        from_email=campaign.from_email,
-                        reply_to=campaign.reply_to,
-                    )
-
+        try:
+            # Check if campaign sender is connected via SMTP
+            smtp_config = None
+            if campaign.user_id:
                 async with AsyncSessionLocal() as db:
-                    ec = await db.get(EmailContact, contact.id)
-                    if ec:
-                        ec.status = "sent"
-                        ec.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                        await db.commit()
-                sent += 1
-            except Exception as e:
-                async with AsyncSessionLocal() as db:
-                    ec = await db.get(EmailContact, contact.id)
-                    if ec:
-                        ec.status = "failed"
-                        ec.error_message = str(e)[:500]
-                        await db.commit()
-                failed += 1
-
-            # Throttle between sends
-            await asyncio.sleep(0.5)
-
-        # Update campaign totals + mark completed
-        async with AsyncSessionLocal() as db:
-
-            c = await db.get(EmailCampaign, campaign_id)
-            if c:
-                c.total_sent = sent
-                c.total_failed = failed
-                c.status = "completed" if failed < len(contacts) else "failed"
-                
-                if sent > 0 and c.user_id:
-                    from app.services.universal_credit_service import UniversalCreditService
-                    try:
-                        await UniversalCreditService.deduct_credits(
-                            db=db,
-                            user_id=c.user_id,
-                            service="email",
-                            count_or_duration=sent,
-                            reference_id=f"email_camp_{campaign_id}",
-                            description=f"Email Campaign '{c.name}' – {sent} emails sent"
+                    if campaign.from_email:
+                        smtp_config = await smtp_mailbox_service.get_user_smtp_config_by_email(
+                            db, user_id=campaign.user_id, sender_email=campaign.from_email
                         )
-                    except Exception as cr_err:
-                        print(f"[EmailCampaignService] Warning: Failed to deduct email credits: {cr_err}")
-                
-                await db.commit()
+                    if not smtp_config:
+                        smtp_config = await smtp_mailbox_service.get_default_smtp_config(
+                            db, user_id=campaign.user_id
+                        )
+
+            for contact in contacts:
+                try:
+                    personalized_body = EmailCampaignService._personalize(
+                        campaign.html_body,
+                        contact_name=contact.name,
+                        contact_email=contact.email,
+                    )
+                    personalized_subject = EmailCampaignService._personalize(
+                        campaign.subject,
+                        contact_name=contact.name,
+                        contact_email=contact.email,
+                    )
+                    final_html_body = EmailCampaignService._wrap_if_fragment(
+                        personalized_body,
+                        title=personalized_subject,
+                        subtitle=campaign.from_name or "AI Voice Calling & Automation Platform"
+                    )
+
+                    if smtp_config:
+                        # Method 2: Dispatched directly through client's real authenticated mailbox
+                        await smtp_mailbox_service.send_email_via_smtp(
+                            smtp_config=smtp_config,
+                            to_email=contact.email,
+                            subject=personalized_subject,
+                            html_content=final_html_body,
+                            from_name=campaign.from_name,
+                            reply_to=campaign.reply_to,
+                        )
+                    else:
+                        # Platform fallback (Resend)
+                        email_service.send_marketing_email(
+                            to_email=contact.email,
+                            subject=personalized_subject,
+                            html_content=final_html_body,
+                            from_name=campaign.from_name,
+                            from_email=campaign.from_email,
+                            reply_to=campaign.reply_to,
+                        )
+
+                    async with AsyncSessionLocal() as db:
+                        ec = await db.get(EmailContact, contact.id)
+                        if ec:
+                            ec.status = "sent"
+                            ec.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                            await db.commit()
+                    sent += 1
+                except Exception as e:
+                    async with AsyncSessionLocal() as db:
+                        ec = await db.get(EmailContact, contact.id)
+                        if ec:
+                            ec.status = "failed"
+                            ec.error_message = str(e)[:500]
+                            await db.commit()
+                    failed += 1
+
+                # Throttle between sends
+                await asyncio.sleep(0.5)
+
+            # Update campaign totals + mark completed
+            async with AsyncSessionLocal() as db:
+                c = await db.get(EmailCampaign, campaign_id)
+                if c:
+                    c.total_sent = sent
+                    c.total_failed = failed
+                    c.status = "completed" if failed < len(contacts) else "failed"
+                    
+                    if sent > 0 and c.user_id:
+                        from app.services.universal_credit_service import UniversalCreditService
+                        try:
+                            await UniversalCreditService.deduct_credits(
+                                db=db,
+                                user_id=c.user_id,
+                                service="email",
+                                count_or_duration=sent,
+                                reference_id=f"email_camp_{campaign_id}",
+                                description=f"Email Campaign '{c.name}' – {sent} emails sent"
+                            )
+                        except Exception as cr_err:
+                            print(f"[EmailCampaignService] Warning: Failed to deduct email credits: {cr_err}")
+                    
+                    await db.commit()
+        except Exception as fatal_e:
+            print(f"[EmailCampaignService] FATAL unhandled error in _bulk_send for campaign {campaign_id}: {fatal_e}")
+            try:
+                async with AsyncSessionLocal() as db:
+                    c = await db.get(EmailCampaign, campaign_id)
+                    if c and c.status == "running":
+                        c.total_sent = sent
+                        c.total_failed = failed if failed > 0 else len(contacts)
+                        c.status = "failed"
+                        await db.commit()
+            except Exception as final_err:
+                print(f"[EmailCampaignService] Failed to set fallback failed status: {final_err}")
 
     @staticmethod
     def _personalize(
