@@ -100,10 +100,20 @@ async def get_qr_code(instance_name: str, number: Optional[str] = None) -> Dict[
         except Exception:
             data = {}
 
-        # If instance does not exist (404) or has no QR code, create instance first
+        # If instance does not exist (404), has error, or has no QR code, recreate fresh instance
         b64 = data.get("base64") or data.get("qrcode", {}).get("base64") or data.get("code")
-        if not b64:
+        if not b64 or data.get("error") or data.get("status") in (400, 401, 403, 404):
             try:
+                # Cleanly purge stale session to avoid conflict / device_removed errors
+                try:
+                    await client.delete(f"{api_url}/instance/logout/{instance_name}", headers=get_headers())
+                except Exception:
+                    pass
+                try:
+                    await client.delete(f"{api_url}/instance/delete/{instance_name}", headers=get_headers())
+                except Exception:
+                    pass
+
                 create_payload = {
                     "instanceName": instance_name,
                     "qrcode": True,
