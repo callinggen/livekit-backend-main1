@@ -6,7 +6,7 @@ import bcrypt  # type: ignore
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from sqlalchemy import select, func
 from pydantic import ValidationError
 
 from app.database import get_db
@@ -74,9 +74,17 @@ async def get_current_user(
             detail="Could not validate credentials",
         )
         
-    stmt = select(User).where(User.id == int(token_data.sub))
-    result = await db.execute(stmt)
-    user = result.scalars().first()
+    user = None
+    sub_str = str(token_data.sub).strip()
+    if sub_str.isdigit():
+        stmt = select(User).where(User.id == int(sub_str))
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+    
+    if not user:
+        stmt = select(User).where(func.lower(User.email) == sub_str.lower())
+        result = await db.execute(stmt)
+        user = result.scalars().first()
     
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")

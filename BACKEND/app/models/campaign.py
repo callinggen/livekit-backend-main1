@@ -80,6 +80,11 @@ class Campaign(Base):
         nullable=True,
     )
 
+    knowledge_document_ids: Mapped[list | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
     upload_source: Mapped[str | None] = mapped_column(
         String,
         nullable=True,

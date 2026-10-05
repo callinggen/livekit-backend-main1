@@ -41,10 +41,12 @@ async def generate_report(
         if not end_date:
             end_date = start_date
 
-        # Parse dates (frontend sends YYYY-MM-DD)
+        # Parse dates safely (supports YYYY-MM-DD and ISO strings)
         # Use naive UTC datetimes — DB columns are TIMESTAMP WITHOUT TIME ZONE
-        start_dt = datetime.strptime(f"{start_date.strip()} 00:00:00", "%Y-%m-%d %H:%M:%S")
-        end_dt = datetime.strptime(f"{end_date.strip()} 23:59:59", "%Y-%m-%d %H:%M:%S")
+        raw_start = start_date.split("T")[0].strip()
+        raw_end = end_date.split("T")[0].strip()
+        start_dt = datetime.strptime(f"{raw_start} 00:00:00", "%Y-%m-%d %H:%M:%S")
+        end_dt = datetime.strptime(f"{raw_end} 23:59:59", "%Y-%m-%d %H:%M:%S")
 
         # Get calls with Campaign details within date range for current user
         calls_result = await db.execute(
@@ -72,7 +74,22 @@ async def generate_report(
         if total_calls == 0:
             return {
                 "report": "No calls were recorded in the selected date range. Please try selecting a wider date range to generate a meaningful report.",
-                "stats": {"total": 0},
+                "stats": {
+                    "total": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "hot": 0,
+                    "warm": 0,
+                    "cold": 0,
+                    "avg_duration": 0,
+                    "total_duration": 0,
+                    "campaigns_count": 0,
+                    "campaign_names": [],
+                    "agent_names": [],
+                    "campaign_breakdown": [],
+                    "credits_consumed": 0.0,
+                    "remaining_credits": user_credits,
+                },
                 "credits_deducted": 0,
                 "remaining_credits": user_credits,
             }
@@ -85,7 +102,7 @@ async def generate_report(
         
         total_duration = sum((c.duration or 0) for c in calls)
         avg_duration = total_duration / total_calls if total_calls > 0 else 0
-        date_desc = start_date if start_date == end_date else f"{start_date} to {end_date}"
+        date_desc = raw_start if raw_start == raw_end else f"{raw_start} to {raw_end}"
 
         # Distinct campaigns and agents
         campaign_names = sorted(list(set(cmp.campaign_name for cmp in campaigns if cmp and cmp.campaign_name)))
@@ -261,8 +278,8 @@ async def generate_report(
         )
 
         report_req = ReportRequest(
-            start_date=start_date,
-            end_date=end_date,
+            start_date=raw_start,
+            end_date=raw_end,
             total_calls=total_calls,
             completed_calls=completed,
             failed_calls=failed,
@@ -316,8 +333,8 @@ async def generate_report(
         db_report = Report(
             user_id=current_user.id,
             title=f"AI Performance Report ({date_desc})",
-            start_date=start_date,
-            end_date=end_date,
+            start_date=raw_start,
+            end_date=raw_end,
             content=report_text,
             stats=stats_data,
             generated_at=datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC — column is TIMESTAMP WITHOUT TIME ZONE

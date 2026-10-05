@@ -177,6 +177,7 @@ class CampaignService:
             voicemail_detection=getattr(data, "voicemail_detection", None),
             whatsapp_automation=getattr(data, "whatsapp_automation", None),
             email_automation=getattr(data, "email_automation", None),
+            knowledge_document_ids=getattr(data, "knowledge_document_ids", None),
         )
 
         db.add(campaign)

@@ -10,6 +10,7 @@ from app.models.job import Job
 from app.models.contact import Contact
 from app.models.call import Call
 from app.models.user import User
+from app.models.knowledge import KnowledgeDocument
 from app.core.security import get_current_user
 
 router = APIRouter()
@@ -301,6 +302,31 @@ async def get_campaign(
         except Exception:
             scheduled_at = None
 
+    # Fetch attached knowledge documents if any
+    attached_knowledge_docs = []
+    kb_ids = getattr(campaign, "knowledge_document_ids", None) or []
+    if kb_ids and isinstance(kb_ids, list) and len(kb_ids) > 0:
+        try:
+            valid_ids = [int(i) for i in kb_ids if str(i).isdigit()]
+            if valid_ids:
+                kb_res = await db.execute(
+                    select(KnowledgeDocument).where(KnowledgeDocument.id.in_(valid_ids))
+                )
+                for kd in kb_res.scalars().all():
+                    attached_knowledge_docs.append({
+                        "id": kd.id,
+                        "title": kd.title,
+                        "source_type": kd.source_type,
+                        "source_url": kd.source_url,
+                        "file_name": kd.file_name,
+                        "total_chunks": kd.total_chunks,
+                        "total_words": kd.total_words,
+                        "created_at": kd.created_at.isoformat() if kd.created_at else None,
+                        "preview": kd.extracted_text[:250] if kd.extracted_text else "",
+                    })
+        except Exception as kb_err:
+            print(f"[CampaignsAPI] Warning: Failed to fetch knowledge docs: {kb_err}")
+
     return {
         "id": str(campaign.id),
         "name": campaign.campaign_name,
@@ -314,6 +340,8 @@ async def get_campaign(
         "creditsUsed": credits_used,
         "upload_source": campaign.upload_source,
         "sheet_name": campaign.sheet_name,
+        "knowledge_document_ids": kb_ids,
+        "knowledge_documents": attached_knowledge_docs,
         "job": {
             "total_contacts": len(call_statuses) if call_statuses else len(unique_results),
             "completed_contacts": sum(1 for s in call_statuses if s == "completed"),

@@ -40,7 +40,7 @@ class UserUpdateRequest(BaseModel):
     full_name: str | None = None
     email: str | None = None
     phone_number: str | None = None
-    credits: int | None = None
+    credits: float | None = None
     subscription_plan: str | None = None
     company_name: str | None = None
     industry: str | None = None

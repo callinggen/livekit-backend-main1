@@ -227,6 +227,21 @@ class EmailCampaignService:
                 c.total_sent = sent
                 c.total_failed = failed
                 c.status = "completed" if failed < len(contacts) else "failed"
+                
+                if sent > 0 and c.user_id:
+                    from app.services.universal_credit_service import UniversalCreditService
+                    try:
+                        await UniversalCreditService.deduct_credits(
+                            db=db,
+                            user_id=c.user_id,
+                            service="email",
+                            count_or_duration=sent,
+                            reference_id=f"email_camp_{campaign_id}",
+                            description=f"Email Campaign '{c.name}' – {sent} emails sent"
+                        )
+                    except Exception as cr_err:
+                        print(f"[EmailCampaignService] Warning: Failed to deduct email credits: {cr_err}")
+                
                 await db.commit()
 
     @staticmethod
