@@ -35,6 +35,11 @@ def validate_password_policy(password: str):
     if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
         raise ValueError("Password must contain at least one special character")
 
+def get_user_total_credits(user: User) -> float:
+    if getattr(user, "subscription_credit_balance", None) is not None or getattr(user, "topup_credit_balance", None) is not None:
+        return round(float(user.subscription_credit_balance or 0.0) + float(user.topup_credit_balance or 0.0), 2)
+    return round(float(user.credits or 0.0), 2) if user.credits is not None else 0.0
+
 @router.post("/login")
 async def login(
     login_data: LoginRequest, db: AsyncSession = Depends(get_db)
@@ -98,7 +103,7 @@ async def login(
         is_first_login=user.is_first_login,
         is_admin=user.is_admin,
         refresh_token=None,
-        credits=user.credits,
+        credits=get_user_total_credits(user),
         subscription_plan=user.subscription_plan,
         company_name=getattr(user, "company_name", None),
         industry=getattr(user, "industry", None),
@@ -158,7 +163,7 @@ async def change_password(
         "is_first_login": False,
         "is_admin": current_user.is_admin,
         "refresh_token": None,
-        "credits": current_user.credits,
+        "credits": get_user_total_credits(current_user),
         "subscription_plan": current_user.subscription_plan
     }
 
@@ -289,7 +294,7 @@ async def reset_password(
 @router.get("/user/credits")
 async def get_user_credits(current_user: User = Depends(get_current_user)):
     return {
-        "credits": current_user.credits
+        "credits": get_user_total_credits(current_user)
     }
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
@@ -410,7 +415,7 @@ async def get_me(current_user: User = Depends(get_current_user), db: AsyncSessio
         "full_name": current_user.full_name,
         "company_name": getattr(current_user, "company_name", None),
         "industry": getattr(current_user, "industry", None),
-        "credits": current_user.credits,
+        "credits": get_user_total_credits(current_user),
         "is_first_login": current_user.is_first_login,
         "is_admin": current_user.is_admin,
         "is_active": getattr(current_user, "is_active", True),
@@ -506,7 +511,7 @@ async def update_my_profile(
             "company_name": getattr(current_user, "company_name", None),
             "industry": getattr(current_user, "industry", None),
             "phone_number": current_user.phone_number,
-            "credits": current_user.credits,
+            "credits": get_user_total_credits(current_user),
             "subscription_plan": current_user.subscription_plan,
             "agent_name": getattr(current_user, "agent_name", None),
             "agent_language": getattr(current_user, "agent_language", None),
