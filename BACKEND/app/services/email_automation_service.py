@@ -302,8 +302,64 @@ class EmailAutomationService:
     the contact has a valid email address.
     """
 
+    _inflight_calls: set = set()
+
     @classmethod
     async def process_call_automation(cls, call_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Idempotent entry point: at most one automation email per call, even when the
+        trigger fires from multiple processes (API complete_call, worker watchdog fail_call,
+        AI-classification callback) at nearly the same time.
+        """
+        from sqlalchemy import text
+        from app.database import engine
+        from app.models.credit_models import CreditTransaction
+
+        # In-process guard (covers SQLite / same-process races)
+        if call_id in cls._inflight_calls:
+            print(f"[EmailAutomation] Call {call_id} already being processed in this process. Skipping duplicate trigger.")
+            return None
+        cls._inflight_calls.add(call_id)
+
+        lock_conn = None
+        lock_key = 7300000000 + call_id
+        try:
+            # Cross-process guard (PostgreSQL advisory lock, non-blocking)
+            if engine.dialect.name == "postgresql":
+                lock_conn = await engine.connect()
+                lock_conn = await lock_conn.execution_options(isolation_level="AUTOCOMMIT")
+                got = (await lock_conn.execute(
+                    text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key}
+                )).scalar()
+                if not got:
+                    print(f"[EmailAutomation] Call {call_id} is being processed by another worker. Skipping duplicate trigger.")
+                    return None
+
+            # Ledger check: an email for this call was already sent and billed
+            async with AsyncSessionLocal() as chk_db:
+                existing = await chk_db.execute(
+                    select(CreditTransaction.id).where(
+                        CreditTransaction.reference_id == f"call_{call_id}_email",
+                        CreditTransaction.service == "email",
+                    ).limit(1)
+                )
+                if existing.scalar() is not None:
+                    print(f"[EmailAutomation] Email already sent for Call {call_id}. Skipping duplicate.")
+                    return None
+
+            return await cls._process_call_automation_inner(call_id)
+        finally:
+            cls._inflight_calls.discard(call_id)
+            if lock_conn is not None:
+                try:
+                    await lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                except Exception as unlock_err:
+                    print(f"[EmailAutomation] Advisory unlock warning for Call {call_id}: {unlock_err}")
+                finally:
+                    await lock_conn.close()
+
+    @classmethod
+    async def _process_call_automation_inner(cls, call_id: int) -> Optional[Dict[str, Any]]:
         """Evaluate and trigger email automation rules for a finished call."""
         async with AsyncSessionLocal() as db:
             call = await db.get(Call, call_id)

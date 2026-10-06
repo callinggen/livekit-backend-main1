@@ -17,6 +17,17 @@ from app.models.credit_models import CreditTransaction, AdminRateConfig
 
 router = APIRouter(prefix="/billing", tags=["Universal Billing & Credits"])
 
+
+def _iso_utc(dt: Optional[datetime]) -> Optional[str]:
+    """Serialize a datetime as an explicit-UTC ISO string (naive values are treated as UTC)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
 # ── Top-Up Pricing Packages (Page 8 Specification) ───────────────────────────
 TOPUP_PACKAGES = {
     100: {"credits": 100, "price_inr": 199, "effective_price": 1.99},
@@ -209,7 +220,7 @@ async def get_transactions(
                 "balance_before": t.balance_before,
                 "balance_after": t.balance_after,
                 "rate_version": t.rate_version,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "created_at": _iso_utc(t.created_at),
             }
             for t in txs
         ]
@@ -238,7 +249,7 @@ async def get_plans():
 def calculate_topup_price(credits: int) -> int:
     """Calculate tiered pricing for custom credit slider amounts."""
     if credits in TOPUP_PACKAGES:
-        return TOPUP_PACKAGES[credits]["price_inr"]
+        return int(TOPUP_PACKAGES[credits]["price_inr"])
     if credits <= 500:
         rate = 1.80
     elif credits <= 1000:
@@ -249,7 +260,7 @@ def calculate_topup_price(credits: int) -> int:
         rate = 1.50
     else:
         rate = 1.40
-    return max(99, int(round(credits * rate)))
+    return max(99, round(credits * rate))
 
 
 @router.post("/topup/create-order")
@@ -268,7 +279,7 @@ async def create_topup_order(
         )
 
     price_inr = calculate_topup_price(payload.credits)
-    amount_paisa = int(price_inr * 100)
+    amount_paisa = price_inr * 100
 
     # Initialize Razorpay Client if credentials exist
     key_id = os.getenv("RAZORPAY_KEY_ID")
@@ -277,7 +288,7 @@ async def create_topup_order(
     order_id = f"order_mock_{uuid.uuid4().hex[:14]}"
     if key_id and key_secret:
         try:
-            import razorpay
+            import razorpay  # type: ignore[import-not-found]
             client = razorpay.Client(auth=(key_id, key_secret))
             rz_order = client.order.create({
                 "amount": amount_paisa,
